@@ -13,7 +13,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone <repo-url>
+git clone git@github.com:Johnny-Cheung/Johnny-Code.git
 cd "Johnny Code"
 
 # 2. 配置 API
@@ -35,7 +35,7 @@ johnnycode   # 任意目录直接启动
 
 ## 配置
 
-项目根目录的 `config.yaml` 示例：
+项目根目录的 `config.example.yaml` 是配置模板，复制为 `config.yaml` 后填入真实值：
 
 ```yaml
 providers:
@@ -47,6 +47,8 @@ providers:
 
 permission_mode: default         # default | accept-all | plan
 ```
+
+**`config.yaml` 已被 .gitignore 忽略，不会提交到仓库。**
 
 配置加载优先级（后者覆盖前者）：
 
