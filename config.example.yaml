@@ -1,0 +1,21 @@
+# Johnny Code 配置文件
+# 复制此文件为 config.yaml 并填入你的真实配置
+# cp config.example.yaml config.yaml
+#
+# 配置加载优先级（后面的覆盖前面的）：
+#   1. ~/.johnnycode/config.yaml      用户全局
+#   2. ./config.yaml                   项目根目录
+#   3. .johnnycode/config.yaml         项目隐藏目录
+#   4. .johnnycode/config.local.yaml  本地覆盖（不提交 git）
+
+providers:
+  - name: deepseek               # 任意名称，仅用于显示
+    protocol: anthropic          # anthropic | openai | openai-compat
+    base_url: https://api.anthropic.com    # API 地址，去掉末尾的 /v1
+    model: claude-sonnet-4-6     # 模型名
+    api_key: sk-xxx              # 你的 API Key
+    # thinking: true             # 可选，启用深度思考模式
+    # context_window: 200000     # 可选，覆盖上下文窗口
+    # max_output_tokens: 8192    # 可选，最大输出 token
+
+permission_mode: default          # default | accept-all | plan

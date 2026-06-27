@@ -1,0 +1,15 @@
+/johnnycode
+config.yaml
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+.idea/
+.vscode/
+.johnnycode/
+.claude/
+CLAUDE.md
+docs/
