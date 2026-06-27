@@ -20,18 +20,11 @@ cd "Johnny Code"
 cp config.example.yaml config.yaml
 # 编辑 config.yaml，填入你的 API 信息
 
-# 3. 启动
+# 3. 首次启动
 go run ./cmd/johnnycode/
 ```
 
 首次启动时，程序会自动将项目根目录的 `config.yaml` 复制到 `~/.johnnycode/config.yaml`，之后在任意目录下输入 `johnnycode` 即可启动。
-
-### 全局安装（可选）
-
-```bash
-go install ./cmd/johnnycode/
-johnnycode   # 任意目录直接启动
-```
 
 ## 配置
 
