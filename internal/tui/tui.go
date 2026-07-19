@@ -3106,10 +3106,37 @@ func (m Model) renderChatView() string {
 }
 
 func (m Model) renderBanner() string {
-	cat := bannerStyle.Render(` /\_/\    `) + bannerDimStyle.Render("Johnny Code v0.1.0") + "\n" +
-		bannerStyle.Render(`( o.o )   `) + bannerDimStyle.Render(m.getModelName()) + "\n" +
-		bannerStyle.Render(` > ^ <    `) + bannerDimStyle.Render(m.getWorkDir())
-	return cat
+	// Claude-style block logo: each row is centered under the widest glyph row
+	// so the stack reads as a single centered mark (not left-aligned).
+	logo := []string{
+		"▐▛███▜▌",
+		"▝▜█████▛▘",
+		"▘▘ ▝▝",
+	}
+	labels := []string{
+		"Johnny Code v0.1.0",
+		m.getModelName(),
+		m.getWorkDir(),
+	}
+	maxW := 0
+	for _, line := range logo {
+		if w := lipgloss.Width(line); w > maxW {
+			maxW = w
+		}
+	}
+
+	var lines []string
+	for i, line := range logo {
+		w := lipgloss.Width(line)
+		left := (maxW - w) / 2
+		right := maxW - w - left
+		// One-cell gap between the logo block and the label column.
+		padded := strings.Repeat(" ", left) + line + strings.Repeat(" ", right+1)
+		lines = append(lines,
+			bannerStyle.Render(padded)+bannerDimStyle.Render(labels[i]),
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderSeparator() string {
