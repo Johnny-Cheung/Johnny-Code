@@ -1,8 +1,3 @@
-// 来源：公众号@小林coding
-// 后端八股网站：xiaolincoding.com
-// Agent网站：xiaolinnote.com
-// 简历模版：jianli.xiaolinnote.com
-
 // Package extractor implements the background memory extraction subagent.
 //
 // The TS file uses a closure-scoped state pattern (initExtractMemories returns nothing, but mutates

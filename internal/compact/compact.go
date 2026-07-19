@@ -1,8 +1,3 @@
-// 来源：公众号@小林coding
-// 后端八股网站：xiaolincoding.com
-// Agent网站：xiaolinnote.com
-// 简历模版：jianli.xiaolinnote.com
-
 // Package compact implements Johnny Code's Layer 2 context management:
 // an LLM-driven full-conversation summary, gated by token ratio (default
 // >80% of context window). Replaces the entire conversation with a summary
