@@ -12,6 +12,7 @@ package compact
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -370,43 +371,99 @@ func autoCompact(
 		// to no-op so we don't "compact for nothing".
 		return "", nil
 	}
-	prefix := messages[:keepStart]
-	keep := messages[keepStart:]
+	// Progressive summary: if the prefix is too large for the summarizer
+	// (context-too-long), reduce it by keeping more tail and retry.  On
+	// total failure, drop the prefix entirely and keep only the recent
+	// tail without a summary — the original messages are still in the
+	// session log for later ReadFile.
+	const maxSummaryRetries = 2
+	var (
+		finalSummary string
+		summaryErr   error
+	)
 
-	var sb strings.Builder
-	for _, m := range prefix {
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, m.Content))
-		for _, tu := range m.ToolUses {
-			sb.WriteString(fmt.Sprintf("[tool_use %s]: %s\n", tu.ToolName, tu.ToolUseID))
-		}
-		for _, tr := range m.ToolResults {
-			content := tr.Content
-			if len(content) > 500 {
-				content = content[:500] + "..."
+	for retry := 0; retry <= maxSummaryRetries; retry++ {
+		if retry > 0 {
+			// Halve the prefix on each retry: move keepStart toward the end,
+			// shrinking what gets summarized and growing the kept tail.
+			newStart := keepStart + (len(messages)-keepStart)/2
+			if newStart >= len(messages) {
+				newStart = len(messages) - 1
 			}
-			sb.WriteString(fmt.Sprintf("[tool_result]: %s\n", content))
+			if newStart <= keepStart {
+				break // can't shrink further
+			}
+			keepStart = newStart
+		}
+
+		prefix := messages[:keepStart]
+
+		var sb strings.Builder
+		for _, m := range prefix {
+			sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, m.Content))
+			for _, tu := range m.ToolUses {
+				sb.WriteString(fmt.Sprintf("[tool_use %s]: %s\n", tu.ToolName, tu.ToolUseID))
+			}
+			for _, tr := range m.ToolResults {
+				content := tr.Content
+				if len(content) > 500 {
+					content = content[:500] + "..."
+				}
+				sb.WriteString(fmt.Sprintf("[tool_result]: %s\n", content))
+			}
+		}
+
+		summaryConv := conversation.NewManager()
+		summaryConv.AddUserMessage(summarySystemPrompt + "\n\n" + sb.String())
+
+		events, errs := client.Stream(ctx, summaryConv, nil)
+		var summary strings.Builder
+		for ev := range events {
+			if td, ok := ev.(llm.TextDelta); ok {
+				summary.WriteString(td.Text)
+			}
+		}
+		select {
+		case err := <-errs:
+			summaryErr = err
+		default:
+			summaryErr = nil
+		}
+
+		if summaryErr == nil {
+			finalSummary = formatCompactSummary(summary.String())
+			break
+		}
+
+		// Only context-too-long warrants a retry with smaller prefix.
+		// Transient errors (network, rate-limit) should bubble up so the
+		// caller's circuit-breaker / retry can handle them.
+		var ctxErr *llm.ContextTooLongError
+		if !errors.As(summaryErr, &ctxErr) {
+			return "", summaryErr
 		}
 	}
 
-	summaryConv := conversation.NewManager()
-	summaryConv.AddUserMessage(summarySystemPrompt + "\n\n" + sb.String())
-
-	events, errs := client.Stream(ctx, summaryConv, nil)
-	var summary strings.Builder
-	for ev := range events {
-		if td, ok := ev.(llm.TextDelta); ok {
-			summary.WriteString(td.Text)
+	if finalSummary == "" {
+		// All retries exhausted. Keep only the recent tail verbatim —
+		// walk back to include at least a handful of messages, then snap
+		// across tool_use↔tool_result pairs so the tail is API-valid.
+		keepStart = len(messages)
+		for keepStart > 0 && len(messages)-keepStart < minKeepMessages {
+			keepStart--
 		}
-	}
-	select {
-	case err := <-errs:
-		if err != nil {
-			return "", err
+		for keepStart > 0 && hasToolResults(messages[keepStart]) {
+			prev := keepStart - 1
+			if hasToolUses(messages[prev]) {
+				keepStart = prev
+				continue
+			}
+			break
 		}
-	default:
+		finalSummary = "（早期对话上下文因超出窗口限制已丢弃，未生成摘要。）"
 	}
 
-	finalSummary := formatCompactSummary(summary.String())
+	keep := messages[keepStart:]
 
 	// Persist a compact_boundary record so a later resume can rebuild this
 	// compacted state (summary + kept tail) instead of replaying the full

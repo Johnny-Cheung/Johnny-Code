@@ -124,10 +124,24 @@ func (m *Manager) InjectLongTermMemory(instructions, memories string) {
 	m.ltmInjected = true
 }
 
+// SetLTMInjected marks the manager as already having long-term memory injected
+// so InjectLongTermMemory becomes a no-op. Used on snapshot resume to prevent
+// double-injection of the same LTM content.
+func (m *Manager) SetLTMInjected() {
+	m.ltmInjected = true
+}
+
 // AppendMessages copies the given messages onto the end of the history. Used by
 // compaction to replay the recent-tail messages verbatim after the summary.
 func (m *Manager) AppendMessages(messages []Message) {
 	m.history = append(m.history, messages...)
+}
+
+// AppendMessage appends a single pre-built Message. Used when restoring from
+// a structured snapshot where the message already has its full block state
+// (tool_use, tool_result, thinking).
+func (m *Manager) AppendMessage(msg Message) {
+	m.history = append(m.history, msg)
 }
 
 func (m *Manager) Len() int {

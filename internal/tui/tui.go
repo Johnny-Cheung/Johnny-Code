@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"johnnycode/internal/prompt"
 	"johnnycode/internal/session"
 	"johnnycode/internal/skills"
+	"johnnycode/internal/toolresult"
 	"johnnycode/internal/teams"
 	"johnnycode/internal/todo"
 	"johnnycode/internal/tools"
@@ -221,7 +223,7 @@ type Model struct {
 
 func New(providers []config.ProviderConfig, mcpConfigs []config.MCPServerConfig, hookConfigs []hooks.Hook) Model {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message..."
+	ta.Placeholder = "发送消息..."
 	ta.Prompt = ""
 	ta.CharLimit = 0
 	ta.MaxHeight = 0
@@ -442,7 +444,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case forkSkillDoneMsg:
 		var commit string
 		if msg.err != nil {
-			line := fmt.Sprintf("Skill %s (fork) failed: %v", msg.name, msg.err)
+			line := fmt.Sprintf("技能 %s（fork）失败：%v", msg.name, msg.err)
 			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: line})
 			commit = errorStyle.Render("✖ " + line)
 		} else {
@@ -463,11 +465,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compactDoneMsg:
 		switch {
 		case msg.err != nil:
-			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: "Compact failed: " + msg.err.Error()})
+			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: "压缩失败：" + msg.err.Error()})
 		case msg.message == "":
-			m.chatMessages = append(m.chatMessages, chatMessage{role: "system", content: "Compact: no changes."})
+			m.chatMessages = append(m.chatMessages, chatMessage{role: "system", content: "压缩：无更改。"})
 		default:
-			m.chatMessages = append(m.chatMessages, chatMessage{role: "system", content: "Compact: " + msg.message})
+			m.chatMessages = append(m.chatMessages, chatMessage{role: "system", content: "压缩：" + msg.message})
 		}
 		m.updateViewport()
 		return m, nil
@@ -488,7 +490,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		registered := len(msg.result.Tools)
 		if registered > 0 {
-			m.mcpServerInfo = fmt.Sprintf("Connected to %d MCP server(s), %d tools registered", len(m.mcpConfigs)-len(msg.result.Errors), registered)
+			m.mcpServerInfo = fmt.Sprintf("已连接 %d 个 MCP 服务器，%d 个工具已注册", len(m.mcpConfigs)-len(msg.result.Errors), registered)
 		}
 		m.committedUpTo = len(m.chatMessages)
 		// Build MCP instructions for system prompt injection
@@ -517,7 +519,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				mcpParts = append(mcpParts, sb.String())
 			}
-			m.mcpInstructions = "# MCP Server Instructions\n\nThe following MCP servers are connected. Use their tools when the user asks.\n\n" + strings.Join(mcpParts, "\n\n")
+			m.mcpInstructions = "# MCP 服务器指令\n\n以下 MCP 服务器已连接。请在用户询问时使用它们的工具。\n\n" + strings.Join(mcpParts, "\n\n")
 		}
 		m.updateViewport()
 		if len(mcpPrintLines) > 0 {
@@ -1123,6 +1125,63 @@ func renderRelevantMemoriesReminder(memories []memory.RelevantMemory) string {
 	return sb.String()
 }
 
+// loadConversationSnapshot attempts to restore the full structured conversation
+// from a snapshot file. Returns true on success (conversation rebuilt,
+// ReplacementState reconstructed), false if no snapshot exists or it's corrupt.
+func (m *Model) loadConversationSnapshot(wd string) bool {
+	path := session.SnapshotFilePath(wd, m.sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var msgs []conversation.Message
+	if err := json.Unmarshal(data, &msgs); err != nil || len(msgs) == 0 {
+		return false
+	}
+
+	for _, msg := range msgs {
+		m.conversation.AppendMessage(msg)
+		// Build chatMessages for the display log (user/assistant text only).
+		if msg.Role == "user" || msg.Role == "assistant" {
+			m.chatMessages = append(m.chatMessages, chatMessage{
+				role:    msg.Role,
+				content: msg.Content,
+			})
+		}
+	}
+	m.conversation.SetLTMInjected()
+
+	// Reconstruct Layer 1 decision-freeze state from session records so
+	// spilled pointers stay stable after resume.
+	recordsDir := session.SessionRecordsDir(wd, m.sessionID)
+	if records, _ := toolresult.LoadRecords(recordsDir); len(records) > 0 {
+		state := toolresult.Reconstruct(m.conversation.GetMessages(), records, nil)
+		if m.ag != nil {
+			m.ag.ReplacementState = state
+		}
+	}
+
+	restored := fmt.Sprintf("会话 %s 已从完整快照恢复（%d 条消息）。", m.sessionID, len(msgs))
+	m.chatMessages = append(m.chatMessages, chatMessage{
+		role: "system", content: restored,
+	})
+	return true
+}
+
+// saveConversationSnapshot persists the full structured conversation as JSON
+// alongside the text-only session log. The snapshot preserves tool_use,
+// tool_result, and thinking blocks that the JSONL drops, enabling faithful
+// resume via /resume.
+func (m *Model) saveConversationSnapshot(wd, sessionID string) {
+	msgs := m.conversation.GetMessages()
+	data, err := json.Marshal(msgs)
+	if err != nil {
+		return
+	}
+	path := session.SnapshotFilePath(wd, sessionID)
+	_ = os.WriteFile(path, data, 0o644)
+}
+
 func (m *Model) savePartialResponse() {
 	if m.streamBuf != "" {
 		m.chatMessages = append(m.chatMessages, chatMessage{
@@ -1146,7 +1205,7 @@ func (m *Model) savePartialResponse() {
 			for _, tu := range last.ToolUses {
 				results = append(results, conversation.ToolResultBlock{
 					ToolUseID: tu.ToolUseID,
-					Content:   "Tool execution was interrupted by user.",
+					Content:   "工具执行被用户中断。",
 					IsError:   true,
 				})
 			}
@@ -1156,7 +1215,7 @@ func (m *Model) savePartialResponse() {
 
 	m.chatMessages = append(m.chatMessages, chatMessage{
 		role:    "system",
-		content: "(response interrupted)",
+		content: "(响应已中断)",
 	})
 	m.updateViewport()
 }
@@ -1283,7 +1342,7 @@ func (m Model) handleChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			taskID := m.taskMgr.AdoptRunning("manual-background", m.agentCh, m.cancelStream)
 			m.chatMessages = append(m.chatMessages, chatMessage{
 				role:    "system",
-				content: fmt.Sprintf("Agent moved to background (task %s). You will be notified when it completes.", taskID),
+				content: fmt.Sprintf("Agent 已移至后台（任务 %s）。完成后会通知你。", taskID),
 			})
 			m.agentCh = nil
 			m.cancelStream = nil
@@ -1633,7 +1692,7 @@ func (m Model) buildCommandContext(args string) *commands.Context {
 		},
 		SetPermissionMode: func(mode string) error {
 			if m.ag == nil || m.ag.Checker == nil {
-				return fmt.Errorf("permission system not initialized")
+				return fmt.Errorf("权限系统未初始化")
 			}
 			target := permissions.PermissionMode(mode)
 			switch target {
@@ -1674,7 +1733,7 @@ func (m Model) executeCommand(name, args string) (tea.Model, tea.Cmd) {
 	if cmd == nil {
 		m.chatMessages = append(m.chatMessages, chatMessage{
 			role:    "error",
-			content: fmt.Sprintf("Unknown command: /%s — type /help to see available commands", name),
+			content: fmt.Sprintf("未知命令：/%s — 输入 /help 查看可用命令", name),
 		})
 		m.updateViewport()
 		return m, nil
@@ -1716,7 +1775,7 @@ func (m Model) executeCommand(name, args string) (tea.Model, tea.Cmd) {
 				m.ag.Checker.PlanFilePath = planPath
 				m.chatMessages = append(m.chatMessages, chatMessage{
 					role:    "system",
-					content: fmt.Sprintf("Entered Plan mode. Plan file: %s\nExplore the codebase and design your approach.", planPath),
+					content: fmt.Sprintf("已进入计划模式。计划文件：%s\n探索代码库并设计你的方案。", planPath),
 				})
 			}
 			if args != "" {
@@ -1728,13 +1787,13 @@ func (m Model) executeCommand(name, args string) (tea.Model, tea.Cmd) {
 		case "compact":
 			if m.client == nil || m.conversation == nil {
 				m.chatMessages = append(m.chatMessages, chatMessage{
-					role: "error", content: "Compact requires an active provider.",
+					role: "error", content: "压缩需要已激活的提供商。",
 				})
 				m.updateViewport()
 				return m, nil
 			}
 			m.chatMessages = append(m.chatMessages, chatMessage{
-				role: "system", content: "Compacting conversation…",
+				role: "system", content: "正在压缩对话…",
 			})
 			m.updateViewport()
 			client := m.client
@@ -1794,7 +1853,7 @@ func (m Model) executeCommand(name, args string) (tea.Model, tea.Cmd) {
 		}
 		m.chatMessages = append(m.chatMessages, chatMessage{role: "user", content: displayText})
 		userLine := promptStyle.Render("❯ ") + lipgloss.NewStyle().Foreground(brightText).Bold(true).Render(displayText)
-		forkNotice := fmt.Sprintf("Forking skill %s in isolated sub-agent…", name)
+		forkNotice := fmt.Sprintf("正在独立子 Agent 中 fork 技能 %s…", name)
 		m.chatMessages = append(m.chatMessages, chatMessage{role: "system", content: forkNotice})
 		m.committedUpTo = len(m.chatMessages)
 		m.updateViewport()
@@ -1827,7 +1886,7 @@ func (m Model) executeCommand(name, args string) (tea.Model, tea.Cmd) {
 
 	m.chatMessages = append(m.chatMessages, chatMessage{
 		role:    "system",
-		content: fmt.Sprintf("/%s — not yet implemented", name),
+		content: fmt.Sprintf("/%s — 尚未实现", name),
 	})
 	m.updateViewport()
 	return m, nil
@@ -1925,7 +1984,7 @@ func (m Model) executePlanApproval() (tea.Model, tea.Cmd) {
 			m.ag.Checker.Mode = permissions.ModeBypass
 			m.ag.Checker.PlanFilePath = ""
 		}
-		modeMsg = "Plan approved. Entered YOLO mode (all operations auto-approved)."
+		modeMsg = "计划已批准。进入 YOLO 模式（所有操作自动批准）。"
 	case 1: // Manually approve
 		if m.ag != nil && m.ag.Checker != nil {
 			restoreMode := m.prePlanMode
@@ -1935,7 +1994,7 @@ func (m Model) executePlanApproval() (tea.Model, tea.Cmd) {
 			m.ag.Checker.Mode = restoreMode
 			m.ag.Checker.PlanFilePath = ""
 		}
-		modeMsg = "Plan approved. Each edit will require your confirmation."
+		modeMsg = "计划已批准。每次编辑都需要你确认。"
 	}
 
 	m.chatMessages = append(m.chatMessages, chatMessage{
@@ -1975,7 +2034,7 @@ func (m Model) sendPlanFeedback(feedback string, alsoExit bool) (tea.Model, tea.
 		planfile.ResetPlanPath()
 		m.chatMessages = append(m.chatMessages, chatMessage{
 			role:    "system",
-			content: "Exiting plan mode with feedback. Edits will require confirmation.",
+			content: "正在退出计划模式，已附上反馈。编辑需要确认。",
 		})
 	}
 
@@ -1987,15 +2046,15 @@ func (m Model) renderPlanApprovalDialog() string {
 	var sb strings.Builder
 
 	header := lipgloss.NewStyle().Foreground(brandPurple).Bold(true).Render(
-		" Johnny Code has written up a plan and is ready to execute. Would you like to proceed?",
+		" Johnny Code 已写好计划并准备执行。是否继续？",
 	)
 	sb.WriteString(header)
 	sb.WriteString("\n\n")
 
 	options := []string{
-		"Yes, enter YOLO mode (auto-approve all)",
-		"Yes, manually approve edits",
-		"Tell Johnny Code what to change",
+		"是，进入 YOLO 模式（自动批准全部）",
+		"是，手动批准编辑",
+		"告诉 Johnny Code 需要修改什么",
 	}
 
 	for i, opt := range options {
@@ -2019,14 +2078,14 @@ func (m Model) renderPlanApprovalDialog() string {
 				inputLine += "█"
 			}
 			if inputLine == "█" || inputLine == "" {
-				placeholder := lipgloss.NewStyle().Foreground(dimText).Render("Type feedback here...")
+				placeholder := lipgloss.NewStyle().Foreground(dimText).Render("在此输入反馈...")
 				if m.planApprovalCursor == 2 {
 					sb.WriteString("      " + placeholder + "\n")
 				}
 			} else {
 				sb.WriteString("      " + inputLine + "\n")
 			}
-			hint := lipgloss.NewStyle().Foreground(dimText).Render("      shift+tab to approve with this feedback")
+			hint := lipgloss.NewStyle().Foreground(dimText).Render("      shift+tab 批准此反馈")
 			sb.WriteString(hint)
 			sb.WriteString("\n")
 		}
@@ -2216,7 +2275,7 @@ func (m Model) renderAskUserDialog() string {
 
 	// Bottom hint
 	if multiQuestion && !m.askUserOnSubmit {
-		hint := lipgloss.NewStyle().Foreground(dimText).Render("      ← → navigate questions · enter to confirm")
+		hint := lipgloss.NewStyle().Foreground(dimText).Render("      ← → 切换问题 · 回车确认")
 		sb.WriteString(hint)
 		sb.WriteString("\n\n")
 	}
@@ -2364,7 +2423,7 @@ func (m Model) renderSubmitView() string {
 	var sb strings.Builder
 	lines := 0
 
-	header := lipgloss.NewStyle().Foreground(brandPurple).Bold(true).Render(" Review your answers:")
+	header := lipgloss.NewStyle().Foreground(brandPurple).Bold(true).Render(" 检查你的答案：")
 	sb.WriteString(header)
 	sb.WriteString("\n\n")
 	lines += 2
@@ -2378,7 +2437,7 @@ func (m Model) renderSubmitView() string {
 		if ok {
 			sb.WriteString(fmt.Sprintf("   %s: %s\n", label, answer))
 		} else {
-			dim := lipgloss.NewStyle().Foreground(dimText).Render(fmt.Sprintf("   %s: (not answered)", label))
+			dim := lipgloss.NewStyle().Foreground(dimText).Render(fmt.Sprintf("   %s: (未回答)", label))
 			sb.WriteString(dim + "\n")
 		}
 		lines++
@@ -2387,7 +2446,7 @@ func (m Model) renderSubmitView() string {
 	lines++
 
 	// Submit / Cancel options
-	for i, opt := range []string{"Submit answers", "Cancel"} {
+	for i, opt := range []string{"提交答案", "取消"} {
 		if i == m.askUserSubmitIdx {
 			prefix := lipgloss.NewStyle().Foreground(brandPurple).Render(" ❯ ")
 			label := lipgloss.NewStyle().Bold(true).Render(opt)
@@ -2780,7 +2839,7 @@ func (m Model) handleAgentEvent(ev agent.AgentEvent) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 
 	case agent.RetryEvent:
-		msg := "↻ Retrying: " + e.Reason
+		msg := "↻ 正在重试：" + e.Reason
 		if e.Wait > 0 {
 			msg += fmt.Sprintf(" (waiting %s)", e.Wait)
 		}
@@ -2810,6 +2869,13 @@ func (m Model) handleAgentEvent(ev agent.AgentEvent) (tea.Model, tea.Cmd) {
 			wd, _ := os.Getwd()
 			session.SaveMessage(wd, m.sessionID, session.Message{Role: "assistant", Content: m.streamBuf, Ts: time.Now().Unix()})
 			m.streamBuf = ""
+			// Save a structured snapshot of the full conversation for
+			// faithful resume. The text-only JSONL drops tool calls,
+			// tool results, and thinking blocks; the snapshot preserves
+			// them so the model sees the same context after reload.
+			if m.sessionID != "" && m.conversation != nil {
+				m.saveConversationSnapshot(wd, m.sessionID)
+			}
 		}
 		m.chatMessages = append(m.chatMessages, chatMessage{
 			role:    "thinking",
@@ -2871,9 +2937,9 @@ func renderSubAgentBlock(sab *subAgentBlock, expanded bool) string {
 				sb.WriteString("\n")
 			}
 		} else {
-			summary := fmt.Sprintf("  ⎿  Done (%d tool uses · %.1fs)", sab.toolCount, sab.totalTime)
+			summary := fmt.Sprintf("  ⎿  完成（%d 次工具调用 · %.1fs）", sab.toolCount, sab.totalTime)
 			sb.WriteString(toolDoneStyle.Render(summary))
-			sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("  (ctrl+o to expand)"))
+			sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("  (ctrl+o 展开)"))
 			sb.WriteString("\n")
 		}
 	} else {
@@ -2886,10 +2952,10 @@ func renderSubAgentBlock(sab *subAgentBlock, expanded bool) string {
 		}
 		if n > 1 {
 			sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render(
-				fmt.Sprintf("     … +%d tool uses (ctrl+o to expand)", n-1)))
+				fmt.Sprintf("     … +%d 次工具调用（ctrl+o 展开）", n-1)))
 			sb.WriteString("\n")
 		}
-		sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("     Running…"))
+		sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("     运行中…"))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
@@ -2915,9 +2981,9 @@ func renderToolGroupSummary(tools []toolBlockInfo) string {
 	}
 	n := len(tools)
 	if errors > 0 {
-		return fmt.Sprintf("● Done (%d tool uses · %d errors · %.1fs)", n, errors, totalElapsed)
+		return fmt.Sprintf("● 完成（%d 次工具调用 · %d 个错误 · %.1fs）", n, errors, totalElapsed)
 	}
-	return fmt.Sprintf("● Done (%d tool uses · %.1fs)", n, totalElapsed)
+	return fmt.Sprintf("● 完成（%d 次工具调用 · %.1fs）", n, totalElapsed)
 }
 
 func (m *Model) calcViewportHeight(availableHeight int) int {
@@ -2975,7 +3041,7 @@ func (m Model) renderProviderSelectView() string {
 	sb.WriteString(m.renderBanner())
 	sb.WriteString("\n\n")
 
-	sb.WriteString(selectLabelStyle.Render("Select a Provider"))
+	sb.WriteString(selectLabelStyle.Render("选择提供商"))
 	sb.WriteString("\n\n")
 
 	for i, p := range m.providers {
@@ -3033,13 +3099,13 @@ func (m Model) renderTeammateTree() string {
 		status := p.GetStatus()
 		switch status {
 		case "completed":
-			sb.WriteString(greenStyle.Render("completed"))
+			sb.WriteString(greenStyle.Render("已完成"))
 		case "failed":
-			sb.WriteString(redStyle.Render("failed"))
+			sb.WriteString(redStyle.Render("失败"))
 		case "stopped":
-			sb.WriteString(yellowStyle.Render("stopped"))
+			sb.WriteString(yellowStyle.Render("已停止"))
 		case "idle":
-			sb.WriteString(dimStyle.Render("idle"))
+			sb.WriteString(dimStyle.Render("空闲"))
 		default:
 			sb.WriteString(dimStyle.Render(p.ActivitySummary() + "..."))
 		}
@@ -3087,7 +3153,7 @@ func (m Model) renderChatView() string {
 	sb.WriteString("\n")
 	if m.planApprovalDialog {
 		// Hide input when plan approval dialog is active
-		sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("  Select an option above..."))
+		sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("  请选择上方选项..."))
 	} else {
 		sb.WriteString(promptStyle.Render("❯ "))
 		sb.WriteString(m.textarea.View())
@@ -3136,7 +3202,7 @@ func (m Model) renderBanner() string {
 			bannerStyle.Render(padded)+bannerDimStyle.Render(labels[i]),
 		)
 	}
-	return strings.Join(lines, "\n")
+	return "\n" + strings.Join(lines, "\n")
 }
 
 func (m Model) renderSeparator() string {
@@ -3162,7 +3228,7 @@ func (m Model) renderStatusBar() string {
 		modeStr := lipgloss.NewStyle().Foreground(modeColor).Render(
 			fmt.Sprintf("%s on", name),
 		)
-		hint := lipgloss.NewStyle().Foreground(dimText).Render(" (shift+tab to cycle)")
+		hint := lipgloss.NewStyle().Foreground(dimText).Render(" (shift+tab 切换)")
 		left = statusBarStyle.Render("  ") + modeStr + hint
 	} else {
 		left = statusBarStyle.Render(left)
@@ -3185,7 +3251,7 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 	if m.mcpConnecting {
-		right += lipgloss.NewStyle().Foreground(yellowText).Render("MCP connecting… ")
+		right += lipgloss.NewStyle().Foreground(yellowText).Render("MCP 连接中… ")
 	}
 	if m.selectedProvider != nil {
 		right += statusItemStyle.Render(m.selectedProvider.Model)
@@ -3304,7 +3370,7 @@ func (m Model) renderChatContent() string {
 			} else {
 				summary := renderToolGroupSummary(msg.toolGroup)
 				sb.WriteString(toolDoneStyle.Render("  "+summary))
-				sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("  (ctrl+o to expand)"))
+				sb.WriteString(lipgloss.NewStyle().Foreground(dimText).Render("  (ctrl+o 展开)"))
 				sb.WriteString("\n")
 			}
 
@@ -3490,9 +3556,9 @@ func (m Model) renderPermDialog() string {
 	}
 
 	// Approval notice
-	sb.WriteString(permDimStyle.Render("  This command requires approval"))
+	sb.WriteString(permDimStyle.Render("  此命令需要批准"))
 	sb.WriteString("\n\n")
-	sb.WriteString(lipgloss.NewStyle().Foreground(normalText).PaddingLeft(2).Render("Do you want to proceed?"))
+	sb.WriteString(lipgloss.NewStyle().Foreground(normalText).PaddingLeft(2).Render("是否继续？"))
 	sb.WriteString("\n")
 
 	// Selectable options
@@ -3553,7 +3619,7 @@ func (m Model) renderRewindSnapshotList() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(2).Render("↑/↓ navigate · enter select · esc cancel"))
+	sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(2).Render("↑/↓ 导航 · 回车选择 · Esc 取消"))
 	sb.WriteString("\n")
 	return sb.String()
 }
@@ -3570,7 +3636,7 @@ func (m Model) renderRewindOptionsDialog() string {
 	if len(label) > 50 {
 		label = label[:50] + "…"
 	}
-	selected := fmt.Sprintf("  Selected: [%d] %s (%s ago, %d file(s))", m.rewindCursor+1, label, ago, len(snap.Backups))
+	selected := fmt.Sprintf("  已选择：[%d] %s（%s前，%d 个文件）", m.rewindCursor+1, label, ago, len(snap.Backups))
 	sb.WriteString(lipgloss.NewStyle().Foreground(normalText).Render(selected))
 	sb.WriteString("\n\n")
 
@@ -3585,7 +3651,7 @@ func (m Model) renderRewindOptionsDialog() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(2).Render("↑/↓ navigate · enter select · esc back"))
+	sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(2).Render("↑/↓ 导航 · 回车选择 · Esc 返回"))
 	sb.WriteString("\n")
 	return sb.String()
 }
@@ -3719,7 +3785,7 @@ func (m Model) handleResume(args string) (tea.Model, tea.Cmd) {
 
 	if len(sessions) == 0 {
 		m.chatMessages = append(m.chatMessages, chatMessage{
-			role: "system", content: "No previous sessions found.",
+			role: "system", content: "未找到之前的会话。",
 		})
 		m.updateViewport()
 		return m, nil
@@ -3743,7 +3809,7 @@ func (m Model) doResumeSession(wd, targetID string, sessions []session.SessionIn
 	msgs := session.LoadSession(wd, strings.TrimSpace(targetID))
 	if len(msgs) == 0 {
 		m.chatMessages = append(m.chatMessages, chatMessage{
-			role: "error", content: fmt.Sprintf("Session '%s' not found or empty.", targetID),
+			role: "error", content: fmt.Sprintf("会话 '%s' 未找到或为空。", targetID),
 		})
 		m.updateViewport()
 		return m, nil
@@ -3759,6 +3825,15 @@ func (m Model) doResumeSession(wd, targetID string, sessions []session.SessionIn
 		m.ag.SetSessionID(m.sessionID)
 	}
 
+	// Try faithful resume from structured snapshot first. The snapshot
+	// preserves tool calls, tool results, and thinking blocks that the
+	// text-only JSONL cannot represent.
+	if m.loadConversationSnapshot(wd) {
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Fallback: text-only JSONL path for sessions without a snapshot.
 	// Compaction-aware rebuild: if the session contains a compact_boundary, the
 	// live conversation is the compacted state — [summary] + kept tail + any
 	// plain messages appended after the boundary — and the original
@@ -3790,9 +3865,9 @@ func (m Model) doResumeSession(wd, targetID string, sessions []session.SessionIn
 		}
 	}
 
-	restored := fmt.Sprintf("Session %s restored (%d messages).", strings.TrimSpace(targetID), len(replay))
+	restored := fmt.Sprintf("会话 %s 已恢复（%d 条消息）。", strings.TrimSpace(targetID), len(replay))
 	if compacted {
-		restored = fmt.Sprintf("Session %s restored from compacted state (summary + %d kept + %d newer messages).",
+		restored = fmt.Sprintf("会话 %s 已从压缩状态恢复（摘要 + %d 条保留 + %d 条新消息）。",
 			strings.TrimSpace(targetID), len(boundary.Keep), len(after))
 	}
 	m.chatMessages = append(m.chatMessages, chatMessage{
@@ -3811,14 +3886,14 @@ func (m Model) doResumeSession(wd, targetID string, sessions []session.SessionIn
 func (m Model) handleRewind() (tea.Model, tea.Cmd) {
 	if m.fileHistory == nil {
 		m.chatMessages = append(m.chatMessages, chatMessage{
-			role: "system", content: "No file history available (fileHistory is nil).",
+			role: "system", content: "没有文件历史记录（fileHistory 为空）。",
 		})
 		m.updateViewport()
 		return m, nil
 	}
 	if !m.fileHistory.HasSnapshots() {
 		m.chatMessages = append(m.chatMessages, chatMessage{
-			role: "system", content: "No checkpoints to rewind to (0 snapshots).",
+			role: "system", content: "没有可回退的检查点（0 个快照）。",
 		})
 		m.updateViewport()
 		return m, nil
@@ -3833,10 +3908,10 @@ func (m Model) handleRewind() (tea.Model, tea.Cmd) {
 }
 
 var rewindOptions = []string{
-	"Restore code and conversation",
-	"Restore conversation only",
-	"Restore code only",
-	"Never mind",
+	"恢复代码和对话",
+	"仅恢复对话",
+	"仅恢复代码",
+	"算了",
 }
 
 func (m Model) handleRewindKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -3908,14 +3983,14 @@ func (m Model) executeRewindOption() (tea.Model, tea.Cmd) {
 	case 0: // Restore code and conversation
 		changed, err := m.fileHistory.Rewind(m.rewindCursor)
 		if err != nil {
-			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: fmt.Sprintf("Rewind failed: %s", err)})
+			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: fmt.Sprintf("回退失败：%s", err)})
 			m.rewindDialog = false
 			m.textarea.Focus()
 			m.updateViewport()
 			return m, nil
 		}
 		m.conversation.TruncateTo(snap.MessageIndex)
-		summary = fmt.Sprintf("⟲ Rewound to checkpoint %d. Restored %d file(s) and conversation.", m.rewindCursor+1, len(changed))
+		summary = fmt.Sprintf("⟲ 已回退到检查点 %d。恢复了 %d 个文件和对话。", m.rewindCursor+1, len(changed))
 		for _, f := range changed {
 			summary += "\n  • " + f
 		}
@@ -3924,20 +3999,20 @@ func (m Model) executeRewindOption() (tea.Model, tea.Cmd) {
 
 	case 1: // Restore conversation only
 		m.conversation.TruncateTo(snap.MessageIndex)
-		summary = fmt.Sprintf("⟲ Rewound conversation to checkpoint %d. Files unchanged.", m.rewindCursor+1)
+		summary = fmt.Sprintf("⟲ 已将对话回退到检查点 %d。文件未更改。", m.rewindCursor+1)
 		m.chatMessages = m.chatMessages[:0]
 		m.committedUpTo = 0
 
 	case 2: // Restore code only
 		changed, err := m.fileHistory.Rewind(m.rewindCursor)
 		if err != nil {
-			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: fmt.Sprintf("Rewind failed: %s", err)})
+			m.chatMessages = append(m.chatMessages, chatMessage{role: "error", content: fmt.Sprintf("回退失败：%s", err)})
 			m.rewindDialog = false
 			m.textarea.Focus()
 			m.updateViewport()
 			return m, nil
 		}
-		summary = fmt.Sprintf("⟲ Restored %d file(s) to checkpoint %d. Conversation unchanged.", len(changed), m.rewindCursor+1)
+		summary = fmt.Sprintf("⟲ 已将 %d 个文件恢复到检查点 %d。对话未更改。", len(changed), m.rewindCursor+1)
 		for _, f := range changed {
 			summary += "\n  • " + f
 		}
@@ -4050,14 +4125,14 @@ func (m Model) renderResumeView() string {
 
 	// Header
 	sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(2).Render(
-		fmt.Sprintf("Resume session (%d of %d)", current, total),
+		fmt.Sprintf("恢复会话（%d / %d）", current, total),
 	))
 	sb.WriteString("\n")
 
 	// Search box
 	searchText := m.resumeSearch
 	if searchText == "" {
-		searchText = lipgloss.NewStyle().Foreground(dimText).Render("⌕ Search…")
+		searchText = lipgloss.NewStyle().Foreground(dimText).Render("⌕ 搜索…")
 	} else {
 		searchText = "⌕ " + searchText
 	}
@@ -4091,7 +4166,7 @@ func (m Model) renderResumeView() string {
 		// Title line
 		title := s.FirstMessage
 		if title == "" {
-			title = "(empty session)"
+			title = "(空会话)"
 		}
 		maxTitleLen := m.width - 8
 		if maxTitleLen > 0 && len(title) > maxTitleLen {
@@ -4129,7 +4204,7 @@ func (m Model) renderResumeView() string {
 		if m.resumeScrollTop+maxVisible < total {
 			sb.WriteString("\n")
 			sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(2).Render(
-				fmt.Sprintf("  ↓ %d more session(s)", total-m.resumeScrollTop-maxVisible),
+				fmt.Sprintf("  ↓ 还有 %d 个会话", total-m.resumeScrollTop-maxVisible),
 			))
 		}
 	}
@@ -4145,7 +4220,7 @@ func (m Model) renderResumeView() string {
 	// Footer
 	sb.WriteString("\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(dimText).PaddingLeft(4).Render(
-		"Type to search · Enter to select · Esc to cancel",
+		"输入搜索 · 回车选择 · Esc 取消",
 	))
 
 	return sb.String()
@@ -4183,13 +4258,13 @@ func (m *Model) historyDown() {
 func permissionModeInfo(mode permissions.PermissionMode) (string, string) {
 	switch mode {
 	case permissions.ModeDefault:
-		return "Default", "Writes and commands require approval."
+		return "默认", "写入和命令需要批准。"
 	case permissions.ModeAcceptEdits:
-		return "Accept Edits", "File edits auto-approved; commands still require approval."
+		return "接受编辑", "文件编辑自动批准；命令仍需批准。"
 	case permissions.ModePlan:
-		return "Plan", "Read-only mode. No writes or commands executed."
+		return "计划", "只读模式。不执行任何写入或命令。"
 	case permissions.ModeBypass:
-		return "YOLO", "All tools auto-approved. Use with caution."
+		return "YOLO", "所有工具自动批准。请谨慎使用。"
 	default:
 		return string(mode), ""
 	}

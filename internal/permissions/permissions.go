@@ -64,6 +64,12 @@ var defaultDangerousPatterns = []dangerousPattern{
 	{regexp.MustCompile(`curl\s+.*\|\s*(ba)?sh`), "pipe remote script"},
 	{regexp.MustCompile(`wget\s+.*\|\s*(ba)?sh`), "pipe remote script"},
 	{regexp.MustCompile(`>\s*/dev/sd`), "overwrite disk device"},
+
+	// Dangerous git operations — irreversible or destructive.
+	{regexp.MustCompile(`git\s+push\s+.*--force`), "git force push (overwrites remote history)"},
+	{regexp.MustCompile(`git\s+push\s+.*--delete`), "git delete remote branch"},
+	{regexp.MustCompile(`git\s+reset\s+--hard`), "git hard reset (discards all local changes)"},
+	{regexp.MustCompile(`git\s+clean\s+-[a-z]*f[a-z]*`), "git clean (deletes untracked files)"},
 }
 
 func DetectDangerous(command string) (bool, string) {
@@ -129,40 +135,41 @@ func (r Rule) Matches(toolName, content string) bool {
 }
 
 type RuleEngine struct {
-	UserPath    string
-	ProjectPath string
-	LocalPath   string
+	// LocalPath is the path to the project-level hand-written YAML rules
+	// file.  These rules persist across sessions.
+	LocalPath string
+
+	// sessionRules are in-memory rules that survive only for the
+	// lifetime of this process.  AllowAlways decisions are stored here
+	// so they are scoped to the current session — no wildcard, exact
+	// match only — and evaporate on exit.
+	sessionRules []Rule
 }
 
 func (e *RuleEngine) Evaluate(toolName, content string) *RuleEffect {
-	for _, path := range []string{e.UserPath, e.ProjectPath, e.LocalPath} {
-		rules := loadRulesFile(path)
-		for i := len(rules) - 1; i >= 0; i-- {
-			if rules[i].Matches(toolName, content) {
-				eff := rules[i].Effect
-				return &eff
-			}
+	// Check persisted rules first (single level: project-local file).
+	rules := loadRulesFile(e.LocalPath)
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].Matches(toolName, content) {
+			eff := rules[i].Effect
+			return &eff
+		}
+	}
+	// Check session rules last so they override persisted ones.
+	for i := len(e.sessionRules) - 1; i >= 0; i-- {
+		if e.sessionRules[i].Matches(toolName, content) {
+			eff := e.sessionRules[i].Effect
+			return &eff
 		}
 	}
 	return nil
 }
 
-func (e *RuleEngine) AppendLocalRule(r Rule) {
-	if e.LocalPath == "" {
-		return
-	}
-	os.MkdirAll(filepath.Dir(e.LocalPath), 0o755)
-	rules := loadRulesFile(e.LocalPath)
-	rules = append(rules, r)
-	var entries []map[string]string
-	for _, rule := range rules {
-		entries = append(entries, map[string]string{
-			"rule":   fmt.Sprintf("%s(%s)", rule.ToolName, rule.Pattern),
-			"effect": string(rule.Effect),
-		})
-	}
-	data, _ := yaml.Marshal(entries)
-	os.WriteFile(e.LocalPath, data, 0o644)
+// AddSessionRule appends a rule that lives only in memory for the current
+// process. Used by AllowAlways so the user's "don't ask again" choice
+// lasts for the session but does not leak across restarts.
+func (e *RuleEngine) AddSessionRule(r Rule) {
+	e.sessionRules = append(e.sessionRules, r)
 }
 
 func loadRulesFile(path string) []Rule {
@@ -234,7 +241,47 @@ func IsSafeCommand(command string) bool {
 	return false
 }
 
-// Content extraction for rule matching
+// commandHasPathOutsideSandbox scans a Bash command string for arguments
+// that look like file paths (absolute, relative with dots, or containing a
+// separator) and checks them against the sandbox.  Returns true if any
+// path-like argument falls outside the allowed roots, signalling that the
+// command should not be auto-allowed even though its name is safe.
+func commandHasPathOutsideSandbox(command string, sandbox *PathSandbox) bool {
+	fields := strings.Fields(command)
+	for _, f := range fields {
+		// Skip flags: -x, --foo, etc.
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		if !looksLikePath(f) {
+			continue
+		}
+		// Expand ~ to the home directory before sandbox check (Go's
+		// filepath.Abs does not understand shell tilde expansion).
+		path := f
+		if strings.HasPrefix(path, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				path = filepath.Join(home, path[2:])
+			}
+		}
+		if ok, _ := sandbox.Check(path); !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikePath reports whether s is a plausible file-path argument
+// (not a flag or a bare non-path word).
+func looksLikePath(s string) bool {
+	return strings.HasPrefix(s, "/") ||
+		strings.HasPrefix(s, "./") ||
+		strings.HasPrefix(s, "../") ||
+		strings.HasPrefix(s, "~/") ||
+		strings.Contains(s, "/") ||
+		strings.HasPrefix(s, `\`) ||
+		strings.Contains(s, `\`)
+}
 
 var contentFields = map[string]string{
 	"Bash": "command", "ReadFile": "file_path", "WriteFile": "file_path",
@@ -274,7 +321,15 @@ func (c *Checker) Check(tool tools.Tool, args map[string]any) Decision {
 
 	// Layer 1: safe read-only commands (auto-allow)
 	if cat == tools.CategoryCommand && IsSafeCommand(content) {
-		return Decision{Effect: Allow, Reason: "Safe read-only command"}
+		// Even when the command name is safe, check path-like arguments
+		// against the sandbox.  "cat /etc/passwd" is safe by name but
+		// its argument points outside the project — don't auto-allow it.
+		if c.Sandbox != nil && commandHasPathOutsideSandbox(content, c.Sandbox) {
+			// Fall through to rule engine / mode / Ask instead of
+			// auto-allowing.
+		} else {
+			return Decision{Effect: Allow, Reason: "Safe read-only command"}
+		}
 	}
 
 	// Layer 2: dangerous command (Bash only)

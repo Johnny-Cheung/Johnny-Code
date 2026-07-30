@@ -121,6 +121,19 @@ func SessionFilePath(workDir, id string) string {
 	return filepath.Join(sessionsDir(workDir), id+".jsonl")
 }
 
+// SnapshotFilePath returns the path to the structured live-context snapshot for a
+// session. Used by faithful resume to restore tool calls, results, and thinking
+// blocks that the text-only JSONL log does not preserve.
+func SnapshotFilePath(workDir, id string) string {
+	return filepath.Join(sessionsDir(workDir), id+".snapshot.json")
+}
+
+// SessionRecordsDir returns the directory where per-session replacement_records
+// are stored, scoping Layer 1 spill decisions to a single session.
+func SessionRecordsDir(workDir, id string) string {
+	return filepath.Join(sessionsDir(workDir), id)
+}
+
 func SaveMessage(workDir, sessionID string, msg Message) {
 	dir := sessionsDir(workDir)
 	os.MkdirAll(dir, 0o755)

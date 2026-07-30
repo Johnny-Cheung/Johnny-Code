@@ -17,6 +17,7 @@ import (
 	"johnnycode/internal/permissions"
 	"johnnycode/internal/planfile"
 	"johnnycode/internal/prompt"
+	"johnnycode/internal/session"
 	"johnnycode/internal/toolresult"
 	"johnnycode/internal/tools"
 )
@@ -248,10 +249,12 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 			// runs after them and rebuilds the manager from conv.GetMessages().
 			apiConv, newRecords, _ := toolresult.Apply(conv, a.WorkDir, a.ReplacementState)
 			if len(newRecords) > 0 {
-				// Best-effort persistence; failure is non-fatal because the
-				// in-memory state already has the canonical decisions for
-				// this process lifetime.
-				_ = toolresult.AppendRecords(a.WorkDir, newRecords)
+				// Persist records per-session so Reconstruct can rebuild
+				// ReplacementState on resume. Skip when sessionID is empty
+				// (tests, one-shot callers).
+				if a.SessionID != "" {
+					_ = toolresult.AppendRecords(session.SessionRecordsDir(a.WorkDir, a.SessionID), newRecords)
+				}
 			}
 
 			events, errs := a.Client.Stream(ctx, apiConv, toolSchemas)
@@ -609,13 +612,12 @@ func (a *Agent) executeSingleTool(ctx context.Context, eventCh chan AgentEvent, 
 			}
 			if resp == PermAllowAlways {
 				content := permissions.ExtractContent(tc.ToolName, tc.Arguments)
-				pattern := content + "*"
-				if len(content) > 60 {
-					pattern = content[:60] + "*"
-				}
-				a.Checker.RuleEngine.AppendLocalRule(permissions.Rule{
+				// Session-scoped, exact-match only.  No wildcard — the
+				// user approved this specific command / path, so only
+				// an identical future call is auto-allowed.
+				a.Checker.RuleEngine.AddSessionRule(permissions.Rule{
 					ToolName: tc.ToolName,
-					Pattern:  pattern,
+					Pattern:  content,
 					Effect:   permissions.RuleAllow,
 				})
 			}
