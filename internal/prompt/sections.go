@@ -197,8 +197,16 @@ func EnvironmentSection(env EnvironmentContext) Section {
 		fmt.Sprintf(" - 工作目录: %s", env.WorkDir),
 		fmt.Sprintf(" - 平台: %s/%s", env.OS, env.Arch),
 		fmt.Sprintf(" - Shell: %s", env.Shell),
-		fmt.Sprintf(" - 是否 Git 仓库: %v", env.IsGitRepo),
 	}
+	if env.OS == "windows" {
+		lines = append(lines,
+			" - Windows 路径约定: Bash 使用 Unix 风格路径（如 /c/Users/... 而非 C:\\Users\\...）。",
+			"   避免使用 cmd.exe，它会被沙箱拦截且极其缓慢。使用 Git Bash 命令即可。",
+		)
+	}
+	lines = append(lines,
+		fmt.Sprintf(" - 是否 Git 仓库: %v", env.IsGitRepo),
+	)
 	if env.IsGitRepo && env.GitBranch != "" {
 		lines = append(lines, fmt.Sprintf(" - Git 分支: %s", env.GitBranch))
 	}

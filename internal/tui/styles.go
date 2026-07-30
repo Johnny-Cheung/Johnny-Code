@@ -17,7 +17,7 @@ var (
 
 	// Banner
 	bannerStyle = lipgloss.NewStyle().
-			Foreground(brandPurple).
+			Foreground(lipgloss.Color("208")).
 			Bold(true)
 
 	bannerDimStyle = lipgloss.NewStyle().

@@ -159,27 +159,27 @@ func CreateDefaultRegistry() *Registry {
 
 	r.Register(&Command{
 		Name:        "help",
-		Description: "Show available commands",
+		Description: "显示可用命令",
 		Aliases:     []string{"h", "?"},
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			if ctx.Args != "" {
 				cmd := r.Find(ctx.Args)
 				if cmd == nil {
-					return fmt.Sprintf("Unknown command: %s", ctx.Args)
+					return fmt.Sprintf("未知命令：%s", ctx.Args)
 				}
 				var sb strings.Builder
 				sb.WriteString(fmt.Sprintf("/%s — %s\n", cmd.Name, cmd.Description))
 				if len(cmd.Aliases) > 0 {
-					sb.WriteString(fmt.Sprintf("  Aliases: %s\n", strings.Join(cmd.Aliases, ", ")))
+					sb.WriteString(fmt.Sprintf("  别名：%s\n", strings.Join(cmd.Aliases, ", ")))
 				}
 				if cmd.ArgPrompt != "" {
-					sb.WriteString(fmt.Sprintf("  Usage: %s\n", cmd.ArgPrompt))
+					sb.WriteString(fmt.Sprintf("  用法：%s\n", cmd.ArgPrompt))
 				}
 				return sb.String()
 			}
 			var sb strings.Builder
-			sb.WriteString("Available commands:\n\n")
+			sb.WriteString("可用命令：\n\n")
 			for _, cmd := range r.ListCommands() {
 				aliases := ""
 				if len(cmd.Aliases) > 0 {
@@ -187,22 +187,22 @@ func CreateDefaultRegistry() *Registry {
 				}
 				sb.WriteString(fmt.Sprintf("  /%s%s\n    %s\n", cmd.Name, aliases, cmd.Description))
 			}
-			sb.WriteString("\nType /help <command> for details.")
+			sb.WriteString("\n输入 /help <命令> 查看详情。")
 			return sb.String()
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "mcp",
-		Description: "Show MCP server status",
+		Description: "显示 MCP 服务器状态",
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			if ctx.MCPInfo == nil {
-				return "No MCP servers configured"
+				return "未配置 MCP 服务器"
 			}
 			info := ctx.MCPInfo()
 			if info == "" {
-				return "No MCP servers connected"
+				return "没有已连接的 MCP 服务器"
 			}
 			return info
 		},
@@ -210,41 +210,41 @@ func CreateDefaultRegistry() *Registry {
 
 	r.Register(&Command{
 		Name:        "clear",
-		Description: "Clear conversation and start fresh",
+		Description: "清除对话并重新开始",
 		Type:        TypeLocalUI,
 	})
 
 	r.Register(&Command{
 		Name:        "compact",
-		Description: "Compress conversation context",
+		Description: "压缩对话上下文",
 		Aliases:     []string{"c"},
 		Type:        TypeLocalUI,
 	})
 
 	r.Register(&Command{
 		Name:        "status",
-		Description: "Show current status",
+		Description: "显示当前状态",
 		Aliases:     []string{"s"},
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			var sb strings.Builder
-			sb.WriteString("Johnny Code Status\n")
+			sb.WriteString("Johnny Code 状态\n")
 			sb.WriteString("──────────────\n")
-			sb.WriteString(fmt.Sprintf("  Mode:      %s\n", ctx.PermissionMode()))
+			sb.WriteString(fmt.Sprintf("  模式：     %s\n", ctx.PermissionMode()))
 			input, output := ctx.TokenCount()
-			sb.WriteString(fmt.Sprintf("  Tokens:    %d in / %d out\n", input, output))
-			sb.WriteString(fmt.Sprintf("  Tools:     %d enabled\n", ctx.ToolCount()))
+			sb.WriteString(fmt.Sprintf("  Token：    %d 入 / %d 出\n", input, output))
+			sb.WriteString(fmt.Sprintf("  工具：     %d 已启用\n", ctx.ToolCount()))
 			memories := ctx.MemoryList()
-			sb.WriteString(fmt.Sprintf("  Memories:  %d entries\n", len(memories)))
-			sb.WriteString(fmt.Sprintf("  Model:     %s\n", ctx.Model))
-			sb.WriteString(fmt.Sprintf("  Directory: %s\n", ctx.WorkDir))
+			sb.WriteString(fmt.Sprintf("  记忆：     %d 条\n", len(memories)))
+			sb.WriteString(fmt.Sprintf("  模型：     %s\n", ctx.Model))
+			sb.WriteString(fmt.Sprintf("  目录：     %s\n", ctx.WorkDir))
 			return sb.String()
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "memory",
-		Description: "Manage auto-memories",
+		Description: "管理自动记忆",
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			sub, subArgs := parseSubcommand(ctx.Args)
@@ -253,10 +253,10 @@ func CreateDefaultRegistry() *Registry {
 			case "", "list":
 				memories := ctx.MemoryList()
 				if len(memories) == 0 {
-					return "No memories stored yet."
+					return "暂无存储的记忆。"
 				}
 				var sb strings.Builder
-				sb.WriteString(fmt.Sprintf("Memories (%d entries):\n\n", len(memories)))
+				sb.WriteString(fmt.Sprintf("记忆（%d 条）：\n\n", len(memories)))
 				for i, mem := range memories {
 					preview := mem
 					if len(preview) > 80 {
@@ -268,25 +268,25 @@ func CreateDefaultRegistry() *Registry {
 
 			case "clear":
 				ctx.MemoryClear()
-				return "All auto-memories cleared."
+				return "所有自动记忆已清除。"
 
 			default:
 				_ = subArgs
-				return "Usage: /memory [list|clear]"
+				return "用法：/memory [list|clear]"
 			}
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "plan",
-		Description: "Switch to plan mode (read-only)",
+		Description: "切换到计划模式（只读）",
 		Aliases:     []string{"p"},
 		Type:        TypeLocalUI,
 	})
 
 	r.Register(&Command{
 		Name:        "session",
-		Description: "Session management",
+		Description: "会话管理",
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			sub, _ := parseSubcommand(ctx.Args)
@@ -296,62 +296,62 @@ func CreateDefaultRegistry() *Registry {
 			case "list":
 				return ctx.SessionInfo()
 			default:
-				return "Usage: /session [list|info]"
+				return "用法：/session [list|info]"
 			}
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "permission",
-		Description: "Permission management",
+		Description: "权限管理",
 		Aliases:     []string{"perm"},
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			sub, rest := parseSubcommand(ctx.Args)
 			switch sub {
 			case "", "info":
-				return fmt.Sprintf("Current permission mode: %s", ctx.PermissionMode())
+				return fmt.Sprintf("当前权限模式：%s", ctx.PermissionMode())
 			case "mode":
 				if rest == "" {
-					return "Usage: /permission mode <default|acceptEdits|plan|bypassPermissions>"
+					return "用法：/permission mode <default|acceptEdits|plan|bypassPermissions>"
 				}
 				if ctx.SetPermissionMode == nil {
-					return "Permission mode switching is not supported in this context."
+					return "此上下文中不支持切换权限模式。"
 				}
 				if err := ctx.SetPermissionMode(rest); err != nil {
 					return err.Error()
 				}
-				return fmt.Sprintf("Permission mode set to: %s", rest)
+				return fmt.Sprintf("权限模式已设置为：%s", rest)
 			default:
-				return "Usage: /permission [info|mode <mode>|rules]"
+				return "用法：/permission [info|mode <模式>|rules]"
 			}
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "resume",
-		Description: "Resume a previous session",
+		Description: "恢复之前的会话",
 		Aliases:     []string{"r"},
 		Type:        TypeLocalUI,
 	})
 
 	r.Register(&Command{
 		Name:        "rewind",
-		Description: "Rewind conversation and files to a previous checkpoint",
+		Description: "将对话和文件回退到之前的检查点",
 		Type:        TypeLocalUI,
 	})
 
 	r.Register(&Command{
 		Name:        "skills",
-		Description: "List available skills",
+		Description: "列出可用技能",
 		Type:        TypeLocal,
 		Handler: func(ctx *Context) string {
 			skills := ctx.SkillList()
 			if len(skills) == 0 {
-				return "No skills installed.\n\nAdd skills to .johnnycode/skills/<skill-name>/SKILL.md"
+				return "没有已安装的技能。\n\n将技能添加到 .johnnycode/skills/<技能名>/SKILL.md"
 			}
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("Available skills (%d):\n\n", len(skills)))
+			sb.WriteString(fmt.Sprintf("可用技能（%d）：\n\n", len(skills)))
 			for _, s := range skills {
 				desc := s.Description
 				if len(desc) > 100 {
@@ -359,14 +359,14 @@ func CreateDefaultRegistry() *Registry {
 				}
 				sb.WriteString(fmt.Sprintf("  /%s\n    %s\n\n", s.Name, desc))
 			}
-			sb.WriteString("Type /<skill-name> to invoke a skill.")
+			sb.WriteString("输入 /<技能名> 来调用技能。")
 			return sb.String()
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "review",
-		Description: "Review current code changes",
+		Description: "审查当前代码更改",
 		Type:        TypePrompt,
 		Handler: func(ctx *Context) string {
 			prompt := "Please review the current git diff for code changes. Focus on:\n" +
