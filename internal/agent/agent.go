@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,56 +35,30 @@ type Agent struct {
 	WorkDir       string
 	MaxIterations int
 	ContextWindow int
-	// MaxOutputTokens is the model's max output budget; used by Layer 2 to
-	// compute the effective window for the compaction threshold. Zero falls
-	// back to the summaryOutputReserve default inside compact.
+
 	MaxOutputTokens int
-	Checker *permissions.Checker
-	Hooks   *hooks.Engine
-	// SessionID identifies the on-disk session log this agent appends to. When
-	// set, Layer 2 compaction writes a compact_boundary record into that session
-	// so a later resume can rebuild the compacted state instead of replaying the
-	// full pre-compaction transcript. Empty disables boundary persistence (tests,
-	// one-shot callers).
+	Checker         *permissions.Checker
+	Hooks           *hooks.Engine
+
 	SessionID      string
 	NotificationFn func() []string
-	// ToolNameFilter, when non-nil, drops any tool whose Name returns false from the schemas sent to
-	// the LLM. The filter is consulted at the top of every iteration so callers can flip Coordinator
-	// Mode on or off (e.g., when a team is created/torn down) without restarting the agent.
+
 	Instructions   string
 	MemoryContent  string
 	ToolNameFilter func(name string) bool
-	// OnLoopComplete, when non-nil, is invoked fire-and-forget after the agent reaches LoopComplete
-	// (final assistant message, no tool calls remaining). Used by ch09 background memory extraction.
-	// Replaces the original stopHooks dispatcher; failures are silent and must not block the main
-	// loop. The callback receives the live conversation — do not mutate it from another goroutine.
+
 	OnLoopComplete  func(conv *conversation.Manager)
 	FileHistory     *filehistory.History
 	compactTracking compact.AutoCompactTrackingState
-	// ReplacementState carries the per-conversation-thread tool-result
-	// decision log across iterations. Lazily created on first Run; forks
-	// inherit a Clone() so they share the parent's frozen decisions but do
-	// not write back into the parent's maps. Exposed so external code (e.g.
-	// AgentTool fork-spawn) can pre-populate from a parent state.
+
 	ReplacementState *toolresult.ContentReplacementState
-	// RecoveryState holds the snapshots needed to rebuild working context
-	// after Layer 2 collapses the conversation into a summary: most-recent
-	// file reads and skill invocations. The struct is concurrency-safe so
-	// the streaming executor can write to it from multiple goroutines.
-	RecoveryState *compact.RecoveryState
-	eventCh       chan AgentEvent
-	// activeSkills holds Skill SOPs that have been pinned to the environment context. Each Agent Loop
-	// iteration re-injects all entries as system-reminders, so the model sees them at the most
-	// prominent position regardless of how long the conversation grows. Populated by ActivateSkill
-	// (via LoadSkillTool or explicit /skill invocations), cleared by ClearActiveSkills (called from
-	// /clear).
+
+	RecoveryState      *compact.RecoveryState
+	freshToolResultIDs map[string]struct{}
+
 	activeSkills map[string]string
 }
 
-// ActivateSkill pins a skill's SOP body to the environment context. The body is emitted as a
-// system-reminder at the top of every subsequent Agent Loop iteration so the model sees it before
-// each decision. Calling ActivateSkill twice with the same name overwrites the previous body (hot
-// reload case).
 func (a *Agent) ActivateSkill(name, body string) {
 	if a.activeSkills == nil {
 		a.activeSkills = make(map[string]string)
@@ -91,14 +66,10 @@ func (a *Agent) ActivateSkill(name, body string) {
 	a.activeSkills[name] = body
 }
 
-// ClearActiveSkills drops every pinned SOP. Called by /clear so a fresh conversation doesn't carry
-// over SOPs from a prior task. Safe to call when no skills were ever activated.
 func (a *Agent) ClearActiveSkills() {
 	a.activeSkills = nil
 }
 
-// GetActiveSkills returns a copy of the currently-pinned SOPs (name → body). Used by tests and by
-// /skills to surface what's active.
 func (a *Agent) GetActiveSkills() map[string]string {
 	out := make(map[string]string, len(a.activeSkills))
 	for k, v := range a.activeSkills {
@@ -107,17 +78,10 @@ func (a *Agent) GetActiveSkills() map[string]string {
 	return out
 }
 
-// SetToolFilter installs a tool visibility filter for the current conversation. The filter is
-// consulted at the top of every iteration so callers can flip skill-imposed allowedTools on or off
-// without restarting the agent. Passing nil clears any previous filter. Implements one half of the
-// skills.SkillHost interface.
 func (a *Agent) SetToolFilter(allow func(name string) bool) {
 	a.ToolNameFilter = allow
 }
 
-// ToolRegistry returns the live tool registry. Named ToolRegistry (not just Registry, even though
-// that would match the field name) to avoid the method/field collision Go disallows. Matches the
-// skills.SkillHost contract.
 func (a *Agent) ToolRegistry() *tools.Registry {
 	return a.Registry
 }
@@ -125,27 +89,20 @@ func (a *Agent) ToolRegistry() *tools.Registry {
 func New(client llm.Client, registry *tools.Registry, protocol string) *Agent {
 	wd, _ := os.Getwd()
 	return &Agent{
-		Client:           client,
-		Registry:         registry,
-		Protocol:         protocol,
-		WorkDir:          wd,
-		MaxIterations:    0,
-		ContextWindow:    200000,
-		ReplacementState: toolresult.New(),
-		RecoveryState:    compact.NewRecoveryState(),
+		Client:             client,
+		Registry:           registry,
+		Protocol:           protocol,
+		WorkDir:            wd,
+		MaxIterations:      0,
+		ContextWindow:      200000,
+		ReplacementState:   toolresult.New(),
+		RecoveryState:      compact.NewRecoveryState(),
+		freshToolResultIDs: make(map[string]struct{}),
 	}
 }
 
-// SetSessionID wires the on-disk session log id onto the agent so Layer 2
-// compaction can persist a compact_boundary record into the same session the TUI
-// is appending plain messages to. Called from the TUI right after the agent is
-// constructed (and again after a resume switches sessions).
 func (a *Agent) SetSessionID(id string) { a.SessionID = id }
 
-// currentToolSchemas builds the schema list the next API call will use,
-// honouring any active skill's allowed-tools filter. Shared between the
-// recovery attachment (which lists what's still available after compact)
-// and the actual Stream call so both views stay consistent.
 func (a *Agent) currentToolSchemas() []map[string]any {
 	schemas := a.Registry.GetAllSchemas(a.Protocol)
 	if a.ToolNameFilter == nil {
@@ -175,10 +132,7 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 		consecutiveUnknown := 0
 		maxTokensEscalated := false
 		outputRecoveries := 0
-		// usageAnchor pins the last real API usage to the conversation length at
-		// the moment it was reported, so the compaction check can use
-		// baseline + incremental estimate instead of estimating every message.
-		// Zero-value (HasUsage false) on the first iteration → full estimate fallback.
+
 		var usageAnchor compact.UsageAnchor
 
 		for iteration := 1; ; iteration++ {
@@ -191,26 +145,17 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 				return
 			}
 
-			// Compute the tool schema list once per iteration so the recovery
-			// attachment (when compact fires) and the actual Stream call below
-			// agree on what's wired up. Skill filters can only change between
-			// iterations, never within one.
 			toolSchemas := a.currentToolSchemas()
 
-			// Two-layer context management: spill+snip always, autocompact when needed.
 			if msg, err := compact.ManageContext(ctx, conv, a.Client, a.WorkDir, a.SessionID, a.ContextWindow, a.MaxOutputTokens, &a.compactTracking, a.RecoveryState, toolSchemas, usageAnchor); err == nil && msg != "" {
 				ch <- CompactEvent{Message: msg}
-				// A compaction rewrote the conversation, so the prior anchor's
-				// AnchorCount no longer maps to the new transcript. Drop it and
-				// fall back to a full estimate until the next real usage lands.
+
 				usageAnchor = compact.UsageAnchor{}
 			}
 
-			// Plan mode: inject structured workflow reminder.
 			if a.Checker != nil && a.Checker.Mode == permissions.ModePlan {
 				planPath := planfile.GetOrCreatePlanPath(a.WorkDir)
-				// Sync PlanFilePath onto the Checker on every turn so the Layer 0 plan-file write exception
-				// works regardless of how Plan Mode was entered (Shift+Tab, SetPermissionMode, /plan).
+
 				a.Checker.PlanFilePath = planPath
 				planExists := planfile.PlanExists(a.WorkDir)
 				reminder := prompt.BuildPlanModeReminder(planPath, planExists, iteration)
@@ -225,33 +170,24 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 
 			a.emitHook(hooks.EventTurnStart, "", nil)
 
-			// Re-inject active-skill SOPs as system-reminder on every turn so the model sees them at the
-			// most prominent position regardless of how long the conversation grows. Same env-context
-			// pattern as Plan Mode and NotificationFn above.
 			if reminder := buildActiveSkillsReminder(a.activeSkills); reminder != "" {
 				conv.AddSystemReminder(reminder)
 			}
 
-			// Inject deferred tool names into system-reminder so the model knows what's available via
-			// ToolSearch.
-			if deferredNames := a.Registry.GetDeferredToolNames(); len(deferredNames) > 0 {
-				reminder := "The following deferred tools are available via ToolSearch. Their schemas are NOT loaded - use ToolSearch with query \"select:<name>[,<name>...]\" to load tool schemas before calling them:\n" + strings.Join(deferredNames, "\n")
+			if deferredTools := a.Registry.GetDeferredToolInfos(); len(deferredTools) > 0 {
+				reminder := buildDeferredToolsReminder(deferredTools)
 				conv.AddSystemReminder(reminder)
 			}
 
 			a.emitHook(hooks.EventPreSend, "", nil)
 
-			// Layer 1: apply tool-result budget against ReplacementState.
-			// Returns a fresh *conversation.Manager with replacements
-			// baked in; `conv` is never mutated. All writes that happened
-			// earlier in this iteration (system reminders, plan-mode hints,
-			// active-skill SOPs) are reflected in apiConv because Apply
-			// runs after them and rebuilds the manager from conv.GetMessages().
-			apiConv, newRecords, _ := toolresult.Apply(conv, a.WorkDir, a.ReplacementState)
+			apiConv, newRecords, _ := toolresult.ApplyWithFresh(conv, a.WorkDir, a.ReplacementState, a.freshToolResultIDs)
+			// A fresh result is exempt from spilling for one API request only.
+			// The underlying conversation remains raw, so the next iteration can
+			// spill it if it still exceeds the normal result budget.
+			a.freshToolResultIDs = make(map[string]struct{})
 			if len(newRecords) > 0 {
-				// Persist records per-session so Reconstruct can rebuild
-				// ReplacementState on resume. Skip when sessionID is empty
-				// (tests, one-shot callers).
+
 				if a.SessionID != "" {
 					_ = toolresult.AppendRecords(session.SessionRecordsDir(a.WorkDir, a.SessionID), newRecords)
 				}
@@ -282,7 +218,7 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 				case llm.ToolCallStart:
 					ch <- ToolUseEvent{ToolID: e.ToolID, ToolName: e.ToolName}
 				case llm.ToolCallDelta:
-					// ignore
+
 				case llm.ToolCallComplete:
 					toolCalls = append(toolCalls, e)
 					ch <- ToolUseEvent{
@@ -290,7 +226,7 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 						ToolName: e.ToolName,
 						Args:     e.Arguments,
 					}
-					// Start executing immediately while LLM continues streaming.
+
 					executor.Submit(ctx, a, e)
 				case llm.StreamEnd:
 					stopReason = e.StopReason
@@ -299,18 +235,15 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 			}
 			a.emitHook(hooks.EventPostReceive, text, nil)
 
-			// Handle stream errors.
 			select {
 			case err := <-errs:
 				if err != nil {
 					if retry, compacted := a.handleStreamError(ctx, ch, conv, err); retry {
 						if compacted {
-							// ForceCompact rewrote the conversation; the prior
-							// anchor's AnchorCount no longer maps to it. Drop it
-							// so the next check falls back to a full estimate.
+
 							usageAnchor = compact.UsageAnchor{}
 						}
-						continue // retry the turn
+						continue
 					}
 					ch <- ErrorEvent{Message: err.Error()}
 					return
@@ -322,13 +255,6 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 			totalOutput += usage.OutputTokens
 			ch <- UsageEvent{InputTokens: totalInput, OutputTokens: totalOutput}
 
-			// Real-usage baseline for this turn: input + cache_read +
-			// cache_creation + output. Covers every message that existed when the
-			// prompt was sent plus the assistant message about to be appended.
-			// anchorBaseline is only adopted as the anchor once that assistant
-			// message lands (see anchorAfterAssistant), so anchorCount lines up
-			// with the messages the baseline accounts for. Zero usage (compat
-			// endpoints that don't report it) leaves the prior anchor in place.
 			anchorBaseline := compact.BaselineFromUsage(usage)
 			anchorAfterAssistant := func() {
 				if anchorBaseline > 0 {
@@ -340,10 +266,9 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 				}
 			}
 
-			// Handle max_tokens stop reason.
 			if stopReason == "max_tokens" {
 				if !maxTokensEscalated {
-					// First hit: escalate silently.
+
 					if setter, ok := a.Client.(llm.MaxTokensSetter); ok {
 						setter.SetMaxOutputTokens(maxTokensCeiling)
 						maxTokensEscalated = true
@@ -356,7 +281,7 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 					ch <- RetryEvent{Reason: "max_tokens escalation", Wait: 0}
 					continue
 				} else if outputRecoveries < maxOutputTokensRecoveries {
-					// Multi-turn recovery.
+
 					outputRecoveries++
 					conv.AddAssistantFull(text, thinkingBlocks, nil)
 					anchorAfterAssistant()
@@ -364,9 +289,9 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 					ch <- RetryEvent{Reason: fmt.Sprintf("max_tokens recovery %d/%d", outputRecoveries, maxOutputTokensRecoveries), Wait: 0}
 					continue
 				}
-				// Exhausted: fall through to normal completion.
+
 			} else {
-				// Reset recovery counter on successful turn.
+
 				outputRecoveries = 0
 			}
 
@@ -395,12 +320,9 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 				})
 			}
 			conv.AddAssistantFull(text, thinkingBlocks, toolUses)
-			// Anchor real usage to the conversation now that the assistant message
-			// is in place; subsequent tool results + next user message are
-			// estimated incrementally on top of this baseline.
+
 			anchorAfterAssistant()
 
-			// Collect results from streaming executor (tools already started during LLM streaming).
 			results := executor.CollectResults()
 
 			var toolResults []conversation.ToolResultBlock
@@ -419,10 +341,7 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 					Elapsed:  r.elapsed,
 				}
 
-				truncated := r.output
-				if len(truncated) > tools.MaxOutputChars {
-					truncated = truncated[:tools.MaxOutputChars] + "\n… (output truncated)"
-				}
+				truncated := tools.TruncateOutput(r.output, tools.MaxOutputCharsForContext(a.ContextWindow))
 				toolResults = append(toolResults, conversation.ToolResultBlock{
 					ToolUseID: r.toolID,
 					Content:   truncated,
@@ -443,6 +362,9 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 				}
 			}
 			conv.AddToolResultsMessage(toolResults)
+			for _, tr := range toolResults {
+				a.freshToolResultIDs[tr.ToolUseID] = struct{}{}
+			}
 			if exitPlanCalled {
 				ch <- TurnComplete{Turn: iteration}
 				ch <- LoopComplete{TotalTurns: iteration}
@@ -456,8 +378,18 @@ func (a *Agent) Run(ctx context.Context, conv *conversation.Manager) <-chan Agen
 	return ch
 }
 
-// emitHook fires a hook event when an Engine is configured. Failures are non-fatal and surface via
-// the hook notification queue (drained into the next turn's system reminders).
+func buildDeferredToolsReminder(infos []tools.DeferredToolInfo) string {
+	var sb strings.Builder
+	sb.WriteString("The following deferred tools are available via ToolSearch. Their full input schemas are NOT loaded yet. Use ToolSearch with query \"select:<name>[,<name>...]\" to load a tool before calling it. The name and description below are available for tool discovery:\n")
+	for _, info := range infos {
+		sb.WriteString("\n- ")
+		sb.WriteString(info.Name)
+		sb.WriteString(": ")
+		sb.WriteString(info.Description)
+	}
+	return sb.String()
+}
+
 func (a *Agent) emitHook(event hooks.EventName, message string, args map[string]any) {
 	if a.Hooks == nil {
 		return
@@ -469,17 +401,19 @@ func (a *Agent) emitHook(event hooks.EventName, message string, args map[string]
 	})
 }
 
-// buildActiveSkillsReminder renders all pinned skill SOPs into a single system-reminder string.
-// Returns "" if no skills are active so callers can short-circuit. Skills are joined in iteration
-// order with a `# Active Skill: <name>` header before each body — the header gives the model a
-// stable anchor when multiple skills are active simultaneously.
 func buildActiveSkillsReminder(active map[string]string) string {
 	if len(active) == 0 {
 		return ""
 	}
+	names := make([]string, 0, len(active))
+	for name := range active {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	var sb strings.Builder
 	sb.WriteString("# Active Skills\n\nThe following Skill SOPs are pinned to the environment context. Follow each SOP when its triggering condition applies.\n\n")
-	for name, body := range active {
+	for _, name := range names {
+		body := active[name]
 		sb.WriteString("## Active Skill: ")
 		sb.WriteString(name)
 		sb.WriteString("\n\n")
@@ -489,9 +423,6 @@ func buildActiveSkillsReminder(active map[string]string) string {
 	return sb.String()
 }
 
-// filterSchemasByName keeps only the tool schemas whose "name" passes the allow predicate. Used by
-// Coordinator Mode to restrict a Lead agent to coordination-only tools while teammates do the
-// actual work.
 func filterSchemasByName(schemas []map[string]any, allow func(name string) bool) []map[string]any {
 	out := make([]map[string]any, 0, len(schemas))
 	for _, s := range schemas {
@@ -503,17 +434,13 @@ func filterSchemasByName(schemas []map[string]any, allow func(name string) bool)
 	return out
 }
 
-// handleStreamError returns (retry, compacted): retry signals the caller to
-// re-run the turn; compacted signals that a ForceCompact rewrote the
-// conversation, so the caller must drop its usage anchor (its AnchorCount no
-// longer maps to the new transcript).
 func (a *Agent) handleStreamError(ctx context.Context, ch chan AgentEvent, conv *conversation.Manager, err error) (retry, compacted bool) {
 	var ctxErr *llm.ContextTooLongError
 	if errors.As(err, &ctxErr) {
 		msg, compactErr := compact.ForceCompact(ctx, conv, a.Client, a.WorkDir, a.SessionID, a.ContextWindow, a.RecoveryState, a.currentToolSchemas())
 		if compactErr == nil && msg != "" {
 			ch <- CompactEvent{Message: "Auto-compacted due to context length: " + msg}
-			return true, true // retry, and the anchor is now stale
+			return true, true
 		}
 		return false, false
 	}
@@ -524,7 +451,7 @@ func (a *Agent) handleStreamError(ctx context.Context, ch chan AgentEvent, conv 
 		ch <- RetryEvent{Reason: "rate limited", Wait: wait}
 		select {
 		case <-time.After(wait):
-			return true, false // retry without compaction
+			return true, false
 		case <-ctx.Done():
 			return false, false
 		}
@@ -552,8 +479,6 @@ type toolExecResult struct {
 	isUnknown bool
 }
 
-// extractFilePath pulls a representative path from common tool argument keys so hooks can do path-
-// glob matching (`file_path =* "**/*.go"`).
 func extractFilePath(args map[string]any) string {
 	for _, key := range []string{"file_path", "path", "pattern", "target"} {
 		if v, ok := args[key].(string); ok && v != "" {
@@ -612,9 +537,7 @@ func (a *Agent) executeSingleTool(ctx context.Context, eventCh chan AgentEvent, 
 			}
 			if resp == PermAllowAlways {
 				content := permissions.ExtractContent(tc.ToolName, tc.Arguments)
-				// Session-scoped, exact-match only.  No wildcard — the
-				// user approved this specific command / path, so only
-				// an identical future call is auto-allowed.
+
 				a.Checker.RuleEngine.AddSessionRule(permissions.Rule{
 					ToolName: tc.ToolName,
 					Pattern:  content,
@@ -644,10 +567,6 @@ func (a *Agent) executeSingleTool(ctx context.Context, eventCh chan AgentEvent, 
 
 	result := tool.Execute(ctx, tc.Arguments)
 
-	// Snapshot what ReadFile just handed to the model so the compact
-	// recovery block can replay it after a Layer 2 summary wipes the
-	// transcript. Re-reading from disk is one extra open per ReadFile —
-	// cheaper than parsing line numbers back out of the tool output.
 	if !result.IsError && tc.ToolName == "ReadFile" {
 		if p, _ := tc.Arguments["file_path"].(string); p != "" {
 			if data, err := os.ReadFile(p); err == nil {

@@ -28,8 +28,8 @@ func TestEvaluateConditionLeafOps(t *testing.T) {
 		`tool == "Bash" && file_path =* "src/*.py"`: false,
 		`tool == "Read" || tool == "Bash"`:          true,
 		`tool == "Read" || tool == "Write"`:         false,
-		`!(tool == "Read")`:               true, // ! before parens — falls through evaluateLeaf
-		`!tool == "Read"`:                 true, // ! applied to leaf
+		`!(tool == "Read")`:               true, 
+		`!tool == "Read"`:                 true, 
 	}
 	for cond, want := range cases {
 		if got := evaluateCondition(cond, ctx); got != want {
@@ -177,7 +177,7 @@ func TestValidateCatchesMissingFields(t *testing.T) {
 	cases := []struct {
 		name string
 		hook Hook
-		want string // substring that must appear in the error
+		want string 
 	}{
 		{
 			name: "command missing command field",
@@ -235,8 +235,8 @@ func TestValidateCatchesMissingFields(t *testing.T) {
 
 func TestValidateAggregatesAllErrors(t *testing.T) {
 	hooks := []Hook{
-		{ID: "bad1", Event: "nope", Action: Action{Type: ActionCommand}},     // 2 errors: unknown event + missing command
-		{ID: "bad2", Event: EventPostToolUse, Action: Action{Type: "weird"}}, // 1 error: unknown action type
+		{ID: "bad1", Event: "nope", Action: Action{Type: ActionCommand}},     
+		{ID: "bad2", Event: EventPostToolUse, Action: Action{Type: "weird"}}, 
 	}
 	err := Validate(hooks)
 	if err == nil {
@@ -287,8 +287,8 @@ func TestRunCommandTimeout(t *testing.T) {
 }
 
 func TestRunCommandDefaultTimeoutAllowsFastCommand(t *testing.T) {
-	// Timeout=0 should fall back to defaultHookTimeout (10min) and not
-	// strangle a sub-second command.
+	
+	
 	h := Hook{
 		ID: "fast",
 		Action: Action{

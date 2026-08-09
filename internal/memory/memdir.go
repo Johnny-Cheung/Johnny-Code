@@ -6,26 +6,26 @@ import (
 	"strings"
 )
 
-// Builds the typed-memory behavioural prompt and the MEMORY.md entrypoint content for inclusion in
-// the system prompt.
+
+
 
 const (
-	// MaxEntrypointLines caps how much of MEMORY.md is loaded into context. ~125 chars/line × 200
-	// lines puts us at the observed p97 today.
+	
+	
 	MaxEntrypointLines = 200
-	// MaxEntrypointBytes catches long-line indexes that slip past the line cap (p100 observed: 197KB
-	// under 200 lines).
+	
+	
 	MaxEntrypointBytes = 25_000
 
 	autoMemDisplayName = "auto memory"
 
-	// DirExistsGuidance is shipped because the model was burning turns on `ls`/`mkdir -p` before
-	// writing. The harness guarantees the directory exists via EnsureMemoryDirExists so the prompt
-	// text can promise it.
+	
+	
+	
 	DirExistsGuidance = "This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence)."
 )
 
-// EntrypointTruncation is the result of capping MEMORY.md content.
+
 type EntrypointTruncation struct {
 	Content           string
 	LineCount         int
@@ -34,9 +34,9 @@ type EntrypointTruncation struct {
 	WasByteTruncated  bool
 }
 
-// TruncateEntrypointContent caps MEMORY.md content to the line AND byte caps, appending a warning
-// that names which cap fired. Line-truncates first (natural boundary), then byte-truncates at the
-// last newline before the cap so we don't cut mid-line.
+
+
+
 func TruncateEntrypointContent(raw string) EntrypointTruncation {
 	trimmed := strings.TrimSpace(raw)
 	contentLines := strings.Split(trimmed, "\n")
@@ -103,9 +103,9 @@ func formatFileSize(bytes int) string {
 	}
 }
 
-// EnsureMemoryDirExists creates the memory directory (and parents) so the model can Write into it
-// without first running ls/mkdir. Idempotent. Failures are non-fatal — the prompt builder continues
-// either way; the model's Write will surface a real permission error if there is one.
+
+
+
 func EnsureMemoryDirExists(memoryDir string) error {
 	if memoryDir == "" {
 		return nil
@@ -113,14 +113,14 @@ func EnsureMemoryDirExists(memoryDir string) error {
 	return os.MkdirAll(memoryDir, 0o755)
 }
 
-// BuildMemoryLines builds the typed-memory behavioural instructions (without MEMORY.md content).
-// Constrains memories to a closed four-type taxonomy (user / feedback / project / reference) —
-// content that is derivable from the current project state (code patterns, architecture, git
-// history) is explicitly excluded.
-//
-// Dual-path variant: user/feedback memories are written to userMemDir (follows the human across
-// projects), project/reference memories are written to projectMemDir (lives with the repo).
-// Either dir may be empty — in which case its half of the taxonomy is implicitly disabled.
+
+
+
+
+
+
+
+
 func BuildMemoryLines(displayName, userMemDir, projectMemDir string) string {
 	howToSave := `## How to save memories
 
@@ -168,9 +168,9 @@ Saving a memory is a two-step process:
 	return b.String()
 }
 
-// BuildMemoryPrompt builds the typed-memory prompt with the user-level and project-level MEMORY.md
-// indexes included. Used by the system-prompt assembly so the agent has both the behavioural rules
-// and the current indexes in one section.
+
+
+
 func BuildMemoryPrompt(displayName, userMemDir, projectMemDir string) string {
 	lines := BuildMemoryLines(displayName, userMemDir, projectMemDir)
 
@@ -200,9 +200,9 @@ func writeEntrypointSection(b *strings.Builder, scopeLabel, entrypointPath strin
 	}
 }
 
-// LoadAutoMemoryPrompt is the convenience entrypoint used by the system prompt builder. Ensures the
-// user-level and project-level memory directories exist, then returns the assembled `# auto memory`
-// section ready for inclusion as a system-prompt section.
+
+
+
 func LoadAutoMemoryPrompt(projectRoot string) string {
 	userDir := GetUserAutoMemPath()
 	projectDir := GetAutoMemPath(projectRoot)

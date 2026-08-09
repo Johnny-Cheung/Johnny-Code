@@ -44,22 +44,22 @@ func TestBuildRecoveryAttachmentEmits(t *testing.T) {
 
 func TestRecoveryFileLimitAndOrder(t *testing.T) {
 	s := NewRecoveryState()
-	// Record 7 files spread in time so newest-first ordering is observable.
+	
 	base := time.Now().Add(-time.Hour)
 	for i := 0; i < 7; i++ {
 		path := "/f" + string(rune('0'+i))
 		s.RecordFileRead(path, "x")
-		// Force-set timestamps so ordering is deterministic.
+		
 		rec := s.files[path]
 		rec.Timestamp = base.Add(time.Duration(i) * time.Minute)
 		s.files[path] = rec
 	}
 	out := BuildRecoveryAttachment(s, nil)
-	// Only the 5 most-recent should appear.
+	
 	if strings.Count(out, "###") != 5 {
 		t.Fatalf("expected 5 file sections, got: %d in %s", strings.Count(out, "###"), out)
 	}
-	// Newest first: f6 must come before f2.
+	
 	idxNew := strings.Index(out, "/f6")
 	idxOld := strings.Index(out, "/f2")
 	if idxNew < 0 || idxOld < 0 || idxNew > idxOld {
@@ -79,7 +79,7 @@ func TestRecoveryTruncatesPerFile(t *testing.T) {
 
 func TestRecoverySkillsBudget(t *testing.T) {
 	s := NewRecoveryState()
-	// 6 skills × 5K-token bodies ⇒ total 30K, must stop at 25K budget.
+	
 	bodyChars := int(float64(RecoveryTokensPerSkill) * recoveryCharsPerToken)
 	body := strings.Repeat("y", bodyChars)
 	base := time.Now()
@@ -91,7 +91,7 @@ func TestRecoverySkillsBudget(t *testing.T) {
 		s.skills[name] = rec
 	}
 	out := BuildRecoveryAttachment(s, nil)
-	// 25K / 5K per skill = 5 max.
+	
 	emitted := strings.Count(out, "### skill-")
 	if emitted < 1 || emitted > 5 {
 		t.Errorf("expected at most 5 skills under budget, emitted %d", emitted)

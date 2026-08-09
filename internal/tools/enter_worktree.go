@@ -9,10 +9,10 @@ import (
 	"johnnycode/internal/worktree"
 )
 
-// EnterWorktreeTool creates an isolated git worktree and switches the session into it.
+
 type EnterWorktreeTool struct {
-	SessionID string // injected by TUI at startup
-	RepoRoot  string // injected by TUI at startup
+	SessionID string 
+	RepoRoot  string 
 }
 
 func (t *EnterWorktreeTool) Name() string           { return "EnterWorktree" }
@@ -42,7 +42,7 @@ func (t *EnterWorktreeTool) Schema() map[string]any {
 }
 
 func (t *EnterWorktreeTool) Execute(ctx context.Context, args map[string]any) ToolResult {
-	// Guard: reject if already in a worktree session.
+	
 	if worktree.GetCurrentWorktreeSession() != nil {
 		return ToolResult{
 			Output:  "Already in a worktree session",

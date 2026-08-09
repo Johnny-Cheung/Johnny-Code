@@ -1,13 +1,3 @@
-// Package extractor implements the background memory extraction subagent.
-//
-// The TS file uses a closure-scoped state pattern (initExtractMemories returns nothing, but mutates
-// module-level extractor/drainer pointers); the Go port wraps the same state in an Extractor struct
-// + sync.Mutex so each caller gets an independent instance and tests can replace Deps cleanly.
-//
-// Triggering: TUI sets agent.Agent.OnLoopComplete to a closure that calls (*Extractor).Execute. The
-// agent loop fires that callback fire-and-forget after each LoopComplete event. Extractor itself
-// spawns its own goroutine stack via runExtraction, which means Execute returns quickly and the
-// actual fork happens in the background.
 package extractor
 
 import (
@@ -27,54 +17,31 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// Deps holds the external collaborators an Extractor needs. The TUI constructs one Deps value at
-// startup, wraps it in an Extractor, and hooks the resulting Execute method onto
-// agent.Agent.OnLoopComplete.
-//
-// AppendSystem is the conduit for the "Memory saved: foo.md" notice that the user sees after a
-// successful extraction.
 type Deps struct {
-	MemoryDir     string                  // <wd>/.johnnycode/memory/ — project/reference (trailing sep)
-	UserMemoryDir string                  // ~/.johnnycode/memory/ — user/feedback (trailing sep); may be "" if $HOME unresolved
-	ProjectRoot   string                  // absolute project root
-	Client        llm.Client              // forked extraction agent's LLM client
-	ToolRegistry  *tools.Registry         // parent tool registry (will be filtered)
-	Protocol      string                  // "anthropic" / "openai"
-	Conversation  *conversation.Manager   // parent conversation reference
-	AppendSystem  func(string)            // optional: notify TUI of saved memories
-	DebugLogf     func(format string, args ...any) // optional: debug logging
+	MemoryDir     string
+	UserMemoryDir string
+	ProjectRoot   string
+	Client        llm.Client
+	ToolRegistry  *tools.Registry
+	Protocol      string
+	Conversation  *conversation.Manager
+	AppendSystem  func(string)
+	DebugLogf     func(format string, args ...any)
 }
 
-// Extractor is the ch09 background memory extractor. State is encapsulated in struct fields; mu
-// guards every mutable field. Each Extractor instance is independent — tests can construct one with
-// mock Deps without touching global state.
-//
-// Translated from the TS initExtractMemories closure. Mapping:
-// inFlightExtractions Set → inFlight map[*sync.WaitGroup]struct{}
-// lastMemoryMessageUuid string|undefined → lastMemoryMessageIdx int
-// (Johnny Code messages have no uuid; cursor is the parent conversation's
-// message-array index at the time the last successful extraction ran)
-// hasLoggedGateFailure / inProgress / turnsSinceLastExtraction → bool/int
-// pendingContext → *pendingExtractionCtx
 type Extractor struct {
 	deps Deps
 
 	mu                       sync.Mutex
 	inFlight                 map[*sync.WaitGroup]struct{}
 	lastMemoryMessageIdx     int
-	hasLoggedGateFailure     bool
 	inProgress               bool
 	turnsSinceLastExtraction int
 	pendingContext           *pendingExtractionCtx
 }
 
-// pendingExtractionCtx is the stash slot for a trailing extraction. The TS port carries (context,
-// appendSystemMessage); the Go port has all state on the Extractor itself, so the stash needs no
-// payload — the presence of a non-nil value means "run another extraction when the current one
-// finishes".
 type pendingExtractionCtx struct{}
 
-// InitExtractMemories constructs a new Extractor with the given Deps.initExtractMemories factory.
 func InitExtractMemories(deps Deps) *Extractor {
 	return &Extractor{
 		deps:     deps,
@@ -82,9 +49,6 @@ func InitExtractMemories(deps Deps) *Extractor {
 	}
 }
 
-// Execute is the fire-and-forget entrypoint. Wired onto agent.Agent.OnLoopComplete by the TUI.
-// Returns quickly; the actual extraction work happens on caller goroutine. Errors are swallowed
-// (best-effort) — the caller (agent loop) ignores the return value.
 func (e *Extractor) Execute(ctx context.Context) error {
 	if e == nil {
 		return nil
@@ -105,8 +69,7 @@ func (e *Extractor) Execute(ctx context.Context) error {
 }
 
 func (e *Extractor) executeImpl(ctx context.Context) error {
-	// In-progress coalescing: if another extraction is currently running, stash this call as a pending
-	// trailing run and return immediately.pendingContext / runExtraction.finally trailing chain.
+
 	e.mu.Lock()
 	if e.inProgress {
 		e.deps.debugf("[extractMemories] extraction in progress — stashing for trailing run")
@@ -123,16 +86,12 @@ func (e *Extractor) runExtraction(ctx context.Context, isTrailingRun bool) error
 	messages := e.deps.Conversation.GetMessages()
 	newMessageCount := countModelVisibleMessagesSince(messages, e.lastMemoryMessageIdx)
 
-	// Mutual exclusion: when the main agent wrote memories itself, the forked extractor is redundant.
-	// Advance the cursor past this range and return.
 	if hasMemoryWritesSince(messages, e.lastMemoryMessageIdx, e.deps.ProjectRoot) {
 		e.deps.debugf("[extractMemories] skipping — conversation already wrote to memory files")
 		e.advanceCursor(len(messages))
 		return nil
 	}
 
-	// Throttle: default is 1 (run every turn). Johnny Code hardcodes 1; trailing runs bypass the throttle
-	// since they process already-committed work.
 	if !isTrailingRun {
 		e.turnsSinceLastExtraction++
 		if e.turnsSinceLastExtraction < 1 {
@@ -161,8 +120,6 @@ func (e *Extractor) runExtraction(ctx context.Context, isTrailingRun bool) error
 	e.deps.debugf("[extractMemories] starting — %d new messages, memoryDir=%s, userMemoryDir=%s",
 		newMessageCount, e.deps.MemoryDir, e.deps.UserMemoryDir)
 
-	// Pre-inject the memory-directory manifest so the extraction agent doesn't burn a turn on `ls`.
-	// Scans both directories so user-level and project-level memories appear in one combined manifest.
 	var combinedScan []memory.MemoryHeader
 	if e.deps.UserMemoryDir != "" {
 		userScan, _ := memory.ScanMemoryFiles(ctx, e.deps.UserMemoryDir, "user")
@@ -173,22 +130,10 @@ func (e *Extractor) runExtraction(ctx context.Context, isTrailingRun bool) error
 	manifest := memory.FormatMemoryManifest(combinedScan)
 	extractionPrompt := BuildExtractAutoOnlyPrompt(newMessageCount, manifest, false, e.deps.UserMemoryDir, e.deps.MemoryDir)
 
-	// Build the forked conversation: copy parent messages, then append the extraction prompt as a new
-	// user message. Deliberately does NOT add agents.runFork's fork boilerplate — the extractor is a
-	// "perfect fork" of the main conversation, we don't inject extra system instructions either.
 	forkedConv := buildExtractorConversation(e.deps.Conversation, extractionPrompt)
 
-	// Tool whitelist: ReadFile / WriteFile / EditFile / Glob / Grep / Bash / ToolSearch (via
-	// FilterToolsForAgent's async path). Agent and AskUserQuestion are auto-excluded.
 	subRegistry := agents.FilterToolsForAgent(e.deps.ToolRegistry, nil, nil, true)
 
-	// Strict path sandbox: only memoryDir is allowed for file tools. This is stricter than the
-	// original createAutoMemCanUseTool (which lets Read/Grep/Glob roam unrestricted) but matches the
-	// prompt's explicit warning against grepping source code, so the behavioural impact is small and
-	// the safety win is meaningful.
-	//
-	// Mode = ModeBypass so file/command tools never hit an Ask path — the extractor runs in the
-	// background with no TUI to answer.
 	sandboxRoots := []string{e.deps.MemoryDir}
 	if e.deps.UserMemoryDir != "" {
 		sandboxRoots = append(sandboxRoots, e.deps.UserMemoryDir)
@@ -201,23 +146,17 @@ func (e *Extractor) runExtraction(ctx context.Context, isTrailingRun bool) error
 	subAgent.Checker = subChecker
 	subAgent.WorkDir = e.deps.ProjectRoot
 
-	// Drive the forked agent to completion. Drain the event channel so the loop exits cleanly; we
-	// don't surface streaming text — only the file writes matter.
 	ch := subAgent.Run(ctx, forkedConv)
 	for range ch {
-		// drain; do not propagate sub-agent events to the UI.
+
 	}
 
-	// Advance the cursor only after the run completes (whether it wrote files or not — a "ran but
-	// picked nothing" turn shouldn't be reconsidered).
 	e.advanceCursor(len(messages))
 
 	writtenPaths := extractWrittenPaths(forkedConv.GetMessages())
 	e.deps.debugf("[extractMemories] finished in %s, %d files written: %v",
 		time.Since(startTime), len(writtenPaths), writtenPaths)
 
-	// Index files (MEMORY.md) are mechanical — the user-visible "memory" is the topic file, not the
-	// index update.
 	var memoryPaths []string
 	for _, p := range writtenPaths {
 		if filepath.Base(p) == memory.AutoMemEntrypointName {
@@ -237,12 +176,6 @@ func (e *Extractor) runExtraction(ctx context.Context, isTrailingRun bool) error
 	return nil
 }
 
-// Drain waits for all in-flight extractions (including any pending trailing run) to finish, with a
-// soft timeout. Call from the TUI's shutdown path so the forked extraction agent isn't killed mid-
-// write.
-//
-// timeoutMs of 0 returns immediately if any work is still in-flight. Negative timeoutMs is treated
-// as 60000 (60s default).
 func (e *Extractor) Drain(timeoutMs int) error {
 	if e == nil {
 		return nil
@@ -285,10 +218,6 @@ func (e *Extractor) advanceCursor(to int) {
 	e.mu.Unlock()
 }
 
-// countModelVisibleMessagesSince counts user/assistant messages added since sinceIdx. Falls back to
-// counting all model-visible messages when sinceIdx is out of range (e.g., the conversation was
-// compacted and the cursor we recorded no longer maps to a current position)."if !foundStart"
-// recovery path.
 func countModelVisibleMessagesSince(messages []conversation.Message, sinceIdx int) int {
 	if sinceIdx < 0 || sinceIdx > len(messages) {
 		return countModelVisible(messages)
@@ -316,9 +245,6 @@ func isModelVisibleMessage(m conversation.Message) bool {
 	return m.Role == "user" || m.Role == "assistant"
 }
 
-// hasMemoryWritesSince returns true if any assistant message after sinceIdx contains a Write/Edit
-// tool_use targeting an auto-memory path. When this returns true, runExtraction skips the agent
-// fork.
 func hasMemoryWritesSince(messages []conversation.Message, sinceIdx int, projectRoot string) bool {
 	if sinceIdx < 0 {
 		sinceIdx = 0
@@ -343,8 +269,6 @@ func hasMemoryWritesSince(messages []conversation.Message, sinceIdx int, project
 	return false
 }
 
-// getWrittenFilePath extracts the file_path argument from a Write/Edit tool_use block, or "" if the
-// block is not such a call.
 func getWrittenFilePath(tu conversation.ToolUseBlock) string {
 	if tu.ToolName != "WriteFile" && tu.ToolName != "EditFile" {
 		return ""
@@ -356,8 +280,6 @@ func getWrittenFilePath(tu conversation.ToolUseBlock) string {
 	return fp
 }
 
-// extractWrittenPaths collects unique file_path arguments from every Write/Edit tool_use across the
-// forked agent's assistant messages. First occurrence wins.
 func extractWrittenPaths(messages []conversation.Message) []string {
 	var paths []string
 	seen := make(map[string]struct{})
@@ -380,10 +302,6 @@ func extractWrittenPaths(messages []conversation.Message) []string {
 	return paths
 }
 
-// buildExtractorConversation copies the parent conversation's messages into a new Manager and
-// appends the extraction prompt as a final user message. Unlike agents.buildForkedConversation, it
-// does NOT inject the ForkBoilerplateTag — the original extractor is a perfect fork, not a "you are
-// a subagent" fork.
 func buildExtractorConversation(parent *conversation.Manager, prompt string) *conversation.Manager {
 	forked := conversation.NewManager()
 	for _, msg := range parent.GetMessages() {

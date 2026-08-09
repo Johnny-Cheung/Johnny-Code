@@ -11,9 +11,9 @@ import (
 )
 
 func TestBuildForkedConversationPreservesThinkingBlocks(t *testing.T) {
-	// Byte-exact replay: an assistant message with thinking blocks must be reproduced with the same
-	// thinking blocks in the forked conversation, otherwise the API request prefix diverges and the
-	// prompt cache misses.
+	
+	
+	
 	parent := conversation.NewManager()
 	thinking := []conversation.ThinkingBlock{{Thinking: "secret plan", Signature: "sig-1"}}
 	parent.AddAssistantFull("hello", thinking, []conversation.ToolUseBlock{
@@ -38,8 +38,8 @@ func TestBuildForkedConversationPreservesThinkingBlocks(t *testing.T) {
 }
 
 func TestDeriveSubAgentCheckerOverrideMode(t *testing.T) {
-	// spec.PermissionMode must produce a Checker that shares the parent's Sandbox / RuleEngine but
-	// flips the Mode. Empty override → unchanged.
+	
+	
 	sb := permissions.NewPathSandbox("/tmp", "")
 	eng := &permissions.RuleEngine{}
 	parent := permissions.NewChecker(sb, eng, permissions.ModeDefault)
@@ -63,8 +63,8 @@ func TestDeriveSubAgentCheckerOverrideMode(t *testing.T) {
 }
 
 func TestRunForkRejectedWhenQuerySourceIsFork(t *testing.T) {
-	// Primary nested-fork guard: matches the querySource branch in the design TypeScript
-	// implementation.
+	
+	
 	tool := &AgentTool{
 		Registry:     tools.NewRegistry(),
 		Conversation: conversation.NewManager(),
@@ -81,7 +81,7 @@ func TestRunForkRejectedWhenQuerySourceIsFork(t *testing.T) {
 }
 
 func TestRunForkRejectedWhenBoilerplateInHistory(t *testing.T) {
-	// Fallback nested-fork guard: matches isInForkChild from the design TypeScript implementation.
+	
 	conv := conversation.NewManager()
 	conv.AddUserMessage(ForkBoilerplateTag + " stale message from a prior fork")
 	tool := &AgentTool{
@@ -96,11 +96,11 @@ func TestRunForkRejectedWhenBoilerplateInHistory(t *testing.T) {
 }
 
 func TestCloneRegistryForForkSetsQuerySource(t *testing.T) {
-	// Fork must inherit the parent tool pool verbatim except that nested AgentTool instances get
-	// QuerySource=ForkQuerySource so a recursive fork is caught at call time. Matches
-	// FORK_AGENT.tools=['*'] + useExactTools=true.
+	
+	
+	
 	reg := tools.NewRegistry()
-	reg.Register(&AgentTool{}) // simulate parent's Agent tool
+	reg.Register(&AgentTool{}) 
 	reg.Register(&dummyTool{name: "Bash", category: tools.CategoryCommand})
 
 	forked := cloneRegistryForFork(reg)
@@ -117,8 +117,8 @@ func TestCloneRegistryForForkSetsQuerySource(t *testing.T) {
 }
 
 func TestExecuteRoutesBackgroundSpecToAsync(t *testing.T) {
-	// Definition-level `background: true` must force async, matching the
-	// `run_in_background === true || selectedAgent.background === true` gating.
+	
+	
 	tool := &AgentTool{
 		Registry: tools.NewRegistry(),
 		TaskMgr:  NewTaskManager(),
@@ -130,9 +130,9 @@ func TestExecuteRoutesBackgroundSpecToAsync(t *testing.T) {
 		"subagent_type": "background-only",
 	})
 	if !result.IsError {
-		// Without a registered spec the call should fail; that's the only safe shape under unit testing —
-		// but it must not get there via the sync path. The IsError = true with "unknown agent type"
-		// message confirms parameter parsing reached the spec lookup.
+		
+		
+		
 		if !strings.Contains(result.Output, "unknown agent type") {
 			t.Errorf("expected unknown-agent-type error, got %q", result.Output)
 		}

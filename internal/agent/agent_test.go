@@ -16,9 +16,6 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// --- Mock infrastructure ---
-
-// mockClient returns scripted responses in order.
 type mockClient struct {
 	responses [][]llm.StreamEvent
 	callIdx   int
@@ -43,10 +40,6 @@ func (m *mockClient) Stream(ctx context.Context, conv *conversation.Manager, too
 	return ch, errCh
 }
 
-// dynamicMock inspects the conversation to decide what to respond.
-// Each handler receives the current conversation and returns events.
-// Handlers are consumed in order; within one agent.Run() call the mock
-// may be invoked multiple times (once per LLM turn in the tool-call loop).
 type dynamicMock struct {
 	handlers []func(msgs []conversation.Message) []llm.StreamEvent
 	callIdx  int
@@ -73,15 +66,14 @@ func (m *dynamicMock) Stream(ctx context.Context, conv *conversation.Manager, to
 	return ch, errCh
 }
 
-// mockTool returns a fixed result.
 type mockTool struct {
 	name   string
 	result string
 }
 
-func (t *mockTool) Name() string                                               { return t.name }
-func (t *mockTool) Description() string                                        { return "mock tool" }
-func (t *mockTool) Category() tools.ToolCategory                               { return tools.CategoryRead }
+func (t *mockTool) Name() string                 { return t.name }
+func (t *mockTool) Description() string          { return "mock tool" }
+func (t *mockTool) Category() tools.ToolCategory { return tools.CategoryRead }
 func (t *mockTool) Schema() map[string]any {
 	return map[string]any{
 		"name": t.name, "description": "mock",
@@ -91,8 +83,6 @@ func (t *mockTool) Schema() map[string]any {
 func (t *mockTool) Execute(ctx context.Context, args map[string]any) tools.ToolResult {
 	return tools.ToolResult{Output: t.result}
 }
-
-// --- Helpers ---
 
 func collectEvents(ch <-chan AgentEvent) []AgentEvent {
 	var events []AgentEvent
@@ -126,6 +116,25 @@ func getToolResults(events []AgentEvent) []ToolResultEvent {
 	return results
 }
 
+func TestBuildDeferredToolsReminderUsesDescriptionsWithoutSchemas(t *testing.T) {
+	reminder := buildDeferredToolsReminder([]tools.DeferredToolInfo{
+		{Name: "mcp__analytics__run_report", Description: "执行多维度数据报表查询"},
+	})
+
+	if !strings.Contains(reminder, "mcp__analytics__run_report") {
+		t.Error("reminder should include the deferred tool name")
+	}
+	if !strings.Contains(reminder, "执行多维度数据报表查询") {
+		t.Error("reminder should include the complete tool description")
+	}
+	if !strings.Contains(reminder, "ToolSearch") || !strings.Contains(reminder, "select:<name>") {
+		t.Error("reminder should explain how to load the deferred schema")
+	}
+	if strings.Contains(reminder, "input_schema") {
+		t.Error("reminder should not include the deferred tool input schema")
+	}
+}
+
 func buildSkillSystemPrompt(skillsDir string, catalog *skills.Catalog) string {
 	var sb strings.Builder
 	sb.WriteString("## Available Skills\n\n")
@@ -143,15 +152,11 @@ func buildSkillSystemPrompt(skillsDir string, catalog *skills.Catalog) string {
 	return prompt.BuildSystemPrompt(env, prompt.BuildOptions{SkillSection: sb.String()})
 }
 
-// runConversationRound simulates what the TUI does for one user message:
-// add user msg to conv, call agent.Run(), collect events, return text.
 func runConversationRound(ag *Agent, conv *conversation.Manager, userMsg string) (string, []AgentEvent) {
 	conv.AddUserMessage(userMsg)
 	events := collectEvents(ag.Run(context.Background(), conv))
 	return getStreamText(events), events
 }
-
-// --- Basic agent tests ---
 
 func TestAgentSimpleResponse(t *testing.T) {
 	client := &mockClient{responses: [][]llm.StreamEvent{{
@@ -203,6 +208,53 @@ func TestAgentToolCallLoop(t *testing.T) {
 	}
 }
 
+func TestAgentFreshToolResultIsNotPreviewTruncated(t *testing.T) {
+	const resultSize = 60000
+	big := strings.Repeat("x", resultSize)
+	client := &dynamicMock{handlers: []func([]conversation.Message) []llm.StreamEvent{
+		func(msgs []conversation.Message) []llm.StreamEvent {
+			return []llm.StreamEvent{
+				llm.ToolCallStart{ToolName: "Big", ToolID: "big-1"},
+				llm.ToolCallComplete{ToolID: "big-1", ToolName: "Big", Arguments: map[string]any{}},
+				llm.StreamEnd{StopReason: "tool_use"},
+			}
+		},
+		func(msgs []conversation.Message) []llm.StreamEvent {
+			found := false
+			for _, msg := range msgs {
+				for _, result := range msg.ToolResults {
+					if result.ToolUseID == "big-1" {
+						found = true
+						if len(result.Content) != resultSize {
+							t.Errorf("fresh tool result length = %d, want %d", len(result.Content), resultSize)
+						}
+						if strings.Contains(result.Content, "tool output truncated") {
+							t.Error("fresh tool result was preview-truncated before first model pass")
+						}
+					}
+				}
+			}
+			if !found {
+				t.Error("fresh tool result missing from second model request")
+			}
+			return []llm.StreamEvent{
+				llm.TextDelta{Text: "done"},
+				llm.StreamEnd{StopReason: "end_turn"},
+			}
+		},
+	}}
+	registry := tools.NewRegistry()
+	registry.Register(&mockTool{name: "Big", result: big})
+	ag := New(client, registry, "anthropic")
+	conv := conversation.NewManager()
+	_, events := runConversationRound(ag, conv, "read it")
+	for _, event := range events {
+		if errEvent, ok := event.(ErrorEvent); ok {
+			t.Fatalf("agent returned error: %s", errEvent.Message)
+		}
+	}
+}
+
 func TestAgentMaxIterations(t *testing.T) {
 	loop := []llm.StreamEvent{
 		llm.ToolCallStart{ToolName: "Glob", ToolID: "t"},
@@ -248,15 +300,10 @@ func TestAgentWithThinking(t *testing.T) {
 	}
 }
 
-// --- Multi-round conversation tests ---
-// These simulate the real TUI flow: agent.Run() ends when LLM returns text
-// without tool calls, then the user sends a new message, and agent.Run()
-// is called again. This is how real conversations work.
-
 func TestMultiRoundConversation(t *testing.T) {
-	// Simulate: user asks → agent asks clarification → user answers → agent works → done
+
 	client := &dynamicMock{handlers: []func([]conversation.Message) []llm.StreamEvent{
-		// Round 1: agent asks a clarifying question
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			last := msgs[len(msgs)-1]
 			if !strings.Contains(last.Content, "refactor") {
@@ -267,7 +314,7 @@ func TestMultiRoundConversation(t *testing.T) {
 				llm.StreamEnd{StopReason: "end_turn"},
 			}
 		},
-		// Round 2: agent reads the file
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			last := msgs[len(msgs)-1]
 			if !strings.Contains(last.Content, "main.go") {
@@ -280,9 +327,9 @@ func TestMultiRoundConversation(t *testing.T) {
 				llm.StreamEnd{StopReason: "tool_use"},
 			}
 		},
-		// Round 2 continued (after tool result): agent produces final answer
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
-			// Verify tool result is in conversation
+
 			found := false
 			for _, m := range msgs {
 				for _, tr := range m.ToolResults {
@@ -307,30 +354,26 @@ func TestMultiRoundConversation(t *testing.T) {
 	ag := New(client, reg, "anthropic")
 	conv := conversation.NewManager()
 
-	// Round 1: user asks, agent asks clarification
 	text1, _ := runConversationRound(ag, conv, "please refactor this code")
 	if !strings.Contains(text1, "Which file") {
 		t.Errorf("round 1: agent should ask clarification, got: %s", text1)
 	}
 	t.Logf("Round 1 agent: %s", text1)
 
-	// Round 2: user answers, agent reads file and refactors
 	text2, events2 := runConversationRound(ag, conv, "main.go, extract functions please")
 	if !strings.Contains(text2, "refactored") {
 		t.Errorf("round 2: agent should produce refactored code, got: %s", text2)
 	}
 	t.Logf("Round 2 agent: %s", text2)
 
-	// Verify tool was called
 	trs := getToolResults(events2)
 	if len(trs) != 1 || trs[0].ToolName != "ReadFile" {
 		t.Errorf("expected ReadFile tool call, got: %+v", trs)
 	}
 
-	// Verify full conversation has correct structure
 	msgs := conv.GetMessages()
 	t.Logf("Total messages in conversation: %d", len(msgs))
-	// Expected: user1, assistant1, user2, assistant2+tool, tool_result, assistant3
+
 	if len(msgs) < 6 {
 		t.Fatalf("expected 6+ messages, got %d", len(msgs))
 	}
@@ -342,15 +385,10 @@ func TestMultiRoundConversation(t *testing.T) {
 	}
 }
 
-// --- Skill integration tests with full agent simulation ---
-
 func TestFrontendDesignSkillFullSession(t *testing.T) {
-	// Simulates: user invokes /frontend-design → agent asks what to build →
-	// user says "login page" → agent creates files → verify files exist
 
 	workDir := t.TempDir()
 
-	// Load real frontend-design skill or create a test one
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "frontend-design")
 	os.MkdirAll(skillDir, 0o755)
@@ -377,10 +415,10 @@ Output files directly using WriteFile.
 	outputFile := filepath.Join(workDir, "login.html")
 
 	client := &dynamicMock{handlers: []func([]conversation.Message) []llm.StreamEvent{
-		// Round 1: agent receives skill prompt, asks what to build
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			last := msgs[len(msgs)-1]
-			// Verify the skill prompt was injected correctly
+
 			if !strings.Contains(last.Content, "Frontend Design Skill") {
 				t.Errorf("skill body not in user message: %s", last.Content[:min(100, len(last.Content))])
 			}
@@ -389,7 +427,7 @@ Output files directly using WriteFile.
 				llm.StreamEnd{StopReason: "end_turn"},
 			}
 		},
-		// Round 2: user says login page, agent creates file
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			last := msgs[len(msgs)-1]
 			if !strings.Contains(last.Content, "login") {
@@ -434,7 +472,7 @@ Output files directly using WriteFile.
 				llm.StreamEnd{StopReason: "tool_use"},
 			}
 		},
-		// Round 2 continued: after file write, agent confirms
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: fmt.Sprintf("Done! I created `%s` with:\n- Clean semantic HTML\n- Responsive card layout\n- Accessible form fields with ARIA labels\n- Modern CSS with custom properties\n\nOpen it in your browser to see the result.", outputFile)},
@@ -443,14 +481,12 @@ Output files directly using WriteFile.
 		},
 	}}
 
-	// Use real WriteFile tool so we can verify the file is actually created
 	reg := tools.NewRegistry()
 	reg.Register(&tools.WriteFileTool{})
 
 	ag := New(client, reg, "anthropic")
 	conv := conversation.NewManager()
 
-	// Round 1: invoke skill (this is what TUI does when user types /frontend-design)
 	skillPrompt := skillBody
 	text1, _ := runConversationRound(ag, conv, skillPrompt)
 	t.Logf("Agent (round 1): %s", text1)
@@ -459,7 +495,6 @@ Output files directly using WriteFile.
 		t.Errorf("agent should ask what to build, got: %s", text1)
 	}
 
-	// Round 2: user answers, agent creates file
 	text2, events2 := runConversationRound(ag, conv, "a login page with email and password")
 	t.Logf("Agent (round 2): %s", text2)
 
@@ -467,7 +502,6 @@ Output files directly using WriteFile.
 		t.Errorf("agent should confirm login page creation, got: %s", text2)
 	}
 
-	// Verify WriteFile was called
 	trs := getToolResults(events2)
 	writeCount := 0
 	for _, tr := range trs {
@@ -482,7 +516,6 @@ Output files directly using WriteFile.
 		t.Errorf("expected 1 WriteFile call, got %d", writeCount)
 	}
 
-	// THE KEY CHECK: verify the file actually exists on disk with correct content
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Fatalf("output file not created: %v", err)
@@ -509,7 +542,6 @@ Output files directly using WriteFile.
 	}
 	t.Logf("Output file: %s (%d bytes, all %d checks passed)", outputFile, len(content), len(checks))
 
-	// Verify conversation history is coherent
 	msgs := conv.GetMessages()
 	t.Logf("Conversation: %d messages", len(msgs))
 	for i, m := range msgs {
@@ -528,14 +560,11 @@ Output files directly using WriteFile.
 }
 
 func TestSkillCreatorOutputsToCorrectDirectory(t *testing.T) {
-	// Simulates: user invokes /skill-creator → provides details →
-	// agent creates the new skill → verify it lands in .johnnycode/skills/, not root
 
 	workDir := t.TempDir()
 	skillsDir := filepath.Join(workDir, ".johnnycode", "skills")
 	os.MkdirAll(skillsDir, 0o755)
 
-	// Set up skill-creator skill
 	creatorDir := filepath.Join(skillsDir, "skill-creator")
 	os.MkdirAll(creatorDir, 0o755)
 	os.WriteFile(filepath.Join(creatorDir, "SKILL.md"), []byte(`---
@@ -557,20 +586,20 @@ The full path should be .johnnycode/skills/<skill-name>/SKILL.md.
 	newSkillFile := filepath.Join(newSkillDir, "SKILL.md")
 
 	client := &dynamicMock{handlers: []func([]conversation.Message) []llm.StreamEvent{
-		// Round 1: agent asks what the skill should do
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: "I'll help you create a new skill! What should this skill do? What would you like to name it?"},
 				llm.StreamEnd{StopReason: "end_turn"},
 			}
 		},
-		// Round 2: user describes, agent creates the skill in .johnnycode/skills/
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			last := msgs[len(msgs)-1]
 			if !strings.Contains(last.Content, "git") {
 				t.Errorf("expected user to mention git, got: %s", last.Content)
 			}
-			// Agent creates directory then writes SKILL.md
+
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: "I'll create a git-helper skill for you."},
 				llm.ToolCallStart{ToolName: "Bash", ToolID: "b1"},
@@ -580,7 +609,7 @@ The full path should be .johnnycode/skills/<skill-name>/SKILL.md.
 				llm.StreamEnd{StopReason: "tool_use"},
 			}
 		},
-		// After mkdir, write the SKILL.md
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.ToolCallStart{ToolName: "WriteFile", ToolID: "w1"},
@@ -603,7 +632,7 @@ Help the user with git operations:
 				llm.StreamEnd{StopReason: "tool_use"},
 			}
 		},
-		// Final confirmation
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: fmt.Sprintf("Done! Created git-helper skill at `%s`.\n\nYou can now use it with `/git-helper`.", newSkillFile)},
@@ -619,28 +648,23 @@ Help the user with git operations:
 	ag := New(client, reg, "anthropic")
 	conv := conversation.NewManager()
 
-	// Verify system prompt tells agent where to put skills
 	if !strings.Contains(systemPrompt, skillsDir) {
 		t.Fatalf("system prompt missing skills dir: %s", skillsDir)
 	}
 
-	// Round 1: invoke skill-creator
 	text1, _ := runConversationRound(ag, conv, skill.PromptBody+"\n\n## User Request\n\ncreate a new skill")
 	t.Logf("Agent (round 1): %s", text1)
 	if !strings.Contains(text1, "skill") {
 		t.Errorf("agent should ask about the skill, got: %s", text1)
 	}
 
-	// Round 2: user describes the skill
 	text2, _ := runConversationRound(ag, conv, "a git helper that helps with branching, rebasing and conflicts")
 	t.Logf("Agent (round 2): %s", text2)
 
-	// THE KEY CHECK: new skill was created inside .johnnycode/skills/, NOT in project root
 	if _, err := os.Stat(newSkillFile); os.IsNotExist(err) {
 		t.Fatalf("skill file not created at expected path: %s", newSkillFile)
 	}
 
-	// Verify the new skill can be loaded by the skills system
 	updatedCatalog, err := skills.LoadFromDirectory(skillsDir)
 	if err != nil {
 		t.Fatalf("failed to reload skills: %v", err)
@@ -657,7 +681,6 @@ Help the user with git operations:
 		t.Error("git-helper description should mention git")
 	}
 
-	// Verify it did NOT create files in project root
 	rootSkillFile := filepath.Join(workDir, "git-helper", "SKILL.md")
 	if _, err := os.Stat(rootSkillFile); err == nil {
 		t.Errorf("skill was INCORRECTLY created at project root: %s", rootSkillFile)
@@ -665,7 +688,6 @@ Help the user with git operations:
 
 	t.Logf("New skill loaded successfully: name=%s, body=%d chars", gitHelper.Meta.Name, len(gitHelper.PromptBody))
 
-	// Verify we now have 2 skills total
 	allSkills := updatedCatalog.List()
 	if len(allSkills) != 2 {
 		t.Errorf("expected 2 skills (skill-creator + git-helper), got %d", len(allSkills))
@@ -673,13 +695,9 @@ Help the user with git operations:
 }
 
 func TestSkillMultiRoundWithToolChain(t *testing.T) {
-	// Simulates a realistic skill session: agent reads existing code,
-	// asks user for confirmation, then writes modified code.
-	// Tests: skill prompt → read → ask user → user confirms → write → verify
 
 	workDir := t.TempDir()
 
-	// Create an existing file the agent will read
 	srcFile := filepath.Join(workDir, "app.js")
 	os.WriteFile(srcFile, []byte(`const express = require('express');
 const app = express();
@@ -690,7 +708,7 @@ app.listen(3000);
 	outputFile := filepath.Join(workDir, "app.js")
 
 	client := &dynamicMock{handlers: []func([]conversation.Message) []llm.StreamEvent{
-		// Round 1: agent reads the file first
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: "Let me check the current code."},
@@ -699,9 +717,9 @@ app.listen(3000);
 				llm.StreamEnd{StopReason: "tool_use"},
 			}
 		},
-		// After reading, agent proposes changes
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
-			// Verify the agent actually got the file content
+
 			for _, m := range msgs {
 				for _, tr := range m.ToolResults {
 					if !strings.Contains(tr.Content, "express") {
@@ -714,7 +732,7 @@ app.listen(3000);
 				llm.StreamEnd{StopReason: "end_turn"},
 			}
 		},
-		// Round 2: user confirms, agent writes
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: "Updating the file with improvements."},
@@ -742,7 +760,7 @@ app.listen(3000);
 				llm.StreamEnd{StopReason: "tool_use"},
 			}
 		},
-		// Final
+
 		func(msgs []conversation.Message) []llm.StreamEvent {
 			return []llm.StreamEvent{
 				llm.TextDelta{Text: "Updated! Added CORS, JSON parsing, health check, and error handling."},
@@ -758,18 +776,15 @@ app.listen(3000);
 	ag := New(client, reg, "anthropic")
 	conv := conversation.NewManager()
 
-	// Round 1: user asks to improve the code
 	text1, _ := runConversationRound(ag, conv, fmt.Sprintf("improve the express app at %s", srcFile))
 	t.Logf("Agent (round 1): %s", text1)
 	if !strings.Contains(text1, "proceed") {
 		t.Errorf("agent should ask for confirmation, got: %s", text1)
 	}
 
-	// Round 2: user confirms
 	text2, _ := runConversationRound(ag, conv, "yes, go ahead")
 	t.Logf("Agent (round 2): %s", text2)
 
-	// Verify the file was actually modified
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Fatalf("failed to read output: %v", err)
@@ -793,7 +808,6 @@ app.listen(3000);
 		}
 	}
 
-	// Verify conversation round-trip integrity
 	msgs := conv.GetMessages()
 	t.Logf("Conversation: %d messages", len(msgs))
 	userMsgCount := 0
@@ -816,13 +830,17 @@ app.listen(3000);
 }
 
 func TestRealSkillsLoadAndRunSimulation(t *testing.T) {
-	// Load the actual installed skills and verify end-to-end simulation works
+
 	wd, _ := os.Getwd()
-	for wd != "/" {
+	for {
 		if _, err := os.Stat(filepath.Join(wd, ".johnnycode", "skills")); err == nil {
 			break
 		}
-		wd = filepath.Dir(wd)
+		parent := filepath.Dir(wd)
+		if parent == wd { // reached the filesystem root (works on both / and C:\)
+			break
+		}
+		wd = parent
 	}
 	skillsDir := filepath.Join(wd, ".johnnycode", "skills")
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
@@ -835,7 +853,6 @@ func TestRealSkillsLoadAndRunSimulation(t *testing.T) {
 
 	systemPrompt := buildSkillSystemPrompt(skillsDir, catalog)
 
-	// Verify system prompt structure
 	if !strings.Contains(systemPrompt, "Skills are installed at:") {
 		t.Error("system prompt missing skill path")
 	}
@@ -845,7 +862,6 @@ func TestRealSkillsLoadAndRunSimulation(t *testing.T) {
 		}
 	}
 
-	// Test each real skill can be loaded and used as a prompt
 	for _, meta := range metas {
 		skill := catalog.Get(meta.Name)
 		if skill == nil {
@@ -857,13 +873,11 @@ func TestRealSkillsLoadAndRunSimulation(t *testing.T) {
 			continue
 		}
 
-		// Simulate invoking the skill with args
 		prompt := skill.PromptBody + "\n\n## User Request\n\ntest request for " + meta.Name
 		if !strings.Contains(prompt, "## User Request") {
 			t.Errorf("skill %q prompt missing user request section", meta.Name)
 		}
 
-		// Run one round with a mock that verifies it received the skill prompt
 		client := &dynamicMock{handlers: []func([]conversation.Message) []llm.StreamEvent{
 			func(msgs []conversation.Message) []llm.StreamEvent {
 				lastUser := msgs[len(msgs)-1]
@@ -886,13 +900,6 @@ func TestRealSkillsLoadAndRunSimulation(t *testing.T) {
 		}
 		t.Logf("  /%s: prompt=%d chars, response OK", meta.Name, len(prompt))
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func TestAgentOnLoopCompleteFiresOnFinalTurn(t *testing.T) {
@@ -921,7 +928,7 @@ func TestAgentOnLoopCompleteFiresOnFinalTurn(t *testing.T) {
 }
 
 func TestAgentOnLoopCompleteSkippedOnError(t *testing.T) {
-	// Hits MaxIterations before LoopComplete — callback must not fire.
+
 	loop := []llm.StreamEvent{
 		llm.ToolCallStart{ToolName: "Glob", ToolID: "t"},
 		llm.ToolCallComplete{ToolID: "t", ToolName: "Glob", Arguments: map[string]any{"pattern": "*"}},
@@ -947,7 +954,7 @@ func TestAgentOnLoopCompleteSkippedOnError(t *testing.T) {
 	case <-called:
 		t.Error("OnLoopComplete must not fire when loop exits via error")
 	case <-time.After(200 * time.Millisecond):
-		// expected: no callback
+
 	}
 }
 

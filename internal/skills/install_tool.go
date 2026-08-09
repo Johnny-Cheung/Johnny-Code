@@ -7,19 +7,19 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// InstallSkillTool lets the model install a new Skill on demand from a
-// skills.sh / github.com URL the user provides. Not a system tool — it
-// touches the user's home directory, so it stays under the per-skill
-// allowed_tools whitelist like any other side-effecting tool.
-//
-// The OnInstalled callback is fired after a successful install with the
-// new skill's name; the TUI uses it to re-register the slash command so
-// `/<new-skill>` works without a restart.
+
+
+
+
+
+
+
+
 type InstallSkillTool struct {
 	Catalog     *Catalog
 	OnInstalled func(name string)
-	// InstallRoot overrides ~/.johnnycode/skills for tests. Empty = derive
-	// from UserSkillsRoot at call time.
+	
+	
 	InstallRoot string
 }
 
@@ -76,8 +76,8 @@ func (t *InstallSkillTool) Execute(_ context.Context, args map[string]any) tools
 		return tools.ToolResult{Output: fmt.Sprintf("install failed: %v", err), IsError: true}
 	}
 
-	// Refresh the catalog so the new skill's frontmatter is indexed and
-	// reachable via LoadSkill without a restart.
+	
+	
 	if t.Catalog != nil {
 		t.Catalog.Reload(t.Catalog.workDir)
 	}

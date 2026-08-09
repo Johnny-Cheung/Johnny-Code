@@ -14,15 +14,14 @@ type StreamingExecutor struct {
 	checker  *permissions.Checker
 	eventCh  chan AgentEvent
 
-	mu       sync.Mutex
-	pending  []pendingTool
-	wg       sync.WaitGroup
+	mu      sync.Mutex
+	pending []pendingTool
+	wg      sync.WaitGroup
 }
 
 type pendingTool struct {
 	call   llm.ToolCallComplete
 	result toolExecResult
-	done   bool
 }
 
 func NewStreamingExecutor(registry *tools.Registry, checker *permissions.Checker, eventCh chan AgentEvent) *StreamingExecutor {
@@ -46,7 +45,6 @@ func (se *StreamingExecutor) Submit(ctx context.Context, agent *Agent, tc llm.To
 
 		se.mu.Lock()
 		se.pending[idx].result = result
-		se.pending[idx].done = true
 		se.mu.Unlock()
 	}()
 }
@@ -62,16 +60,4 @@ func (se *StreamingExecutor) CollectResults() []toolExecResult {
 		results[i] = p.result
 	}
 	return results
-}
-
-func (se *StreamingExecutor) HasPending() bool {
-	se.mu.Lock()
-	defer se.mu.Unlock()
-	return len(se.pending) > 0
-}
-
-func (se *StreamingExecutor) Reset() {
-	se.mu.Lock()
-	defer se.mu.Unlock()
-	se.pending = nil
 }

@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// TestMain points every teams test at a throwaway mailbox root so
-// running the suite doesn't litter the repo with .johnnycode/teams/
-// directories.
+
+
+
 func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "johnnycode-teams-test-")
 	if err != nil {
@@ -95,8 +95,8 @@ func TestWaitForNextPromptOrShutdownShutdown(t *testing.T) {
 		MailBox: NewFileMailBox(dir),
 	}
 
-	// Drop a shutdown message and verify the wait returns immediately
-	// with shutdown=true.
+	
+	
 	if err := team.MailBox.Send("alice", FileMailMessage{From: LeadName, Text: "[shutdown] done"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestWaitForNextPromptOrShutdownMessage(t *testing.T) {
 		t.Errorf("prompt missing message body: %q", prompt)
 	}
 
-	// Inbox should have been drained.
+	
 	leftover, _ := team.MailBox.ReadUnread("alice")
 	if len(leftover) != 0 {
 		t.Errorf("expected inbox drained, %d unread remain", len(leftover))
@@ -160,7 +160,7 @@ func TestWaitForNextPromptOrShutdownCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel before the call returns
+	cancel() 
 
 	_, _, err := waitForNextPromptOrShutdown(ctx, team, "alice")
 	if err == nil {
@@ -169,8 +169,8 @@ func TestWaitForNextPromptOrShutdownCancel(t *testing.T) {
 }
 
 func TestDrainLeadMailbox(t *testing.T) {
-	// Build teams with explicit mailbox dirs so we don't pollute the
-	// repo root via teamsBaseDir().
+	
+	
 	mgr := NewTeamManager()
 	t1 := &Team{Name: "alpha", Mode: ModeInProcess, Members: map[string]*Member{}, MailBox: NewFileMailBox(t.TempDir())}
 	t2 := &Team{Name: "beta", Mode: ModeInProcess, Members: map[string]*Member{}, MailBox: NewFileMailBox(t.TempDir())}
@@ -192,7 +192,7 @@ func TestDrainLeadMailbox(t *testing.T) {
 		t.Errorf("notes missing senders: %s", joined)
 	}
 
-	// Second drain should yield nothing because messages are now read.
+	
 	if again := DrainLeadMailbox(mgr); len(again) != 0 {
 		t.Errorf("expected empty drain after mark-read, got %d", len(again))
 	}
@@ -209,8 +209,8 @@ func TestBuildTeammateCLIFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildTeammateCLI: %v", err)
 	}
-	// Spaces and slashes must be quoted, --teammate must be present,
-	// and the cd prefix must use the supplied workdir.
+	
+	
 	if !strings.Contains(cmd, "--teammate") {
 		t.Errorf("command missing --teammate flag: %s", cmd)
 	}
@@ -228,18 +228,18 @@ func TestBuildTeammateCLIFormat(t *testing.T) {
 func TestSpawnTeammateValidation(t *testing.T) {
 	ctx := context.Background()
 
-	// Missing team
+	
 	if _, err := SpawnTeammate(ctx, TeammateSpawnConfig{MemberName: "x"}); err == nil {
 		t.Error("expected error when Team is nil")
 	}
 
-	// Missing name
+	
 	team := NewTeam("t", ModeInProcess)
 	if _, err := SpawnTeammate(ctx, TeammateSpawnConfig{Team: team}); err == nil {
 		t.Error("expected error when MemberName is empty")
 	}
 
-	// Unknown mode
+	
 	bad := NewTeam("t", "bogus")
 	if _, err := SpawnTeammate(ctx, TeammateSpawnConfig{Team: bad, MemberName: "x"}); err == nil {
 		t.Error("expected error for unknown team mode")

@@ -61,11 +61,19 @@ func TestIsSafeCommand(t *testing.T) {
 		{"ls -la", true},
 		{"git status", true},
 		{"git log --oneline", true},
+		{"sed -n 1p file.txt", true},
+		{"find . -name '*.go'", true},
 		{"rm -rf .", false},
 		{"ls > out.txt", false},
 		{"ls | grep foo", false},
 		{"ls; rm foo", false},
 		{"echo $(whoami)", false},
+		{"sed -i 's/x/y/' file.txt", false},
+		{"sed -i.bak s/x/y/ file.txt", false},
+		{"sed --in-place s/x/y/ file.txt", false},
+		{"find . -delete", false},
+		{"tee out.txt", false},
+		{"xargs rm", false},
 	}
 	for _, tc := range cases {
 		got := IsSafeCommand(tc.cmd)
@@ -82,7 +90,7 @@ func TestPathSandbox(t *testing.T) {
 	if ok, _ := sb.Check(filepath.Join(dir, "x.txt")); !ok {
 		t.Error("expected file inside sandbox to be allowed")
 	}
-	// /etc lives outside both the project root and os.TempDir().
+	
 	if ok, _ := sb.Check("/etc/passwd"); ok {
 		t.Error("expected /etc/passwd to be denied")
 	}
@@ -118,7 +126,7 @@ func TestRuleEngineSessionRulesLastWins(t *testing.T) {
 		t.Errorf("expected last-wins Deny, got %v", *res)
 	}
 
-	// Session rules are in-memory only — no file is written.
+	
 }
 
 func TestExtractContent(t *testing.T) {
@@ -143,9 +151,9 @@ func TestModeDecide(t *testing.T) {
 		{ModeDefault, tools.CategoryWrite, Ask},
 		{ModeDefault, tools.CategoryCommand, Ask},
 		{ModeAcceptEdits, tools.CategoryWrite, Allow},
-		// Plan Mode no longer participates in modeMatrix — it relies purely
-		// on prompt-injection constraints (see 1974e0d). Decide falls back
-		// to Ask via the unknown-mode branch.
+		
+		
+		
 		{ModePlan, tools.CategoryWrite, Ask},
 		{ModePlan, tools.CategoryCommand, Ask},
 		{ModeBypass, tools.CategoryCommand, Allow},
@@ -163,7 +171,7 @@ func TestCheckerLayerOrder(t *testing.T) {
 	sb := NewPathSandbox(dir)
 	eng := &RuleEngine{LocalPath: filepath.Join(dir, "local.yaml")}
 
-	// Dangerous Bash short-circuits before rule engine.
+	
 	bash := &fakeTool{name: "Bash", cat: tools.CategoryCommand}
 	chk := NewChecker(sb, eng, ModeBypass)
 	d := chk.Check(bash, map[string]any{"command": "rm -rf /"})
@@ -171,38 +179,54 @@ func TestCheckerLayerOrder(t *testing.T) {
 		t.Errorf("dangerous command should be Deny under any mode, got %v", d)
 	}
 
-	// Path outside sandbox is denied.
+	// 黑名单必须先于白名单与模式矩阵：default 模式下危险命令是 Deny 而非 Ask。
+	chk = NewChecker(sb, eng, ModeDefault)
+	d = chk.Check(bash, map[string]any{"command": "git push --force origin main"})
+	if d.Effect != Deny {
+		t.Errorf("dangerous command should be Deny before mode matrix, got %v", d)
+	}
+	// 白名单命令携带写语义参数时不得自动放行（default 模式应降级为 Ask）。
+	d = chk.Check(bash, map[string]any{"command": "sed -i 's/x/y/' file.txt"})
+	if d.Effect != Ask {
+		t.Errorf("sed -i should not be auto-allowed, got %v", d)
+	}
+	d = chk.Check(bash, map[string]any{"command": "find . -delete"})
+	if d.Effect != Ask {
+		t.Errorf("find -delete should not be auto-allowed, got %v", d)
+	}
+
+	
 	wf := &fakeTool{name: "WriteFile", cat: tools.CategoryWrite}
 	d = chk.Check(wf, map[string]any{"file_path": "/etc/passwd"})
 	if d.Effect != Deny {
 		t.Errorf("path outside sandbox should be Deny, got %v", d)
 	}
 
-	// Safe read-only command auto-allows.
+	
 	d = chk.Check(bash, map[string]any{"command": "git status"})
 	if d.Effect != Allow {
 		t.Errorf("safe command should be Allow, got %v", d)
 	}
 
-	// Plan Mode no longer has dedicated permission gating (1974e0d); it
-	// constrains behavior via prompt injection only. Checker.Check in plan
-	// mode falls through to the same logic as Default, so a write outside
-	// the sandbox is Deny (sandbox layer), a write inside the sandbox is
-	// Ask (mode fallback). Verify the sandbox layer still bites.
+	
+	
+	
+	
+	
 	planChk := NewChecker(sb, eng, ModePlan)
 	d = planChk.Check(wf, map[string]any{"file_path": "/etc/passwd"})
 	if d.Effect != Deny {
 		t.Errorf("plan mode write outside sandbox should be Deny, got %v", d)
 	}
 
-	// Default mode: write category Ask without rule.
+	
 	chk = NewChecker(sb, eng, ModeDefault)
 	d = chk.Check(wf, map[string]any{"file_path": filepath.Join(dir, "x.txt")})
 	if d.Effect != Ask {
 		t.Errorf("default mode write should be Ask, got %v", d)
 	}
 
-	// Session rule allow overrides mode Ask.
+	
 	eng.AddSessionRule(Rule{ToolName: "WriteFile", Pattern: filepath.Join(dir, "x.txt"), Effect: RuleAllow})
 	d = chk.Check(wf, map[string]any{"file_path": filepath.Join(dir, "x.txt")})
 	if d.Effect != Allow {

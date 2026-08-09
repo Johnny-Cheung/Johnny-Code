@@ -10,9 +10,9 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// stubHost captures every SkillHost call so tests can verify the executor
-// fired the right side effects. Implements both SkillHost and SkillForkHost
-// so the same fixture covers RunInline and RunFork.
+
+
+
 type stubHost struct {
 	activated     map[string]string
 	filterAllow   func(string) bool

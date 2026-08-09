@@ -1,13 +1,13 @@
-// Package worktree filesystem helpers: read git state without spawning git subprocesses. from the
-// design TypeScript implementation.
-//
-// Covers: resolving .git directories (including worktrees/submodules), parsing HEAD, resolving refs
-// via loose files and packed-refs.
-//
-// Correctness notes (verified against git source):
-// HEAD: `ref: refs/heads/<branch>\n` or raw SHA (refs/files-backend.c)
-// Packed-refs: `<sha> <refname>\n`, skip `#` and `^` lines (packed-backend.c)
-// git file (worktree): `gitdir: <path>\n` with optional relative path (setup.c)
+
+
+
+
+
+
+
+
+
+
 package worktree
 
 import (
@@ -19,13 +19,13 @@ import (
 	"strings"
 )
 
-// safeRefName allows ASCII alphanumerics, '/', '.', '_', '+', '-', '@'. Used to validate ref/branch
-// names read from .git/ so a tampered HEAD or ref file can't inject path traversal, argument
-// prefixes, or shell metacharacters.
+
+
+
 var safeRefName = regexp.MustCompile(`^[a-zA-Z0-9/._+@-]+$`)
 
-// IsSafeRefName validates that a ref/branch name is safe to use in path joins, as git positional
-// arguments, and when interpolated into shell commands.
+
+
 func IsSafeRefName(name string) bool {
 	if name == "" || strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") {
 		return false
@@ -33,7 +33,7 @@ func IsSafeRefName(name string) bool {
 	if strings.Contains(name, "..") {
 		return false
 	}
-	// Reject single-dot and empty path components.
+	
 	for _, seg := range strings.Split(name, "/") {
 		if seg == "." || seg == "" {
 			return false
@@ -45,18 +45,18 @@ func IsSafeRefName(name string) bool {
 var sha1Pattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// IsValidGitSha reports whether s is a full-length SHA-1 (40 hex) or SHA-256 (64 hex) git object
-// id. Git never writes abbreviated SHAs to HEAD or ref files.
+
+
 func IsValidGitSha(s string) bool {
 	return sha1Pattern.MatchString(s) || sha256Pattern.MatchString(s)
 }
 
-// ResolveGitDir resolves the actual .git directory for a repo rooted at root. Handles
-// worktrees/submodules where .git is a file containing `gitdir: <path>`. Returns ("", nil) when
-// root has no .git entry (not a repo) — the caller treats empty as "not a git repo". Errors are
-// reserved for IO failures the caller cares about (here: only filesystem errors other than ENOENT).
-//
-// minus the memoization (Go callers cache at higher layers).
+
+
+
+
+
+
 func ResolveGitDir(root string) (string, error) {
 	gitPath := filepath.Join(root, ".git")
 	st, err := os.Stat(gitPath)
@@ -67,8 +67,8 @@ func ResolveGitDir(root string) (string, error) {
 		return "", err
 	}
 	if !st.IsDir() {
-		// Worktree or submodule: .git is a file with `gitdir: <path>`. Git strips trailing whitespace via
-		// strbuf_rtrim (setup.c read_gitfile_gently); strings.TrimSpace is equivalent.
+		
+		
 		raw, err := os.ReadFile(gitPath)
 		if err != nil {
 			return "", err
@@ -78,7 +78,7 @@ func ResolveGitDir(root string) (string, error) {
 			return "", nil
 		}
 		rel := strings.TrimSpace(strings.TrimPrefix(content, "gitdir:"))
-		// resolve relative to the root (where the .git pointer file lives).
+		
 		if filepath.IsAbs(rel) {
 			return rel, nil
 		}
@@ -87,9 +87,9 @@ func ResolveGitDir(root string) (string, error) {
 	return gitPath, nil
 }
 
-// GetCommonDir reads the `commondir` file inside a worktree's gitDir to find the shared git
-// directory. In a worktree, this points to the main repo's .git dir. Returns ("", nil) if no
-// commondir file exists (regular repo).
+
+
+
 func GetCommonDir(gitDir string) (string, error) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
@@ -105,22 +105,22 @@ func GetCommonDir(gitDir string) (string, error) {
 	return filepath.Clean(filepath.Join(gitDir, content)), nil
 }
 
-// gitHead is the parsed result of <gitDir>/HEAD.
+
 type gitHead struct {
-	// branch is non-empty when HEAD is on a branch.
+	
 	branch string
-	// sha is non-empty when HEAD is detached (raw SHA) or when an unusual symref has been resolved.
+	
 	sha string
 }
 
-// readGitHead parses <gitDir>/HEAD to determine current branch or detached SHA. Returns (nil, nil)
-// when HEAD doesn't exist or is malformed — callers treat that as "not a worktree" / "not a repo".
-// IO errors other than ENOENT propagate.
-//
-// HEAD format (per refs/files-backend.c):
-// `ref: refs/heads/<branch>\n` — on a branch
-// `ref: <other-ref>\n` — unusual symref (e.g. during bisect)
-// `<hex-sha>\n` — detached HEAD (e.g. during rebase)
+
+
+
+
+
+
+
+
 func readGitHead(gitDir string) (*gitHead, error) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
@@ -139,7 +139,7 @@ func readGitHead(gitDir string) (*gitHead, error) {
 			}
 			return &gitHead{branch: name}, nil
 		}
-		// Unusual symref (not a local branch) — resolve to SHA.
+		
 		if !IsSafeRefName(ref) {
 			return nil, nil
 		}
@@ -149,19 +149,19 @@ func readGitHead(gitDir string) (*gitHead, error) {
 		}
 		return &gitHead{sha: sha}, nil
 	}
-	// Raw SHA (detached HEAD). Validate so a tampered HEAD can't flow shell metacharacters into
-	// downstream contexts.
+	
+	
 	if !IsValidGitSha(content) {
 		return nil, nil
 	}
 	return &gitHead{sha: content}, nil
 }
 
-// ResolveRef resolves a git ref (e.g. `refs/heads/main`) to a commit SHA. Checks loose ref files
-// first, then falls back to packed-refs. Follows symrefs (e.g. `ref: refs/remotes/origin/main`).
-//
-// For worktrees, refs live in the common gitdir (pointed to by the `commondir` file), not the
-// worktree-specific gitdir. We check the worktree gitdir first, then fall back to the common dir.
+
+
+
+
+
 func ResolveRef(gitDir, ref string) (string, error) {
 	sha, err := resolveRefInDir(gitDir, ref)
 	if err != nil {
@@ -180,9 +180,9 @@ func ResolveRef(gitDir, ref string) (string, error) {
 	return "", nil
 }
 
-// resolveRefInDir resolves ref within a single git directory (no commonDir fallback).
+
 func resolveRefInDir(dir, ref string) (string, error) {
-	// Try loose ref file first.
+	
 	raw, err := os.ReadFile(filepath.Join(dir, ref))
 	if err == nil {
 		content := strings.TrimSpace(string(raw))
@@ -191,8 +191,8 @@ func resolveRefInDir(dir, ref string) (string, error) {
 			if !IsSafeRefName(target) {
 				return "", nil
 			}
-			// Recurse to follow the symref chain. Pass `dir` (not gitDir) so resolveRef's commonDir fallback
-			// applies from the same starting point.
+			
+			
 			return ResolveRef(dir, target)
 		}
 		if !IsValidGitSha(content) {
@@ -204,7 +204,7 @@ func resolveRefInDir(dir, ref string) (string, error) {
 		return "", err
 	}
 
-	// Fall back to packed-refs.
+	
 	packed, err := os.ReadFile(filepath.Join(dir, "packed-refs"))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -231,9 +231,9 @@ func resolveRefInDir(dir, ref string) (string, error) {
 	return "", nil
 }
 
-// ReadRawSymref reads a raw symref file and extracts the branch name after a known prefix. Returns
-// ("", nil) if the ref doesn't exist, isn't a symref, or doesn't match the prefix. Checks loose
-// file only — packed-refs doesn't store symrefs.
+
+
+
 func ReadRawSymref(gitDir, refPath, branchPrefix string) (string, error) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, refPath))
 	if err != nil {
@@ -257,11 +257,11 @@ func ReadRawSymref(gitDir, refPath, branchPrefix string) (string, error) {
 	return name, nil
 }
 
-// GetDefaultBranch determines the repo's default branch by reading refs/remotes/origin/HEAD (a
-// symref) from the common gitdir, falling back to trying `main` then `master`, and finally
-// returning "main".
-//
-// Reads purely from the filesystem — no git subprocess, no network.
+
+
+
+
+
 func GetDefaultBranch(repoRoot string) (string, error) {
 	gitDir, err := ResolveGitDir(repoRoot)
 	if err != nil {
@@ -270,7 +270,7 @@ func GetDefaultBranch(repoRoot string) (string, error) {
 	if gitDir == "" {
 		return "main", nil
 	}
-	// refs/remotes/ lives in commonDir, not the per-worktree gitDir.
+	
 	commonDir, err := GetCommonDir(gitDir)
 	if err != nil {
 		return "main", err
@@ -297,9 +297,9 @@ func GetDefaultBranch(repoRoot string) (string, error) {
 	return "main", nil
 }
 
-// GetCurrentBranch reads <repoRoot>/.git/HEAD and returns the current branch name, or "" when HEAD
-// is detached. Pure filesystem read; (but distinguishes detached HEAD via empty string instead of
-// the sentinel "HEAD").
+
+
+
 func GetCurrentBranch(repoRoot string) (string, error) {
 	gitDir, err := ResolveGitDir(repoRoot)
 	if err != nil || gitDir == "" {
@@ -312,13 +312,13 @@ func GetCurrentBranch(repoRoot string) (string, error) {
 	return head.branch, nil
 }
 
-// ReadWorktreeHeadSha reads the HEAD SHA for a git worktree directory (not the main repo). Unlike
-// ResolveGitDir+readGitHead chained, this reads `<worktreePath>/.git` directly as a `gitdir:`
-// pointer file, with no upward walk. Returns ("", nil) when the worktree doesn't exist (`.git`
-// pointer ENOENT) or is malformed; callers treat empty as "not a valid worktree".
-//
-// Target perf: ≤10ms (pure filesystem reads, no subprocess). On a 16M-object repo `git rev-parse
-// HEAD` would burn ~15ms on spawn overhead alone.
+
+
+
+
+
+
+
 func ReadWorktreeHeadSha(worktreePath string) (string, error) {
 	raw, err := os.ReadFile(filepath.Join(worktreePath, ".git"))
 	if err != nil {

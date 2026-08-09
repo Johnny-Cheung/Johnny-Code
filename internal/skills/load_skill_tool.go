@@ -7,17 +7,17 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// LoadSkillTool is the on-demand activation entry point. It's registered
-// into the main tool registry at startup with progressive-disclosure
-// semantics: the model sees a `## Available Skills` listing of every
-// skill's name + description in the system prompt, and calls LoadSkill
-// with the chosen name to materialise that skill's full SOP into the env
-// context for subsequent turns.
-//
-// Marked as a system tool — it operates on the agent's own state, not on
-// external resources, so per-skill allowed_tools whitelists never hide it.
-// Without that exemption a `commit` skill that allowed only Bash would
-// strand the model with no way to load a sibling skill mid-conversation.
+
+
+
+
+
+
+
+
+
+
+
 type LoadSkillTool struct {
 	Catalog *Catalog
 	Host    SkillHost

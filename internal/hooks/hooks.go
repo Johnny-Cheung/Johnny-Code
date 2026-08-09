@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// defaultHookTimeout is the cap applied when a hook config doesn't set its own `timeout`.
+
 const defaultHookTimeout = 10 * time.Minute
 
 type EventName string
@@ -62,10 +62,10 @@ type Hook struct {
 	Reject    bool      `yaml:"reject"`
 	Once      bool      `yaml:"once"`
 	Async     bool      `yaml:"async"`
-	// OnError controls behaviour when the action fails.
-	//   "fail"   — propagate the error (default for blocking hooks)
-	//   "ignore" — log and continue
-	//   "reject" — treat hook failure as a reject (pre_tool_use only)
+	
+	
+	
+	
 	OnError string `yaml:"on_error"`
 }
 
@@ -89,9 +89,9 @@ type Engine struct {
 	mu            sync.Mutex
 	hooks         []Hook
 	notifications []HookResult
-	fired         map[string]bool // hook IDs that fired (for `once`)
-	// AgentRunner executes agent-type hooks. Optional — when nil, agent hooks
-	// return a clear "no runner registered" error rather than silently failing.
+	fired         map[string]bool 
+	
+	
 	AgentRunner func(prompt string, ctx HookContext) (string, error)
 }
 
@@ -99,9 +99,9 @@ func NewEngine() *Engine {
 	return &Engine{fired: make(map[string]bool)}
 }
 
-// validEventNames is the whitelist of event names accepted by Validate.
-// Sourced from the EventName constants above so adding a new event is a
-// single-line change there, not two.
+
+
+
 var validEventNames = map[EventName]bool{
 	EventSessionStart: true,
 	EventSessionEnd:   true,
@@ -114,14 +114,14 @@ var validEventNames = map[EventName]bool{
 	EventShutdown:     true,
 }
 
-// Validate checks a slice of hooks for configuration mistakes that would
-// otherwise surface as silent misbehaviour at run time. Each action type has
-// its own required fields; URL hooks need a parseable http(s) URL; timeout
-// must be non-negative.
-//
-// All errors are aggregated via errors.Join so a single call surfaces every
-// problem at once instead of bailing on the first. Each error is prefixed
-// with the hook id (or index when id is empty) and the offending field.
+
+
+
+
+
+
+
+
 func Validate(hooks []Hook) error {
 	var errs []error
 	for i, h := range hooks {
@@ -202,8 +202,8 @@ func (e *Engine) RunHooks(ctx HookContext) []HookResult {
 	return results
 }
 
-// RunPreToolHooks runs pre-tool-use hooks. Returns (rejected, message).
-// Non-reject hooks still run for their side effects (notifications/HTTP/etc).
+
+
 func (e *Engine) RunPreToolHooks(ctx HookContext) (bool, string) {
 	for _, h := range e.snapshotHooks() {
 		if h.Event != EventPreToolUse {
@@ -214,7 +214,7 @@ func (e *Engine) RunPreToolHooks(ctx HookContext) (bool, string) {
 		}
 		result := e.executeAction(h, ctx)
 		e.recordNotification(result)
-		// A hook may reject by config or by failing with on_error=reject.
+		
 		if h.Reject || (!result.Success && h.OnError == "reject") {
 			msg := result.Output
 			if msg == "" {
@@ -265,21 +265,21 @@ func (e *Engine) DrainNotifications() []HookResult {
 	return n
 }
 
-// evaluateCondition supports:
-//   - leaf: `var == "value"`, `var =~ /regex/`, `var =* "glob"`, `var != "value"`
-//   - composite: `cond1 && cond2`, `cond1 || cond2`
-//   - inverse: `!cond` (must precede the leaf, not split across operators)
-//
-// Parentheses are not supported; composition is strictly left-to-right with
-// `&&` and `||` at the same precedence (consistent with simple shell style).
+
+
+
+
+
+
+
 func evaluateCondition(condition string, ctx HookContext) bool {
 	condition = strings.TrimSpace(condition)
 	if condition == "" {
 		return true
 	}
-	// Composite: walk the string, splitting on top-level && and ||.
-	// We don't support quoting that contains those operators since hook
-	// conditions are configured by the user — keep parsing dumb-and-obvious.
+	
+	
+	
 	if tokens := splitComposite(condition); len(tokens) > 1 {
 		result := evaluateCondition(tokens[0].expr, ctx)
 		for i := 1; i < len(tokens); i++ {
@@ -301,7 +301,7 @@ func evaluateCondition(condition string, ctx HookContext) bool {
 }
 
 type compToken struct {
-	op   string // "" for the first token, then "&&" or "||"
+	op   string 
 	expr string
 }
 
@@ -320,7 +320,7 @@ func splitComposite(s string) []compToken {
 	}
 	out = append(out, compToken{op: cur, expr: strings.TrimSpace(s[start:])})
 	if len(out) == 1 {
-		// No splits found.
+		
 		return nil
 	}
 	return out
@@ -347,7 +347,7 @@ func evaluateLeaf(condition string, ctx HookContext) bool {
 			}
 		}
 	}
-	// No operator → treat as a truthy variable check.
+	
 	return resolveVar(condition, ctx) != ""
 }
 
@@ -397,9 +397,9 @@ func (e *Engine) executeAction(h Hook, ctx HookContext) HookResult {
 	}
 }
 
-// runAgent invokes the optional AgentRunner with the hook's Message as a
-// one-shot prompt. Returns a clear error when no runner is configured so
-// users learn they need to wire up agent-type hooks in their main entry.
+
+
+
 func (e *Engine) runAgent(h Hook, ctx HookContext) HookResult {
 	if e.AgentRunner == nil {
 		return HookResult{
@@ -444,10 +444,10 @@ func runCommand(h Hook, ctx HookContext) HookResult {
 	}
 	output = strings.TrimSpace(output)
 
-	// Distinguish timeout from generic exec failure so users (and downstream
-	// notifications) can tell why a hook bailed. CommandContext kills the
-	// child via SIGKILL on deadline; the Run error itself is a vague
-	// *exec.ExitError, so we check the context.
+	
+	
+	
+	
 	if execCtx.Err() == context.DeadlineExceeded {
 		msg := fmt.Sprintf("command timed out after %s", timeout)
 		if output != "" {

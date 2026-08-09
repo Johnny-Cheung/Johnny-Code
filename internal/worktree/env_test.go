@@ -45,7 +45,7 @@ func TestRunGit_NonZeroExit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not on PATH: %v", err)
 	}
-	// Run git status in a non-repo dir → non-zero exit, no panic.
+	
 	_, stderr, code := runGit(context.Background(), t.TempDir(), "status")
 	if code == 0 {
 		t.Errorf("git status in non-repo: expected non-zero exit, got 0")
@@ -60,10 +60,10 @@ func TestRunGit_ContextCancel(t *testing.T) {
 		t.Skipf("git not on PATH: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() 
 	_, _, code := runGit(ctx, t.TempDir(), "--version")
-	// Cancelled context kills the process; exit code is -1 (didn't run) or
-	// a non-zero signal-derived code. Either way, not 0.
+	
+	
 	if code == 0 {
 		t.Errorf("cancelled ctx: expected non-zero exit, got 0")
 	}

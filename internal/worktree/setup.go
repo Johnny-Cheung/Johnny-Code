@@ -8,24 +8,24 @@ import (
 	"strings"
 )
 
-// performPostCreationSetup propagates settings, hooks, symlinks, and gitignored files from the main
-// repo into a newly created worktree.
+
+
 func performPostCreationSetup(ctx context.Context, repoRoot, worktreePath string) {
-	// A. Copy settings.local.json.
+	
 	copySettingsLocal(repoRoot, worktreePath)
 
-	// B. Configure git hooks path.
+	
 	configureHooksPath(ctx, repoRoot, worktreePath)
 
-	// C. Symlink large directories (opt-in via config).
+	
 	symlinkDirectories(repoRoot, worktreePath, getSymlinkDirectories())
 
-	// D. Copy gitignored files from .worktreeinclude.
+	
 	CopyWorktreeIncludeFiles(ctx, repoRoot, worktreePath)
 }
 
-// copySettingsLocal copies .johnnycode/settings.local.json from the main repo to the worktree. This
-// propagates local settings (which may contain secrets).
+
+
 func copySettingsLocal(repoRoot, worktreePath string) {
 	relPath := filepath.Join(".johnnycode", "settings.local.json")
 	src := filepath.Join(repoRoot, relPath)
@@ -33,7 +33,7 @@ func copySettingsLocal(repoRoot, worktreePath string) {
 
 	srcData, err := os.ReadFile(src)
 	if err != nil {
-		return // ENOENT is fine — no local settings to copy
+		return 
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return
@@ -41,8 +41,8 @@ func copySettingsLocal(repoRoot, worktreePath string) {
 	_ = os.WriteFile(dst, srcData, 0o644)
 }
 
-// configureHooksPath sets core.hooksPath in the worktree so git hooks from the main repo are
-// shared. Prioritizes .husky/ over .git/hooks/.
+
+
 func configureHooksPath(ctx context.Context, repoRoot, worktreePath string) {
 	candidates := []string{
 		filepath.Join(repoRoot, ".husky"),
@@ -61,38 +61,38 @@ func configureHooksPath(ctx context.Context, repoRoot, worktreePath string) {
 	}
 	_, _, code := runGit(ctx, worktreePath, "config", "core.hooksPath", hooksPath)
 	if code != 0 {
-		// best-effort — don't fail the whole setup.
+		
 		return
 	}
 }
 
-// symlinkDirectories creates symlinks from repoRoot dirs into worktreePath to avoid disk bloat
-// (e.g. node_modules, vendor).
+
+
 func symlinkDirectories(repoRoot, worktreePath string, dirs []string) {
 	for _, dir := range dirs {
 		if strings.Contains(dir, "..") {
-			continue // path traversal guard
+			continue 
 		}
 		src := filepath.Join(repoRoot, dir)
 		dst := filepath.Join(worktreePath, dir)
-		// symlink is best-effort: source may not exist, dest may already exist.
+		
 		_ = os.Symlink(src, dst)
 	}
 }
 
-// getSymlinkDirectories returns the configured list of directories to symlink. Configured via
-// settings.worktree.symlinkDirectories. We read from config if available; empty by default.
+
+
 func getSymlinkDirectories() []string {
 	return worktreeConfig.SymlinkDirectories
 }
 
-// CopyWorktreeIncludeFiles copies gitignored files specified in .worktreeinclude from the base repo
-// to the worktree. Uses gitignore-syntax patterns.
+
+
 func CopyWorktreeIncludeFiles(ctx context.Context, repoRoot, worktreePath string) ([]string, error) {
 	includeFile := filepath.Join(repoRoot, ".worktreeinclude")
 	data, err := os.ReadFile(includeFile)
 	if err != nil {
-		return nil, nil // no .worktreeinclude → nothing to copy
+		return nil, nil 
 	}
 
 	var patterns []string
@@ -107,7 +107,7 @@ func CopyWorktreeIncludeFiles(ctx context.Context, repoRoot, worktreePath string
 		return nil, nil
 	}
 
-	// List gitignored files using git ls-files.
+	
 	stdout, _, code := runGit(ctx, repoRoot,
 		"ls-files", "--others", "--ignored", "--exclude-standard", "--directory")
 	if code != 0 || strings.TrimSpace(stdout) == "" {
@@ -116,14 +116,14 @@ func CopyWorktreeIncludeFiles(ctx context.Context, repoRoot, worktreePath string
 
 	entries := strings.Split(strings.TrimSpace(stdout), "\n")
 
-	// Simple pattern matching: for each gitignored file, check if any .worktreeinclude pattern matches
-	// it. We use filepath.Match for basic glob matching and prefix matching for directory patterns.
+	
+	
 	var toCopy []string
 	for _, entry := range entries {
 		if entry == "" {
 			continue
 		}
-		// Skip collapsed directories (trailing /).
+		
 		if strings.HasSuffix(entry, "/") {
 			continue
 		}
@@ -147,25 +147,25 @@ func CopyWorktreeIncludeFiles(ctx context.Context, repoRoot, worktreePath string
 	return copied, nil
 }
 
-// matchesWorktreeInclude checks whether a file path matches any of the .worktreeinclude patterns.
-// Supports exact match, basename match, and basic glob patterns.
+
+
 func matchesWorktreeInclude(path string, patterns []string) bool {
 	base := filepath.Base(path)
 	for _, p := range patterns {
 		p = strings.TrimPrefix(p, "/")
-		// Exact match.
+		
 		if p == path || p == base {
 			return true
 		}
-		// Glob match against full path.
+		
 		if matched, _ := filepath.Match(p, path); matched {
 			return true
 		}
-		// Glob match against basename.
+		
 		if matched, _ := filepath.Match(p, base); matched {
 			return true
 		}
-		// Prefix match for directory patterns.
+		
 		if strings.HasSuffix(p, "/") && strings.HasPrefix(path, p) {
 			return true
 		}
@@ -188,16 +188,16 @@ func copyFileContents(src, dst string) error {
 	return err
 }
 
-// WorktreeConfig holds worktree-related configuration. Populated from config.yaml or defaults.
+
 var worktreeConfig = struct {
 	SymlinkDirectories    []string
-	StaleCleanupInterval  int // seconds; 0 = disabled
-	StaleCutoffHours      int // hours; default 720 (30 days)
+	StaleCleanupInterval  int 
+	StaleCutoffHours      int 
 }{
 	StaleCutoffHours: 720,
 }
 
-// SetWorktreeConfig allows the TUI/CLI startup to inject config values.
+
 func SetWorktreeConfig(symlinkDirs []string, cleanupIntervalSec, cutoffHours int) {
 	worktreeConfig.SymlinkDirectories = symlinkDirs
 	worktreeConfig.StaleCleanupInterval = cleanupIntervalSec
@@ -206,30 +206,30 @@ func SetWorktreeConfig(symlinkDirs []string, cleanupIntervalSec, cutoffHours int
 	}
 }
 
-// GetStaleCutoffHours returns the configured cutoff in hours.
+
 func GetStaleCutoffHours() int {
 	return worktreeConfig.StaleCutoffHours
 }
 
-// GetStaleCleanupInterval returns the configured cleanup interval in seconds.
+
 func GetStaleCleanupInterval() int {
 	return worktreeConfig.StaleCleanupInterval
 }
 
-// FindCanonicalGitRoot resolves through worktrees to find the main repo root. When called from
-// inside a worktree, follows the .git pointer to commondir.
+
+
 func FindCanonicalGitRoot(startDir string) string {
 	gitDir, err := ResolveGitDir(startDir)
 	if err != nil || gitDir == "" {
 		return ""
 	}
-	// If gitDir contains a commondir pointer, follow it to the main repo.
+	
 	commonDir, err := GetCommonDir(gitDir)
 	if err != nil || commonDir == "" {
-		// gitDir is the main .git dir; repo root is its parent.
+		
 		return filepath.Dir(gitDir)
 	}
-	// commonDir points to the main repo's .git; repo root is its parent.
+	
 	return filepath.Dir(commonDir)
 }
 

@@ -1,4 +1,3 @@
-
 package tools
 
 const BashDescription = `Execute a shell command and return stdout and stderr.
@@ -7,6 +6,7 @@ IMPORTANT: Avoid using this tool to run cat, head, tail, sed, awk, or echo comma
 
 Usage notes:
 - The working directory persists between commands, but shell state does not.
+- On Windows commands run through cmd.exe; on Unix-like systems they run through bash.
 - Always quote file paths containing spaces with double quotes.
 - Try to maintain your current working directory using absolute paths; avoid cd unless the user explicitly requests it.
 - Optional timeout in seconds (max 600). Default is 120s.
@@ -51,7 +51,7 @@ Usage notes:
 - You MUST read existing files with ReadFile before overwriting them.
 - NEVER create documentation files (*.md) or README files unless explicitly requested.`
 
-const GlobDescription = `Find files matching a glob pattern, returning relative paths sorted alphabetically.
+const GlobDescription = `Find files and directories matching a glob pattern, returning relative paths sorted alphabetically.
 
 Usage notes:
 - Supports patterns like "**/*.py", "src/**/*.ts", "*.go".
@@ -67,4 +67,3 @@ Usage notes:
 - Search from "." or a specific path, never from "/".
 - Use this instead of grep or rg commands via Bash.
 - Automatically skips .git, node_modules, __pycache__, and similar directories.`
-

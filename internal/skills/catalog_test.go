@@ -57,7 +57,7 @@ func TestCatalogGetFullHotReload(t *testing.T) {
 		t.Errorf("v1 body mismatch: %q", skill.PromptBody)
 	}
 
-	// Overwrite source file — GetFull must re-read.
+	
 	updated := "---\nname: hot\ndescription: hot reload demo\n---\n\nversion 2"
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(updated), 0o644); err != nil {
 		t.Fatalf("rewrite: %v", err)

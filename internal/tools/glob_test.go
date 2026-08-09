@@ -1,4 +1,3 @@
-
 package tools
 
 import (
@@ -32,9 +31,7 @@ func setupGlobTree(t *testing.T) string {
 }
 
 func TestGlobDoubleStarPattern(t *testing.T) {
-	// Before the fix, `**/*.go` returned "No files matched the pattern."
-	// because filepath.Match doesn't understand `**`. Verify the fix
-	// recursively matches .go files at every depth.
+
 	root := setupGlobTree(t)
 	tool := &GlobTool{}
 	res := tool.Execute(context.Background(), map[string]any{
@@ -64,9 +61,58 @@ func TestGlobPlainPatternStillWorks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("glob errored: %s", res.Output)
 	}
-	// Plain `*.go` matches only top-level + same base name match at each dir.
+
 	if !strings.Contains(res.Output, "main.go") {
 		t.Errorf("plain pattern should still match base names, got:\n%s", res.Output)
 	}
 }
 
+func TestGlobStarOnlyListsTopLevelEntries(t *testing.T) {
+	root := setupGlobTree(t)
+	tool := &GlobTool{}
+	res := tool.Execute(context.Background(), map[string]any{
+		"pattern": "*",
+		"path":    root,
+	})
+	if res.IsError {
+		t.Fatalf("glob errored: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "main.go") || !strings.Contains(res.Output, "cmd/") {
+		t.Fatalf("top-level entries missing: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "cmd/cli/main.go") || strings.Contains(res.Output, "internal/agents/agent.go") {
+		t.Fatalf("non-recursive '*' unexpectedly traversed subdirectories: %s", res.Output)
+	}
+}
+
+func TestGlobBracketNegationExcludesDotEntries(t *testing.T) {
+	root := setupGlobTree(t)
+	if err := os.Mkdir(filepath.Join(root, ".hidden"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tool := &GlobTool{}
+	res := tool.Execute(context.Background(), map[string]any{
+		"pattern": "[!.]*",
+		"path":    root,
+	})
+	if res.IsError {
+		t.Fatalf("glob errored: %s", res.Output)
+	}
+	if strings.Contains(res.Output, ".hidden") {
+		t.Fatalf("dot entry unexpectedly matched: %s", res.Output)
+	}
+}
+
+func TestGlobLargeOutputExplainsTruncation(t *testing.T) {
+	matches := make([]string, 12000)
+	for i := range matches {
+		matches[i] = strings.Repeat("x", 12) + ".go"
+	}
+	got := formatGlobOutput(matches)
+	if len(got) > MaxOutputChars {
+		t.Fatalf("formatted output length = %d, want <= %d", len(got), MaxOutputChars)
+	}
+	if !strings.Contains(got, "Glob output truncated") || !strings.Contains(got, "12000") {
+		t.Fatalf("truncation explanation missing: %q", got[len(got)-120:])
+	}
+}

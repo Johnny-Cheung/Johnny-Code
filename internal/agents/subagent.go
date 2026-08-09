@@ -178,9 +178,9 @@ func (tm *TaskManager) CancelTask(id string) bool {
 	return false
 }
 
-// SubAgentSpec captures the runtime-relevant subset of BaseAgentDefinition. It is the bridge
-// between the load layer (AgentDefinition) and the execution layer (runSync / runAsync / runFork).
-// Built-in agents skip file parsing and instantiate this directly via BuiltinSpecs.
+
+
+
 type SubAgentSpec struct {
 	Name                 string
 	Description          string
@@ -190,31 +190,31 @@ type SubAgentSpec struct {
 	MaxTurns             int
 	Model                string
 
-	// PermissionMode overrides the parent agent's permission mode while the sub-agent runs. Empty
-	// string means inherit from parent.
+	
+	
 	PermissionMode string
 
-	// Background forces this agent to run as a background task when spawned, regardless of the
-	// run_in_background call-site parameter.
+	
+	
 	Background bool
 
-	// Isolation selects a file-system isolation mode; "worktree" creates a temporary git worktree.
+	
 	Isolation IsolationMode
 
-	// InitialPrompt is prepended to the first user turn.
+	
 	InitialPrompt string
 
-	// OmitJohnnycodeMd drops the JOHNNYCODE.md hierarchy from this agent's userContext.
+	
 	OmitJohnnycodeMd bool
 
-	// Skills are skill names to preload when the sub-agent starts.
+	
 	Skills []string
 
-	// Memory enables persistent memory in one of three scopes.
+	
 	Memory AgentMemoryScope
 
-	// McpServers / RequiredMcpServers / Hooks / Effort carry frontmatter data forward so future
-	// channels can consume it without another schema migration.
+	
+	
 	McpServers         []any
 	RequiredMcpServers []string
 	Hooks              any
@@ -273,10 +273,10 @@ var BuiltinSpecs = map[string]SubAgentSpec{
 		Name:            "explore",
 		Description:     "Fast read-only search agent for locating code",
 		DisallowedTools: []string{"EditFile", "WriteFile"},
-		// MaxTurns omitted → defaults to 200 (same fallback as general-purpose). Previous 30-turn cap was
-		// tripping when the LLM had to issue many ToolSearch/Glob/Grep calls to map an unfamiliar repo,
-		// causing the spawn to fail with "reached maximum iterations" before it could report anything
-		// useful.
+		
+		
+		
+		
 		Model: "haiku",
 	},
 }
@@ -311,7 +311,7 @@ func SpawnSubAgent(
 		if spec.SystemPromptOverride != "" {
 			conv.AddSystemReminder(spec.SystemPromptOverride)
 		}
-		// initialPrompt is prepended to the first user turn.
+		
 		if spec.InitialPrompt != "" {
 			conv.AddUserMessage(spec.InitialPrompt)
 		}
@@ -324,14 +324,14 @@ func SpawnSubAgent(
 			case agent.StreamText:
 				output += e.Text
 			case agent.PermissionRequestEvent:
-				// Background sub-agents are headless: auto-deny so executeSingleTool doesn't stall on respCh
-				// forever.
+				
+				
 				e.ResponseCh <- agent.PermDeny
 			case agent.ErrorEvent:
 				taskMgr.SetFailed(taskID, e.Message)
 				return
 			case agent.LoopComplete:
-				// done
+				
 			}
 		}
 		taskMgr.SetCompleted(taskID, output)

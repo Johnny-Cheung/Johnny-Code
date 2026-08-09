@@ -8,22 +8,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// CommandMeta is the frontmatter for a file-based prompt command. Holds the subset of fields read
-// for legacy /commands/ files: description, argument-hint, aliases.
+
+
 type CommandMeta struct {
 	Description  string   `yaml:"description"`
 	ArgumentHint string   `yaml:"argument-hint"`
 	Aliases      []string `yaml:"aliases"`
 }
 
-// LoadDir scans dir for *.md files (recursive) and returns one Command per file. The command name
-// is derived from the file's path relative to dir, with subdirectories joined by ':' for original
-// namespacing rule (sub/dir/foo.md → "sub:dir:foo"). Files that fail to parse are silently skipped
-// (a malformed user command should not break startup).
-//
-// Each returned command has Type=TypePrompt and a Handler that returns the markdown body with
-// $ARGUMENTS substituted. If the body has no $ARGUMENTS placeholder and args is non-empty, the args
-// are appended in a "## User Request" section.
+
+
+
+
+
+
+
+
 func LoadDir(dir string) []*Command {
 	if dir == "" {
 		return nil
@@ -50,10 +50,10 @@ func LoadDir(dir string) []*Command {
 	return cmds
 }
 
-// LoadUserCommands merges file-based commands from two search paths: 1. ~/.johnnycode/commands/ (user
-// global) 2. $workDir/.johnnycode/commands/ (project).
-//
-// Later sources override earlier ones on name collision.
+
+
+
+
 func LoadUserCommands(workDir string) []*Command {
 	var dirs []string
 	if home, err := os.UserHomeDir(); err == nil {
@@ -81,9 +81,9 @@ func LoadUserCommands(workDir string) []*Command {
 	return out
 }
 
-// parseCommandFile reads a single .md file and returns the matching Command, or nil on read/parse
-// failure. The name is computed from the relative path: "git/log.md" under baseDir → "git:log".
-// Names are lowercased to match the /<name> lookup convention in Parse.
+
+
+
 func parseCommandFile(baseDir, path string) *Command {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -119,9 +119,9 @@ func parseCommandFile(baseDir, path string) *Command {
 	}
 }
 
-// splitFrontmatter separates YAML frontmatter from the markdown body. Returns an empty meta and the
-// original content if no frontmatter is present or it fails to parse — a malformed command file
-// should not break startup.
+
+
+
 func splitFrontmatter(content string) (CommandMeta, string) {
 	var meta CommandMeta
 	if !strings.HasPrefix(strings.TrimSpace(content), "---") {
@@ -137,8 +137,8 @@ func splitFrontmatter(content string) (CommandMeta, string) {
 	return meta, parts[2]
 }
 
-// firstNonHeaderLine returns the first non-empty, non-heading line — used as a description fallback
-// when frontmatter doesn't supply one.
+
+
 func firstNonHeaderLine(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
@@ -150,8 +150,8 @@ func firstNonHeaderLine(body string) string {
 	return ""
 }
 
-// promptHandler returns a Handler that renders the command body with $ARGUMENTS substitution.
-// Bodies without a placeholder append the args in a "## User Request" section.
+
+
 func promptHandler(body string) Handler {
 	return func(ctx *Context) string {
 		if strings.Contains(body, "$ARGUMENTS") {

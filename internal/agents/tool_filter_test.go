@@ -12,12 +12,14 @@ type dummyTool struct {
 	category tools.ToolCategory
 }
 
-func (d *dummyTool) Name() string                                              { return d.name }
-func (d *dummyTool) Description() string                                       { return "test tool" }
-func (d *dummyTool) Category() tools.ToolCategory                              { return d.category }
+func (d *dummyTool) Name() string                 { return d.name }
+func (d *dummyTool) Description() string          { return "test tool" }
+func (d *dummyTool) Category() tools.ToolCategory { return d.category }
 
-func (d *dummyTool) Schema() map[string]any                                    { return nil }
-func (d *dummyTool) Execute(_ context.Context, _ map[string]any) tools.ToolResult { return tools.ToolResult{} }
+func (d *dummyTool) Schema() map[string]any { return nil }
+func (d *dummyTool) Execute(_ context.Context, _ map[string]any) tools.ToolResult {
+	return tools.ToolResult{}
+}
 
 func makeRegistry(names ...string) *tools.Registry {
 	reg := tools.NewRegistry()
@@ -81,7 +83,7 @@ func TestMCPToolsPassThrough(t *testing.T) {
 }
 
 func TestGlobalDisallowedExpanded(t *testing.T) {
-	// Each of these must be blocked for every sub-agent regardless of definition allowlist.
+
 	reg := makeRegistry(
 		"ReadFile",
 		"TaskOutput",
@@ -106,7 +108,7 @@ func TestGlobalDisallowedExpanded(t *testing.T) {
 }
 
 func TestAsyncWhitelistExpanded(t *testing.T) {
-	// Async agents may only use this whitelisted set of tools.
+
 	reg := makeRegistry(
 		"ReadFile", "WebSearch", "TodoWrite", "Grep", "WebFetch", "Glob",
 		"Bash", "EditFile", "WriteFile", "NotebookEdit", "Skill",
@@ -125,19 +127,16 @@ func TestAsyncWhitelistExpanded(t *testing.T) {
 }
 
 func TestInProcessTeammateExtraTools(t *testing.T) {
-	// Coordination tools that are normally blocked by the async whitelist must be allowed when the
-	// sub-agent is an in-process teammate.
+
 	reg := makeRegistry("ReadFile", "TaskCreate", "TaskList", "SendMessage", "Agent")
-	asTeammate := FilterToolsForAgentEx(reg, nil, nil, true, false, true)
+	asTeammate := FilterToolsForAgentEx(reg, nil, nil, true, true)
 	for _, name := range []string{"TaskCreate", "TaskList", "SendMessage"} {
 		if !hasToolNamed(asTeammate, name) {
 			t.Errorf("%s should be allowed for in-process teammates", name)
 		}
 	}
-	// Agent tool is allowed for in-process teammates (to spawn sync subagents)
-	// but the global ALL_AGENT_DISALLOWED_TOOLS gate runs before the teammate
-	// check, so it still gets blocked. Document the current behavior.
-	notTeammate := FilterToolsForAgentEx(reg, nil, nil, true, false, false)
+
+	notTeammate := FilterToolsForAgentEx(reg, nil, nil, true, false)
 	for _, name := range []string{"TaskCreate", "TaskList", "SendMessage"} {
 		if hasToolNamed(notTeammate, name) {
 			t.Errorf("%s should be blocked for plain async agents (not teammates)", name)

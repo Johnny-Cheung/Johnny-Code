@@ -82,10 +82,10 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 		stream := c.client.Chat.Completions.NewStreaming(ctx, reqParams)
 		defer stream.Close()
 
-		// Track tool calls being assembled across multiple chunks.
-		// The Chat Completions API sends tool call information incrementally:
-		// the first chunk for a given index carries the ID and function name,
-		// subsequent chunks carry argument fragments.
+		
+		
+		
+		
 		type toolCallAccum struct {
 			id       string
 			name     string
@@ -93,8 +93,8 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 		}
 		toolCalls := make(map[int64]*toolCallAccum)
 
-		// Read SSE events in a separate goroutine so we can respect ctx cancellation
-		// and detect silent connection drops, same pattern as the openai Responses client.
+		
+		
 		type sseResult struct {
 			hasNext bool
 		}
@@ -134,11 +134,11 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 
 			chunk := stream.Current()
 
-			// Handle usage from the final chunk (choices will be empty).
+			
 			if chunk.JSON.Usage.Valid() && chunk.Usage.PromptTokens != 0 {
 				cached := int(chunk.Usage.PromptTokensDetails.CachedTokens)
-				// prompt_tokens already includes the cached prefix; subtract so the
-				// usage anchor (input + cache_read) doesn't double-count it.
+				
+				
 				input := int(chunk.Usage.PromptTokens) - cached
 				if input < 0 {
 					input = 0
@@ -163,12 +163,12 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 			choice := chunk.Choices[0]
 			delta := choice.Delta
 
-			// Text content delta
+			
 			if delta.Content != "" {
 				events <- TextDelta{Text: delta.Content}
 			}
 
-			// Tool call deltas
+			
 			for _, tc := range delta.ToolCalls {
 				acc, exists := toolCalls[tc.Index]
 				if !exists {
@@ -176,7 +176,7 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 					toolCalls[tc.Index] = acc
 				}
 
-				// First chunk for this tool call carries the ID and name
+				
 				if tc.ID != "" {
 					acc.id = tc.ID
 				}
@@ -185,16 +185,16 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 					events <- ToolCallStart{ToolName: acc.name, ToolID: acc.id}
 				}
 
-				// Accumulate argument fragments
+				
 				if tc.Function.Arguments != "" {
 					acc.argsJSON += tc.Function.Arguments
 					events <- ToolCallDelta{Text: tc.Function.Arguments}
 				}
 			}
 
-			// When the model signals it is done (stop or tool_calls), emit completion events
+			
 			if choice.FinishReason == "tool_calls" || choice.FinishReason == "stop" {
-				// Emit ToolCallComplete for each accumulated tool call
+				
 				for _, acc := range toolCalls {
 					var args map[string]any
 					if acc.argsJSON != "" {
@@ -209,12 +209,12 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 						Arguments: args,
 					}
 				}
-				// Reset for potential next round (should not happen in single stream, but safe)
+				
 				toolCalls = make(map[int64]*toolCallAccum)
 
-				// If finish_reason is "stop" and we have no usage chunk yet,
-				// emit StreamEnd. The usage chunk, if it arrives, will emit another
-				// StreamEnd with actual token counts.
+				
+				
+				
 				if choice.FinishReason == "stop" && !chunk.JSON.Usage.Valid() {
 					events <- StreamEnd{StopReason: "end_turn", Usage: UsageInfo{}}
 				}
@@ -231,23 +231,23 @@ func (c *openaiCompatClient) Stream(ctx context.Context, conv *conversation.Mana
 	return events, errs
 }
 
-// buildChatCompletionMessages converts conversation history into the Chat Completions
-// message format. The system prompt becomes a system message at the start. Thinking
-// blocks are skipped because Chat Completions does not support them natively.
+
+
+
 func buildChatCompletionMessages(systemPrompt string, messages []conversation.Message) []openai.ChatCompletionMessageParamUnion {
 	var result []openai.ChatCompletionMessageParamUnion
 
-	// System prompt as the first message
+	
 	if systemPrompt != "" {
 		result = append(result, openai.SystemMessage(systemPrompt))
 	}
 
 	for _, m := range messages {
 		if m.Role == "assistant" {
-			// ThinkingBlocks are skipped for Chat Completions
+			
 
 			if len(m.ToolUses) > 0 {
-				// Assistant message with tool calls
+				
 				assistant := openai.ChatCompletionAssistantMessageParam{}
 				if m.Content != "" {
 					assistant.Content.OfString = param.NewOpt(m.Content)
@@ -267,12 +267,12 @@ func buildChatCompletionMessages(systemPrompt string, messages []conversation.Me
 				result = append(result, openai.AssistantMessage(m.Content))
 			}
 		} else if len(m.ToolResults) > 0 {
-			// Tool results become individual tool messages
+			
 			for _, tr := range m.ToolResults {
 				result = append(result, openai.ToolMessage(tr.Content, tr.ToolUseID))
 			}
 		} else {
-			// User messages
+			
 			result = append(result, openai.UserMessage(m.Content))
 		}
 	}

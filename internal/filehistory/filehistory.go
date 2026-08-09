@@ -28,7 +28,7 @@ type Snapshot struct {
 type History struct {
 	mu           sync.Mutex
 	sessionDir   string
-	trackedFiles map[string]int // filepath → current version
+	trackedFiles map[string]int 
 	snapshots    []Snapshot
 }
 
@@ -46,9 +46,9 @@ func backupName(filePath string, version int) string {
 	return fmt.Sprintf("%x@v%d", h[:8], version)
 }
 
-// TrackEdit backs up the file at path before it gets modified. Call this before
-// any write/edit operation. If the file doesn't exist yet (new file), no backup
-// is created but the path is still tracked so Rewind can delete it.
+
+
+
 func (h *History) TrackEdit(path string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -66,14 +66,14 @@ func (h *History) TrackEdit(path string) {
 		bp := filepath.Join(h.sessionDir, backupName(absPath, newVer))
 		_ = os.WriteFile(bp, data, 0o644)
 	}
-	// If file doesn't exist, we still bump the version so Rewind knows the file
-	// didn't exist at this version (no backup file on disk → delete on rewind).
+	
+	
 
 	h.trackedFiles[absPath] = newVer
 }
 
-// MakeSnapshot creates a checkpoint associated with the given conversation
-// message index. userText is a short label for the UI.
+
+
 func (h *History) MakeSnapshot(msgIndex int, userText string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -102,7 +102,7 @@ func (h *History) MakeSnapshot(msgIndex int, userText string) {
 	}
 }
 
-// GetSnapshots returns a copy of all snapshots for UI display.
+
 func (h *History) GetSnapshots() []Snapshot {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -111,8 +111,8 @@ func (h *History) GetSnapshots() []Snapshot {
 	return out
 }
 
-// Rewind restores files to the state captured in the snapshot at the given
-// index. Returns the list of files that were actually changed.
+
+
 func (h *History) Rewind(snapshotIndex int) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -127,7 +127,7 @@ func (h *History) Rewind(snapshotIndex int) ([]string, error) {
 	for path, backup := range target.Backups {
 		backupData, err := os.ReadFile(backup.BackupPath)
 		if err != nil {
-			// Backup file missing → file didn't exist at that point; delete it
+			
 			if _, statErr := os.Stat(path); statErr == nil {
 				_ = os.Remove(path)
 				changed = append(changed, path)
@@ -144,10 +144,10 @@ func (h *History) Rewind(snapshotIndex int) ([]string, error) {
 		}
 	}
 
-	// Truncate snapshots: remove everything after the target
+	
 	h.snapshots = h.snapshots[:snapshotIndex+1]
 
-	// Reset tracked file versions to the snapshot's versions
+	
 	for path, backup := range target.Backups {
 		h.trackedFiles[path] = backup.Version
 	}
@@ -155,14 +155,14 @@ func (h *History) Rewind(snapshotIndex int) ([]string, error) {
 	return changed, nil
 }
 
-// HasSnapshots returns true if there's at least one snapshot to rewind to.
+
 func (h *History) HasSnapshots() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.snapshots) > 0
 }
 
-// Save persists snapshot metadata to disk.
+
 func (h *History) Save() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -39,8 +39,8 @@ func TestValidateWorktreeSlug_Invalid(t *testing.T) {
 		{"trailing-slash/", `each "/"-separated segment must be non-empty`},
 		{"foo bar", `each "/"-separated segment must be non-empty and contain only letters`},
 		{"foo$bar", `each "/"-separated segment must be non-empty and contain only letters`},
-		// `+` is the flatten target, so we must reject it as input to keep the
-		// flattenSlug mapping injective.
+		
+		
 		{"foo+bar", `each "/"-separated segment must be non-empty and contain only letters`},
 	}
 	for _, c := range cases {

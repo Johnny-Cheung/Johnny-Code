@@ -17,12 +17,12 @@ func init() {
 	}
 }
 
-// parseResumeTool is the compiled-in implementation of the parse_resume tool
-// declared in backend-interview/tool.json. It does a light pass over a
-// resume file and extracts a structured signal blob: tech stack, projects,
-// years of experience. The output is fed back to the backend-interview
-// SOP so the sub-agent can tailor questions without re-reading the raw
-// resume on every turn.
+
+
+
+
+
+
 type parseResumeTool struct {
 	schema ToolSchema
 }
@@ -74,9 +74,9 @@ var (
 	projectRegex  = regexp.MustCompile(`(?im)^\s*(?:[-*•·]|\d+\.)\s+(.{8,140})$`)
 )
 
-// extractResumeSignal does a naive single-pass extraction. The interview SOP
-// only needs rough signal (which techs to ask about, which projects look
-// substantial); we don't aim for full NER here.
+
+
+
 func extractResumeSignal(text string) resumeSignal {
 	var sig resumeSignal
 

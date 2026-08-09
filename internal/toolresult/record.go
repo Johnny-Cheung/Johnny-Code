@@ -10,20 +10,20 @@ import (
 	"path/filepath"
 )
 
-// Record is one transcript line: a single replacement decision made by
-// Apply, suitable for jsonl persistence so Reconstruct can rebuild state on
-// resume.
+
+
+
 type Record struct {
 	Kind        string `json:"kind"`
 	ToolUseID   string `json:"tool_use_id"`
 	Replacement string `json:"replacement"`
 }
 
-// RecordsFilename is the per-session transcript file name.
+
 const RecordsFilename = "replacement_records.jsonl"
 
-// AppendRecords writes records to <sessionDir>/replacement_records.jsonl in
-// append mode. Creates the directory if needed. Empty input is a no-op.
+
+
 func AppendRecords(sessionDir string, records []Record) error {
 	if len(records) == 0 {
 		return nil
@@ -49,8 +49,8 @@ func AppendRecords(sessionDir string, records []Record) error {
 	return nil
 }
 
-// LoadRecords reads the jsonl file. Missing file returns (nil, nil) so
-// callers can treat first-run and resume identically.
+
+
 func LoadRecords(sessionDir string) ([]Record, error) {
 	path := filepath.Join(sessionDir, RecordsFilename)
 	f, err := os.Open(path)

@@ -3,13 +3,13 @@ package toolresult
 
 import "johnnycode/internal/conversation"
 
-// Reconstruct rebuilds state from a transcript: seed SeenIDs with every
-// candidate tool_use_id present in messages (anything visible at this point
-// has already been sent to the model, so the decision is implicitly
-// frozen), then overlay Replacements from the on-disk records. Optional
-// inheritedReplacements lets a fork resume gap-fill the parent's live
-// state for ids that didn't make it into the records file (e.g. forks that
-// share a tool_use_id whose preview was recorded only in the parent).
+
+
+
+
+
+
+
 func Reconstruct(
 	messages []conversation.Message,
 	records []Record,

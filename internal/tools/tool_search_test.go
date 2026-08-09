@@ -7,16 +7,15 @@ import (
 	"testing"
 )
 
-// mockDeferredTool 模拟一个会被 defer 的工具
 type mockDeferredTool struct {
 	name string
 	desc string
 }
 
-func (t *mockDeferredTool) Name() string        { return t.name }
-func (t *mockDeferredTool) Description() string  { return t.desc }
+func (t *mockDeferredTool) Name() string           { return t.name }
+func (t *mockDeferredTool) Description() string    { return t.desc }
 func (t *mockDeferredTool) Category() ToolCategory { return CategoryCommand }
-func (t *mockDeferredTool) ShouldDefer() bool    { return true }
+func (t *mockDeferredTool) ShouldDefer() bool      { return true }
 
 func (t *mockDeferredTool) Schema() map[string]any {
 	return map[string]any{
@@ -32,18 +31,17 @@ func (t *mockDeferredTool) Execute(ctx context.Context, args map[string]any) Too
 	return ToolResult{Output: "ok"}
 }
 
-// mockNormalTool 模拟一个不会被 defer 的普通工具
 type mockNormalTool struct {
 	name string
 }
 
-func (t *mockNormalTool) Name() string        { return t.name }
-func (t *mockNormalTool) Description() string  { return "normal tool" }
+func (t *mockNormalTool) Name() string           { return t.name }
+func (t *mockNormalTool) Description() string    { return "normal tool" }
 func (t *mockNormalTool) Category() ToolCategory { return CategoryRead }
 func (t *mockNormalTool) Schema() map[string]any {
 	return map[string]any{
-		"name":        t.name,
-		"description": "normal tool",
+		"name":         t.name,
+		"description":  "normal tool",
 		"input_schema": map[string]any{"type": "object", "properties": map[string]any{}},
 	}
 }
@@ -51,14 +49,13 @@ func (t *mockNormalTool) Execute(ctx context.Context, args map[string]any) ToolR
 	return ToolResult{Output: "ok"}
 }
 
-// mockMCPTool 模拟 MCPToolWrapper（没实现 DeferrableTool 接口）
 type mockMCPTool struct {
 	name string
 	desc string
 }
 
-func (t *mockMCPTool) Name() string        { return t.name }
-func (t *mockMCPTool) Description() string  { return t.desc }
+func (t *mockMCPTool) Name() string           { return t.name }
+func (t *mockMCPTool) Description() string    { return t.desc }
 func (t *mockMCPTool) Category() ToolCategory { return CategoryCommand }
 func (t *mockMCPTool) Schema() map[string]any {
 	return map[string]any{
@@ -82,7 +79,6 @@ func TestDeferredToolsNotInGetAllSchemas(t *testing.T) {
 
 	schemas := reg.GetAllSchemas("anthropic")
 
-	// 只应该有 ReadFile，deferred 的不应该出现
 	if len(schemas) != 1 {
 		t.Errorf("expected 1 schema (only ReadFile), got %d", len(schemas))
 	}
@@ -91,20 +87,41 @@ func TestDeferredToolsNotInGetAllSchemas(t *testing.T) {
 	}
 }
 
+func TestGetDeferredToolInfosIncludesOnlyMetadata(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockDeferredTool{name: "mcp__grafana__query", desc: "Query Prometheus"})
+	reg.Register(&mockDeferredTool{name: "mcp__grafana__search", desc: "Search dashboards"})
+
+	infos := reg.GetDeferredToolInfos()
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 deferred tool infos, got %d", len(infos))
+	}
+	if infos[0].Name != "mcp__grafana__query" || infos[0].Description != "Query Prometheus" {
+		t.Errorf("unexpected first deferred info: %+v", infos[0])
+	}
+	if infos[1].Name != "mcp__grafana__search" || infos[1].Description != "Search dashboards" {
+		t.Errorf("unexpected second deferred info: %+v", infos[1])
+	}
+
+	reg.MarkDiscovered("mcp__grafana__query")
+	infos = reg.GetDeferredToolInfos()
+	if len(infos) != 1 || infos[0].Name != "mcp__grafana__search" {
+		t.Errorf("discovered tool should be omitted from deferred infos: %+v", infos)
+	}
+}
+
 func TestMCPToolIsDeferred(t *testing.T) {
-	// mockMCPTool 没实现 DeferrableTool，模拟旧行为（不 defer）
-	// 真正的 MCPToolWrapper 现在实现了 ShouldDefer() = true
+
 	reg := NewRegistry()
 	reg.Register(&mockNormalTool{name: "ReadFile"})
 	reg.Register(&mockMCPTool{name: "mcp__grafana__query", desc: "Query Prometheus"})
 
 	schemas := reg.GetAllSchemas("anthropic")
-	// mockMCPTool 没实现 DeferrableTool，所以仍然全量传
+
 	if len(schemas) != 2 {
 		t.Errorf("expected 2 schemas (mockMCPTool has no ShouldDefer), got %d", len(schemas))
 	}
 
-	// 但如果用 mockDeferredTool 模拟真正的 MCPToolWrapper 行为
 	reg2 := NewRegistry()
 	reg2.Register(&mockNormalTool{name: "ReadFile"})
 	reg2.Register(&mockDeferredTool{name: "mcp__grafana__query", desc: "Query Prometheus"})
@@ -126,22 +143,18 @@ func TestDiscoveredToolsIncludedInSchemas(t *testing.T) {
 	reg.Register(&mockDeferredTool{name: "mcp__grafana__query", desc: "Query Prometheus"})
 	reg.Register(&mockDeferredTool{name: "mcp__grafana__search", desc: "Search dashboards"})
 
-	// Before discovery: only ReadFile
 	schemas := reg.GetAllSchemas("anthropic")
 	if len(schemas) != 1 {
 		t.Errorf("before discovery: expected 1 schema, got %d", len(schemas))
 	}
 
-	// Discover one tool
 	reg.MarkDiscovered("mcp__grafana__query")
 
-	// After discovery: ReadFile + discovered tool
 	schemas = reg.GetAllSchemas("anthropic")
 	if len(schemas) != 2 {
 		t.Errorf("after discovery: expected 2 schemas, got %d", len(schemas))
 	}
 
-	// GetDeferredToolNames should only return undiscovered ones
 	names := reg.GetDeferredToolNames()
 	if len(names) != 1 || names[0] != "mcp__grafana__search" {
 		t.Errorf("expected only mcp__grafana__search as deferred, got %v", names)
@@ -152,7 +165,6 @@ func TestToolSearchMarksDiscovered(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockDeferredTool{name: "mcp__grafana__query", desc: "Query Prometheus"})
 
-	// Before search: not discovered
 	if reg.IsDiscovered("mcp__grafana__query") {
 		t.Error("should not be discovered before ToolSearch")
 	}
@@ -160,12 +172,10 @@ func TestToolSearchMarksDiscovered(t *testing.T) {
 	ts := &ToolSearchTool{Registry: reg, Protocol: "anthropic"}
 	ts.Execute(context.Background(), map[string]any{"query": "select:mcp__grafana__query"})
 
-	// After search: should be discovered
 	if !reg.IsDiscovered("mcp__grafana__query") {
 		t.Error("should be discovered after ToolSearch")
 	}
 
-	// Schema should now be included
 	schemas := reg.GetAllSchemas("anthropic")
 	if len(schemas) != 1 {
 		t.Errorf("discovered tool should be in schemas, got %d", len(schemas))
@@ -187,6 +197,9 @@ func TestToolSearchSelect(t *testing.T) {
 	}
 	if !contains(result.Output, "mcp__grafana__query") {
 		t.Errorf("expected output to contain tool name, got: %s", result.Output)
+	}
+	if !contains(result.Output, `"input_schema"`) || !contains(result.Output, `"arg1"`) {
+		t.Errorf("expected ToolSearch output to contain the complete input schema, got: %s", result.Output)
 	}
 }
 
@@ -225,17 +238,15 @@ func TestToolSearchNoMatch(t *testing.T) {
 	}
 }
 
-// mockLargeDeferredTool simulates a realistic MCP tool with a large schema
-// (~500+ chars of JSON per tool, mimicking real Grafana/Playwright tools).
 type mockLargeDeferredTool struct {
 	name string
 	desc string
 }
 
 func (t *mockLargeDeferredTool) Name() string           { return t.name }
-func (t *mockLargeDeferredTool) Description() string     { return t.desc }
-func (t *mockLargeDeferredTool) Category() ToolCategory  { return CategoryCommand }
-func (t *mockLargeDeferredTool) ShouldDefer() bool       { return true }
+func (t *mockLargeDeferredTool) Description() string    { return t.desc }
+func (t *mockLargeDeferredTool) Category() ToolCategory { return CategoryCommand }
+func (t *mockLargeDeferredTool) ShouldDefer() bool      { return true }
 func (t *mockLargeDeferredTool) Schema() map[string]any {
 	return map[string]any{
 		"name":        t.name,
@@ -264,11 +275,9 @@ func (t *mockLargeDeferredTool) Execute(ctx context.Context, args map[string]any
 func TestDeferredTokenSavings(t *testing.T) {
 	reg := NewRegistry()
 
-	// Register 2 normal (non-deferred) tools with small schemas.
 	reg.Register(&mockNormalTool{name: "ReadFile"})
 	reg.Register(&mockNormalTool{name: "WriteFile"})
 
-	// Register 50 deferred tools with realistic large schemas.
 	for i := 0; i < 50; i++ {
 		reg.Register(&mockLargeDeferredTool{
 			name: fmt.Sprintf("mcp__grafana__tool_%03d", i),
@@ -276,7 +285,6 @@ func TestDeferredTokenSavings(t *testing.T) {
 		})
 	}
 
-	// Measure size with deferred tools hidden (default state).
 	schemasDeferred := reg.GetAllSchemas("anthropic")
 	bytesDeferred, err := json.Marshal(schemasDeferred)
 	if err != nil {
@@ -284,12 +292,10 @@ func TestDeferredTokenSavings(t *testing.T) {
 	}
 	sizeDeferred := len(bytesDeferred)
 
-	// Discover all 50 deferred tools.
 	for i := 0; i < 50; i++ {
 		reg.MarkDiscovered(fmt.Sprintf("mcp__grafana__tool_%03d", i))
 	}
 
-	// Measure size with all tools included.
 	schemasAll := reg.GetAllSchemas("anthropic")
 	bytesAll, err := json.Marshal(schemasAll)
 	if err != nil {
@@ -311,7 +317,6 @@ func TestDeferredEndToEndDiscovery(t *testing.T) {
 	reg.Register(&mockDeferredTool{name: "mcp__playwright__click", desc: "Click an element"})
 	reg.Register(&mockDeferredTool{name: "mcp__playwright__fill", desc: "Fill a form field"})
 
-	// Step 1: Deferred tools should NOT appear in GetAllSchemas.
 	schemas := reg.GetAllSchemas("anthropic")
 	for _, s := range schemas {
 		name := s["name"].(string)
@@ -323,7 +328,6 @@ func TestDeferredEndToEndDiscovery(t *testing.T) {
 		t.Errorf("expected 1 schema (Bash only), got %d", len(schemas))
 	}
 
-	// Step 2: Both deferred tool names should be returned by GetDeferredToolNames.
 	deferredNames := reg.GetDeferredToolNames()
 	nameSet := make(map[string]bool)
 	for _, n := range deferredNames {
@@ -333,10 +337,8 @@ func TestDeferredEndToEndDiscovery(t *testing.T) {
 		t.Errorf("expected both deferred tools in GetDeferredToolNames, got %v", deferredNames)
 	}
 
-	// Step 3: Discover one tool.
 	reg.MarkDiscovered("mcp__playwright__click")
 
-	// Step 4: The discovered tool should now appear in GetAllSchemas.
 	schemas = reg.GetAllSchemas("anthropic")
 	foundClick := false
 	foundFill := false
@@ -358,7 +360,6 @@ func TestDeferredEndToEndDiscovery(t *testing.T) {
 		t.Errorf("expected 2 schemas (Bash + click), got %d", len(schemas))
 	}
 
-	// Step 5: GetDeferredToolNames should only return the undiscovered tool.
 	deferredNames = reg.GetDeferredToolNames()
 	if len(deferredNames) != 1 {
 		t.Errorf("expected 1 deferred tool remaining, got %d: %v", len(deferredNames), deferredNames)

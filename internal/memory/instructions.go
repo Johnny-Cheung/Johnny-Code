@@ -8,29 +8,29 @@ import (
 	"strings"
 )
 
-// MaxIncludeDepth is the maximum nesting depth for @include directives.
+
 const MaxIncludeDepth = 5
 
-// InstructionSource is one loaded instruction file.
+
 type InstructionSource struct {
 	Path    string
 	Content string
 }
 
-// LoadInstructions discovers and concatenates project & user instruction files.
-//
-// Discovery order (each later layer is appended later, so model attention prioritises it):
-//  1. User global: ~/.johnnycode/JOHNNYCODE.md, ~/.johnnycode/AGENTS.md
-//  2. Project: walk from git root down to workDir, picking up JOHNNYCODE.md
-//     and AGENTS.md in each directory (so the file closest to cwd wins)
-//  3. workDir/.johnnycode/INSTRUCTIONS.md (legacy)
-//  4. workDir/JOHNNYCODE.local.md (private local override)
-//
-// @-include directives:
-//   - @./relative/path, @~/home/path, or @/absolute/path
-//   - Resolved relative to the including file's directory
-//   - Skipped inside fenced code blocks
-//   - Cycle-safe (same absolute path is never included twice)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func LoadInstructions(workDir string) string {
 	sources := DiscoverInstructions(workDir)
 	if len(sources) == 0 {
@@ -47,8 +47,8 @@ func LoadInstructions(workDir string) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-// DiscoverInstructions returns the loaded source files in priority order
-// (lowest priority first). Used by LoadInstructions and exposed for tests.
+
+
 func DiscoverInstructions(workDir string) []InstructionSource {
 	var sources []InstructionSource
 	seen := map[string]bool{}
@@ -109,8 +109,8 @@ func expandIncludes(content, baseDir string, seen map[string]bool, depth int) st
 						continue
 					}
 				}
-				// Fall through if include can't be resolved/read; emit the
-				// original line so the user notices.
+				
+				
 			}
 		}
 		out.WriteString(line)
@@ -119,9 +119,9 @@ func expandIncludes(content, baseDir string, seen map[string]bool, depth int) st
 	return out.String()
 }
 
-// parseInclude returns the include path for a line of the form
-// "@./path", "@~/path", or "@/abs/path", else "". Other @-tokens (e.g.
-// @username) are ignored to avoid false positives.
+
+
+
 func parseInclude(trimmed string) string {
 	if !strings.HasPrefix(trimmed, "@") || strings.HasPrefix(trimmed, "@@") {
 		return ""
@@ -154,8 +154,8 @@ func resolveInclude(p, baseDir string) string {
 	return filepath.Join(baseDir, p)
 }
 
-// projectInstructionDirs returns directories from git root down to workDir.
-// If workDir is not inside a git repo, only [workDir] is returned.
+
+
 func projectInstructionDirs(workDir string) []string {
 	abs, err := filepath.Abs(workDir)
 	if err != nil {

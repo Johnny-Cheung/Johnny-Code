@@ -50,9 +50,9 @@ func TestBuildExtractAutoOnlyPromptIncludesExistingManifest(t *testing.T) {
 }
 
 func TestBuildExtractAutoOnlyPromptNoTeamSection(t *testing.T) {
-	// Dual-path mode uses <scope> tags for user-level / project-level routing, but the
-	// "team memory" / "private or team" guidance from the Claude Code COMBINED variant
-	// must still never appear — Johnny Code keeps the user/project split simple.
+	
+	
+	
 	got := BuildExtractAutoOnlyPrompt(3, "", false, "/home/test/.johnnycode/memory/", "/tmp/proj/.johnnycode/memory/")
 	for _, banned := range []string{
 		"team memor",

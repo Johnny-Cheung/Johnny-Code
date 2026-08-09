@@ -12,15 +12,15 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// TeammateSpawnConfig collects every parameter SpawnTeammate needs.
-// Fields apply across backends:
-// Team / MemberName / Task / Addendum: always used.
-// Client / Registry / Protocol: only in-process; external backends
-// load these themselves from the spawned process's own config.
-// Workdir: optional working directory override. When non-empty,
-// in-process members get their Agent.WorkDir pointed there and
-// tmux/iTerm spawns cd into that path. Used for worktree
-// isolation so concurrent teammates don't fight over files.
+
+
+
+
+
+
+
+
+
 type TeammateSpawnConfig struct {
 	Team       *Team
 	MemberName string
@@ -34,21 +34,21 @@ type TeammateSpawnConfig struct {
 	Workdir string
 }
 
-// SpawnResult carries the per-backend handle returned by SpawnTeammate. In-process spawns get an
-// event channel; tmux/iTerm spawns get a pane handle that's also stored on Member.PaneID for later
-// teardown.
+
+
+
 type SpawnResult struct {
 	Mode    TeamMode
-	EventCh <-chan agent.AgentEvent // in-process only
-	PaneID  string                  // tmux/iTerm only
+	EventCh <-chan agent.AgentEvent 
+	PaneID  string                  
 }
 
-// SpawnTeammate creates a new team member and launches it under the team's currently selected
-// backend (Team.Mode). It is the single entry point used by the Agent tool's team_name code path;
-// the dispatch below / .
-//
-// For external backends, the teammate's initial task is delivered via the mailbox before the new
-// process boots, so the teammate sees the task on its first idle poll.
+
+
+
+
+
+
 func SpawnTeammate(ctx context.Context, cfg TeammateSpawnConfig) (*SpawnResult, error) {
 	if cfg.Team == nil {
 		return nil, fmt.Errorf("SpawnTeammate: team is required")
@@ -69,8 +69,8 @@ func SpawnTeammate(ctx context.Context, cfg TeammateSpawnConfig) (*SpawnResult, 
 			cfg.Task,
 			cfg.Addendum,
 		)
-		// Workdir applies to the just-registered member's Agent so every file/Bash tool resolves relative
-		// to the isolated path.
+		
+		
 		if cfg.Workdir != "" {
 			if m, ok := cfg.Team.Members[cfg.MemberName]; ok && m.AgentRef != nil {
 				m.AgentRef.WorkDir = cfg.Workdir
@@ -79,8 +79,8 @@ func SpawnTeammate(ctx context.Context, cfg TeammateSpawnConfig) (*SpawnResult, 
 		return &SpawnResult{Mode: ModeInProcess, EventCh: ch}, nil
 
 	case ModeTmux:
-		// External processes pick up their task via the mailbox. Drop the initial assignment in before
-		// spawn so the new process sees work on its first poll.
+		
+		
 		if cfg.Task != "" {
 			_ = cfg.Team.MailBox.Send(cfg.MemberName, FileMailMessage{
 				From: LeadName,
@@ -120,10 +120,10 @@ func SpawnTeammate(ctx context.Context, cfg TeammateSpawnConfig) (*SpawnResult, 
 	return nil, fmt.Errorf("unknown team mode: %s", cfg.Team.Mode)
 }
 
-// recordExternalMember registers a tmux/iTerm-spawned teammate in the in-memory Members map so
-// StopMember can later target it for teardown. External teammates don't have an AgentRef on this
-// side — their LLM lives in the spawned process — so the entry is just a name+handle stub used by
-// the lead's coordination tools.
+
+
+
+
 func (t *Team) recordExternalMember(name, paneID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -134,12 +134,12 @@ func (t *Team) recordExternalMember(name, paneID string) {
 	}
 }
 
-// BuildTeammateCLI returns the shell command that, when run in a new terminal pane/tab, boots this
-// johnnycode binary in teammate mode for the given team/member. The workdir argument controls where
-// the spawned process runs; passing "" falls back to the lead's current directory so the mailbox
-// path resolves identically. Worktree isolation is the expected use of a non-empty workdir.
-//
-// Output format matches the cmd line parsed by cmd/johnnycode/main.go's teammate-mode branch.
+
+
+
+
+
+
 func BuildTeammateCLI(teamName, memberName, workdir string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -157,8 +157,8 @@ func BuildTeammateCLI(teamName, memberName, workdir string) (string, error) {
 	), nil
 }
 
-// shellQuote wraps a value for safe inclusion in a /bin/sh -c argument. Single-quote escaping is
-// used because tmux send-keys and osascript `write text` both interpret the string through a shell.
+
+
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"

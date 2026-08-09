@@ -19,8 +19,8 @@ import (
 const anthropicStreamIdleTimeout = 5 * time.Minute
 
 func supportsAdaptiveThinking(model string) bool {
-	// claude-opus-4-6, claude-opus-4-7, claude-sonnet-4-6, etc.
-	// but NOT claude-sonnet-4-5 (4.5 uses enabled mode)
+	
+	
 	for _, family := range []string{"claude-opus-4-", "claude-sonnet-4-"} {
 		if strings.HasPrefix(model, family) {
 			rest := model[len(family):]
@@ -68,18 +68,18 @@ func (c *anthropicClient) SetMaxOutputTokens(tokens int) {
 	c.maxOutputTokens = tokens
 }
 
-// anthropicModelFetchTimeout bounds the auto-pull of model metadata so a slow
-// or unreachable endpoint never delays startup.
+
+
 const anthropicModelFetchTimeout = 3 * time.Second
 
-// FetchModelContextWindow asks the Anthropic-compatible /v1/models/{model}
-// endpoint for the model's max_input_tokens. It is best-effort: on any error
-// (non-anthropic endpoint, network failure, timeout, missing field) it returns
-// 0 and never panics or blocks beyond anthropicModelFetchTimeout. The caller
-// treats 0 as "unknown" and falls back to the next context-window layer.
+
+
+
+
+
 func (c *anthropicClient) FetchModelContextWindow(ctx context.Context) (window int) {
-	// Hard guard: this runs at startup, so a panic in the SDK or a malformed
-	// response must degrade silently rather than take the process down.
+	
+	
 	defer func() {
 		if recover() != nil {
 			window = 0
@@ -89,8 +89,8 @@ func (c *anthropicClient) FetchModelContextWindow(ctx context.Context) (window i
 	ctx, cancel := context.WithTimeout(ctx, anthropicModelFetchTimeout)
 	defer cancel()
 
-	// Best-effort startup call: disable retries so a flaky/failing endpoint
-	// fails fast within the timeout instead of triggering a retry storm.
+	
+	
 	info, err := c.client.Models.Get(ctx, c.model, anthropic.ModelGetParams{}, option.WithMaxRetries(0))
 	if err != nil || info == nil || info.MaxInputTokens <= 0 {
 		return 0
@@ -127,12 +127,12 @@ func (c *anthropicClient) Stream(ctx context.Context, conv *conversation.Manager
 		defer close(errs)
 
 		maxTokens := int64(c.maxOutputTokens)
-		// Anchor the prompt cache on the longest-stable prefix: the system
-		// prompt. Marked once here, plus once on the tool list and once on
-		// the tail of the final user message below — Anthropic caches up to
-		// each breakpoint and re-checks byte-identity on the next request.
-		// ContentReplacementState in package toolresult is what keeps the
-		// tool_result content past these breakpoints byte-stable.
+		
+		
+		
+		
+		
+		
 		params := anthropic.MessageNewParams{
 			Model:     c.model,
 			MaxTokens: maxTokens,
@@ -157,8 +157,8 @@ func (c *anthropicClient) Stream(ctx context.Context, conv *conversation.Manager
 			}
 		}
 		if len(sdkTools) > 0 {
-			// Tool schemas are stable across turns, so caching the entire
-			// tool block by marking the last one is essentially free.
+			
+			
 			if last := sdkTools[len(sdkTools)-1].OfTool; last != nil {
 				last.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			}
@@ -173,9 +173,9 @@ func (c *anthropicClient) Stream(ctx context.Context, conv *conversation.Manager
 		inThinking := false
 		var accMessage anthropic.Message
 
-		// Read SSE events in a separate goroutine so we can respect ctx cancellation
-		// and detect silent connection drops. The SDK's stream.Next() may block
-		// indefinitely if the underlying connection dies without FIN/RST.
+		
+		
+		
 		type sseResult struct {
 			hasNext bool
 		}
@@ -292,15 +292,15 @@ func (c *anthropicClient) Stream(ctx context.Context, conv *conversation.Manager
 	return events, errs
 }
 
-// markLastUserTailForCache attaches an ephemeral cache_control marker to the
-// last content block of the final user-role message. Anthropic caches the
-// prefix up to (and including) this block; subsequent requests with a
-// byte-identical prefix hit the cache. ContentReplacementState (package
-// toolresult) is what guarantees byte-stability for tool_result content
-// past this breakpoint.
-//
-// Mutates `messages` in place. No-op if there's no user message or the
-// final user message has no content blocks we can mark.
+
+
+
+
+
+
+
+
+
 func markLastUserTailForCache(messages []anthropic.MessageParam) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role != anthropic.MessageParamRoleUser {
@@ -366,7 +366,7 @@ func buildAnthropicMessages(messages []conversation.Message) []anthropic.Message
 				Content: blocks,
 			})
 		} else {
-			// Merge consecutive user text messages to maintain alternation.
+			
 			canMerge := false
 			if n := len(result); n > 0 {
 				prev := result[n-1]

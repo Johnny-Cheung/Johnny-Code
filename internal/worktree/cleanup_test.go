@@ -24,11 +24,11 @@ func TestIsEphemeralSlug(t *testing.T) {
 		{"bridge-abc", true},
 		{"bridge-abc_def-ghi", true},
 		{"job-mytemplate-12345678", true},
-		// Should NOT match
+		
 		{"my-feature", false},
 		{"agent-too-long", false},
-		{"agent-a123", false},     // too short
-		{"agent-aGGGGGGG", false}, // non-hex
+		{"agent-a123", false},     
+		{"agent-aGGGGGGG", false}, 
 		{"wf_short", false},
 	}
 	for _, tt := range tests {
@@ -47,8 +47,8 @@ func TestCleanupStaleAgentWorktrees(t *testing.T) {
 	repo := t.TempDir()
 	initTestRepo(t, repo)
 
-	// Add a fake remote so --not --remotes works (worktree HEAD is
-	// reachable from the remote, so rev-list returns empty)
+	
+	
 	bare := t.TempDir()
 	exec.Command("git", "init", "--bare", bare).Run()
 	exec.Command("git", "-C", repo, "remote", "add", "origin", bare).Run()
@@ -58,24 +58,24 @@ func TestCleanupStaleAgentWorktrees(t *testing.T) {
 	defer os.Chdir(origDir)
 	os.Chdir(repo)
 
-	// Create an ephemeral worktree
+	
 	result, err := CreateAgentWorktree(context.Background(), "agent-aaaaaaaa")
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	// Set mtime to 25 hours ago
+	
 	past := time.Now().Add(-25 * time.Hour)
 	os.Chtimes(result.WorktreePath, past, past)
 
-	// Cleanup with cutoff = 24 hours ago should remove it
+	
 	cutoff := time.Now().Add(-24 * time.Hour)
 	removed := CleanupStaleAgentWorktrees(context.Background(), cutoff)
 	if removed != 1 {
 		t.Fatalf("expected 1 removed, got %d", removed)
 	}
 
-	// Directory should be gone
+	
 	if _, err := os.Stat(result.WorktreePath); !os.IsNotExist(err) {
 		t.Fatal("stale worktree should be removed")
 	}
@@ -93,18 +93,18 @@ func TestCleanupStaleAgentWorktrees_SkipsUserNamed(t *testing.T) {
 	defer os.Chdir(origDir)
 	os.Chdir(repo)
 
-	// Create a user-named worktree (not ephemeral)
+	
 	_, err := getOrCreateWorktree(context.Background(), repo, "my-feature")
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 	wtPath := WorktreePathFor(repo, "my-feature")
 
-	// Set mtime to past
+	
 	past := time.Now().Add(-48 * time.Hour)
 	os.Chtimes(wtPath, past, past)
 
-	// Cleanup should NOT remove user-named worktree
+	
 	cutoff := time.Now().Add(-24 * time.Hour)
 	removed := CleanupStaleAgentWorktrees(context.Background(), cutoff)
 	if removed != 0 {
@@ -133,15 +133,15 @@ func TestCleanupStaleAgentWorktrees_SkipsDirtyWorktree(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	// Make it dirty
+	
 	os.WriteFile(filepath.Join(result.WorktreePath, "dirty.txt"), []byte("dirty"), 0o644)
 	exec.Command("git", "-C", result.WorktreePath, "add", ".").Run()
 
-	// Set mtime to past
+	
 	past := time.Now().Add(-48 * time.Hour)
 	os.Chtimes(result.WorktreePath, past, past)
 
-	// Cleanup should skip the dirty worktree
+	
 	cutoff := time.Now().Add(-24 * time.Hour)
 	removed := CleanupStaleAgentWorktrees(context.Background(), cutoff)
 	if removed != 0 {

@@ -10,10 +10,10 @@ import (
 	"johnnycode/internal/session"
 )
 
-// stubSummaryClient implements llm.Client and streams a fixed <summary> block,
-// so autoCompact's summarization step is deterministic in tests. It records the
-// prompt it was asked to summarize so tests can assert that only the prefix —
-// not the kept tail — was summarized.
+
+
+
+
 type stubSummaryClient struct {
 	summary      string
 	lastPrompt   string
@@ -35,9 +35,134 @@ func (c *stubSummaryClient) Stream(ctx context.Context, conv *conversation.Manag
 	return ch, errCh
 }
 
-// Layer 1 (offload + snip) tests have moved to internal/toolresult/budget_test.go
-// where the implementation now lives. compact only owns Layer 2 (autoCompact)
-// plus the formatCompactSummary helper, so this file covers those.
+
+
+
+type failThenSucceedSummaryClient struct {
+	failures int 
+	summary  string
+	prompts  []string
+}
+
+func (c *failThenSucceedSummaryClient) Stream(ctx context.Context, conv *conversation.Manager, tools []map[string]any) (<-chan llm.StreamEvent, <-chan error) {
+	ch := make(chan llm.StreamEvent, 4)
+	errCh := make(chan error, 1)
+	if msgs := conv.GetMessages(); len(msgs) > 0 {
+		c.prompts = append(c.prompts, msgs[len(msgs)-1].Content)
+	}
+	if c.failures > 0 {
+		c.failures--
+		errCh <- &llm.ContextTooLongError{Message: "prompt is too long"}
+		close(errCh)
+		close(ch)
+		return ch, errCh
+	}
+	ch <- llm.TextDelta{Text: "<summary>" + c.summary + "</summary>"}
+	ch <- llm.StreamEnd{StopReason: "end_turn"}
+	close(ch)
+	errCh <- nil
+	close(errCh)
+	return ch, errCh
+}
+
+
+
+
+
+
+func TestAutoCompactRetriesWithSmallerPrefix(t *testing.T) {
+	conv := conversation.NewManager()
+	
+	for i := 0; i < 6; i++ {
+		conv.AddUserMessage("OLD-PREFIX " + bigMsg(3000))
+		conv.AddAssistantMessage("OLD-REPLY " + bigMsg(3000))
+	}
+	recent := []string{"RECENT-A unique-marker-A", "RECENT-B unique-marker-B"}
+	conv.AddUserMessage(recent[0])
+	conv.AddAssistantMessage(recent[1])
+
+	client := &failThenSucceedSummaryClient{failures: 1, summary: "RETRY-SUMMARY"}
+	msg, err := autoCompact(context.Background(), conv, client, "", "", 200000, nil, nil)
+	if err != nil {
+		t.Fatalf("autoCompact error: %v", err)
+	}
+	if msg == "" {
+		t.Fatalf("expected a compaction message after successful retry, got empty")
+	}
+	if len(client.prompts) != 2 {
+		t.Fatalf("expected exactly 2 summarizer calls (1 failed + 1 retry), got %d", len(client.prompts))
+	}
+	if len(client.prompts[1]) >= len(client.prompts[0]) {
+		t.Errorf("retry prompt (%d chars) must be strictly shorter than the first attempt (%d chars) — the retry must shrink the summarized range",
+			len(client.prompts[1]), len(client.prompts[0]))
+	}
+	
+	
+	var sawSummary bool
+	for _, m := range conv.GetMessages() {
+		if strings.Contains(m.Content, "RETRY-SUMMARY") {
+			sawSummary = true
+		}
+	}
+	if !sawSummary {
+		t.Errorf("retry summary not present after compaction")
+	}
+	for _, r := range recent {
+		if !containsMsg(conv.GetMessages(), r) {
+			t.Errorf("recent message %q not preserved verbatim after retry compaction", r)
+		}
+	}
+}
+
+
+
+
+func TestAutoCompactAllRetriesFailKeepsRecentTail(t *testing.T) {
+	conv := conversation.NewManager()
+	for i := 0; i < 6; i++ {
+		conv.AddUserMessage("OLD-PREFIX " + bigMsg(3000))
+		conv.AddAssistantMessage("OLD-REPLY " + bigMsg(3000))
+	}
+	recent := []string{"RECENT-A unique-marker-A", "RECENT-B unique-marker-B"}
+	conv.AddUserMessage(recent[0])
+	conv.AddAssistantMessage(recent[1])
+
+	client := &failThenSucceedSummaryClient{failures: 3, summary: "SHOULD-NOT-APPEAR"}
+	msg, err := autoCompact(context.Background(), conv, client, "", "", 200000, nil, nil)
+	if err != nil {
+		t.Fatalf("autoCompact error: %v", err)
+	}
+	if msg == "" {
+		t.Fatalf("expected a compaction message even when all retries fail, got empty")
+	}
+	if len(client.prompts) != 3 {
+		t.Fatalf("expected exactly 3 summarizer calls (all failing), got %d", len(client.prompts))
+	}
+	var sawNotice, sawSummary bool
+	for _, m := range conv.GetMessages() {
+		if strings.Contains(m.Content, "已丢弃") {
+			sawNotice = true
+		}
+		if strings.Contains(m.Content, "SHOULD-NOT-APPEAR") {
+			sawSummary = true
+		}
+	}
+	if !sawNotice {
+		t.Errorf("drop notice not present after all retries failed")
+	}
+	if sawSummary {
+		t.Errorf("failed summarizer output must never appear in the conversation")
+	}
+	for _, r := range recent {
+		if !containsMsg(conv.GetMessages(), r) {
+			t.Errorf("recent message %q not preserved verbatim after failed compaction", r)
+		}
+	}
+}
+
+
+
+
 
 func TestFormatCompactSummary(t *testing.T) {
 	cases := []struct {
@@ -76,7 +201,7 @@ func TestFormatCompactSummary(t *testing.T) {
 	}
 }
 
-// EstimateTokens covers all content sources without crashing on empty.
+
 func TestEstimateTokensZeroAndPopulated(t *testing.T) {
 	if got := EstimateTokens(nil); got != 0 {
 		t.Errorf("empty input should be 0 tokens, got %d", got)
@@ -89,9 +214,9 @@ func TestEstimateTokensZeroAndPopulated(t *testing.T) {
 	}
 }
 
-// BaselineFromUsage must sum all four real-token counters so the anchor reflects
-// the true prompt+output size even when cache hits dominate (input small,
-// cache_read large).
+
+
+
 func TestBaselineFromUsage(t *testing.T) {
 	u := llm.UsageInfo{
 		InputTokens:         100,
@@ -102,45 +227,45 @@ func TestBaselineFromUsage(t *testing.T) {
 	if got, want := BaselineFromUsage(u), 5340; got != want {
 		t.Errorf("BaselineFromUsage = %d, want %d", got, want)
 	}
-	// Zero usage (compat endpoint that reports nothing) → zero baseline so the
-	// caller knows not to adopt it as an anchor.
+	
+	
 	if got := BaselineFromUsage(llm.UsageInfo{}); got != 0 {
 		t.Errorf("empty usage baseline = %d, want 0", got)
 	}
 }
 
-// ComputeUsedTokens: with no anchor (cold start / first turn) it must fall back
-// to a full character estimate over every message, matching EstimateTokens.
+
+
 func TestComputeUsedTokensColdStartFallback(t *testing.T) {
 	conv := conversation.NewManager()
 	conv.AddUserMessage(strings.Repeat("x", 700))
 	conv.AddAssistantMessage(strings.Repeat("y", 700))
 	msgs := conv.GetMessages()
 
-	got := ComputeUsedTokens(msgs, UsageAnchor{}) // HasUsage == false
+	got := ComputeUsedTokens(msgs, UsageAnchor{}) 
 	want := EstimateTokens(msgs)
 	if got != want {
 		t.Errorf("cold-start ComputeUsedTokens = %d, want full estimate %d", got, want)
 	}
 }
 
-// ComputeUsedTokens: with an anchor it must return baseline + an estimate of
-// ONLY the messages appended past anchorCount — not a re-estimate of the whole
-// transcript. This is the cache-hit win: the real input was far smaller than the
-// character count of the anchored prefix.
+
+
+
+
 func TestComputeUsedTokensWithAnchorIncremental(t *testing.T) {
 	conv := conversation.NewManager()
-	// 3 large anchored messages: their real token cost is captured by baseline,
-	// NOT by their character count.
+	
+	
 	conv.AddUserMessage(strings.Repeat("x", 7000))
 	conv.AddAssistantMessage(strings.Repeat("y", 7000))
 	conv.AddUserMessage(strings.Repeat("z", 7000))
 	anchorCount := conv.Len()
-	// One small message appended after the anchor.
+	
 	conv.AddAssistantMessage(strings.Repeat("w", 350))
 	msgs := conv.GetMessages()
 
-	const baseline = 1500 // pretend the real API said the prefix cost 1500 tokens
+	const baseline = 1500 
 	anchor := UsageAnchor{BaselineTokens: baseline, AnchorCount: anchorCount, HasUsage: true}
 
 	got := ComputeUsedTokens(msgs, anchor)
@@ -148,16 +273,16 @@ func TestComputeUsedTokensWithAnchorIncremental(t *testing.T) {
 	if got != baseline+wantIncrement {
 		t.Errorf("anchored ComputeUsedTokens = %d, want baseline+increment %d", got, baseline+wantIncrement)
 	}
-	// Sanity: the incremental result must be far below a full character estimate
-	// of the (cache-heavy) transcript, proving we didn't re-estimate the prefix.
+	
+	
 	if full := EstimateTokens(msgs); got >= full {
 		t.Errorf("anchored result %d should be below full estimate %d", got, full)
 	}
 }
 
-// ComputeUsedTokens: a stale anchor (AnchorCount past the current message count,
-// e.g. after a compaction rewound the transcript) must not panic and should fall
-// back to a full estimate.
+
+
+
 func TestComputeUsedTokensStaleAnchorClamp(t *testing.T) {
 	conv := conversation.NewManager()
 	conv.AddUserMessage("hi")
@@ -170,14 +295,14 @@ func TestComputeUsedTokensStaleAnchorClamp(t *testing.T) {
 	}
 }
 
-// bigMsg returns a message whose content alone estimates to roughly `tokens`
-// tokens (recoveryCharsPerToken ≈ 3.5 chars/token), so tests can drive the
-// keepRecentTokens budget walk deterministically.
+
+
+
 func bigMsg(tokens int) string {
 	return strings.Repeat("x", tokens*4)
 }
 
-// containsMsg reports whether any message in msgs has content equal to want.
+
 func containsMsg(msgs []conversation.Message, want string) bool {
 	for _, m := range msgs {
 		if m.Content == want {
@@ -187,18 +312,18 @@ func containsMsg(msgs []conversation.Message, want string) bool {
 	return false
 }
 
-// autoCompact must keep the recent tail verbatim, not replace it with the
-// summary. We build a transcript whose older prefix is large enough to clear
-// keepStart > 0 and whose tail carries distinctive content; after compaction
-// the tail content must still be present (not only the summary).
+
+
+
+
 func TestAutoCompactKeepsRecentVerbatim(t *testing.T) {
 	conv := conversation.NewManager()
-	// Older prefix: several large messages that should be summarized away.
+	
 	for i := 0; i < 6; i++ {
 		conv.AddUserMessage("OLD-PREFIX " + bigMsg(3000))
 		conv.AddAssistantMessage("OLD-REPLY " + bigMsg(3000))
 	}
-	// Recent tail: distinctive small messages we expect to survive verbatim.
+	
 	recent := []string{"RECENT-A unique-marker-A", "RECENT-B unique-marker-B"}
 	conv.AddUserMessage(recent[0])
 	conv.AddAssistantMessage(recent[1])
@@ -213,7 +338,7 @@ func TestAutoCompactKeepsRecentVerbatim(t *testing.T) {
 	}
 	out := conv.GetMessages()
 
-	// Summary must be present.
+	
 	var sawSummary bool
 	for _, m := range out {
 		if strings.Contains(m.Content, "THE SUMMARY") {
@@ -223,7 +348,7 @@ func TestAutoCompactKeepsRecentVerbatim(t *testing.T) {
 	if !sawSummary {
 		t.Errorf("summary not present after compaction")
 	}
-	// Recent tail must be preserved verbatim, not collapsed into the summary.
+	
 	for _, r := range recent {
 		if !containsMsg(out, r) {
 			t.Errorf("recent message %q not preserved verbatim after compaction; messages=%v", r, msgContents(out))
@@ -231,10 +356,10 @@ func TestAutoCompactKeepsRecentVerbatim(t *testing.T) {
 	}
 }
 
-// When a sessionID + workDir are wired, autoCompact must persist a
-// compact_boundary record into the session log: the inlined summary plus the
-// kept tail (role+content). This is the on-disk half of the resume round-trip —
-// session.FindLastCompactBoundary then rebuilds the compacted state from it.
+
+
+
+
 func TestAutoCompactPersistsBoundary(t *testing.T) {
 	conv := conversation.NewManager()
 	for i := 0; i < 6; i++ {
@@ -256,8 +381,8 @@ func TestAutoCompactPersistsBoundary(t *testing.T) {
 		t.Fatalf("expected a compaction message, got empty (degraded to no-op)")
 	}
 
-	// Read the session log back and assert the boundary was written with the
-	// summary + the kept tail inlined.
+	
+	
 	msgs := session.LoadSession(workDir, sid)
 	boundary, after, ok := session.FindLastCompactBoundary(msgs)
 	if !ok {
@@ -269,7 +394,7 @@ func TestAutoCompactPersistsBoundary(t *testing.T) {
 	if len(after) != 0 {
 		t.Fatalf("no messages should follow a freshly written boundary, got %d", len(after))
 	}
-	// The kept tail must be inlined verbatim into the boundary.
+	
 	var sawTailUser, sawTailAssistant bool
 	for _, k := range boundary.Keep {
 		if k.Content == "RECENT-TAIL-USER unique-marker-A" {
@@ -282,11 +407,11 @@ func TestAutoCompactPersistsBoundary(t *testing.T) {
 	if !sawTailUser || !sawTailAssistant {
 		t.Fatalf("kept tail not inlined into boundary: %+v", boundary.Keep)
 	}
-	// The boundary's kept tail must exactly equal the conversation's tail that
-	// autoCompact preserved verbatim (same role+content, in order). The summary
-	// stored on disk is the pure summary text, and after the in-memory rebuild
-	// the conversation is [summary user msg] + [continuation ack] + keep, so the
-	// kept tail lives at the end of the rebuilt conversation.
+	
+	
+	
+	
+	
 	rebuilt := conv.GetMessages()
 	tail := rebuilt[len(rebuilt)-len(boundary.Keep):]
 	for i, k := range boundary.Keep {
@@ -296,8 +421,8 @@ func TestAutoCompactPersistsBoundary(t *testing.T) {
 	}
 }
 
-// Without a sessionID/workDir, autoCompact must NOT touch any session log
-// (one-shot callers, tests, sub-agents) — behaviour stays as before.
+
+
 func TestAutoCompactNoSessionNoBoundary(t *testing.T) {
 	conv := conversation.NewManager()
 	for i := 0; i < 6; i++ {
@@ -309,19 +434,19 @@ func TestAutoCompactNoSessionNoBoundary(t *testing.T) {
 
 	workDir := t.TempDir()
 	client := &stubSummaryClient{summary: "S"}
-	// Empty sessionID → no persistence.
+	
 	if _, err := autoCompact(context.Background(), conv, client, workDir, "", 200000, nil, nil); err != nil {
 		t.Fatalf("autoCompact error: %v", err)
 	}
-	// No session file should have been created under any id.
+	
 	msgs := session.LoadSession(workDir, "anything")
 	if len(msgs) != 0 {
 		t.Fatalf("expected no session log written when sessionID empty, got %d", len(msgs))
 	}
 }
 
-// autoCompact must summarize only messages[:keepStart]; the kept tail must NOT
-// appear in the prompt handed to the summarizer.
+
+
 func TestAutoCompactSummaryOnlyCoversPrefix(t *testing.T) {
 	conv := conversation.NewManager()
 	for i := 0; i < 6; i++ {
@@ -346,18 +471,18 @@ func TestAutoCompactSummaryOnlyCoversPrefix(t *testing.T) {
 	}
 }
 
-// computeKeepStartIndex must never split a tool_use ↔ tool_result pair: if the
-// budget boundary lands on the user message carrying tool_results, it must move
-// back to include the assistant tool_use message that produced them.
+
+
+
 func TestComputeKeepStartIndexDoesNotSplitToolPair(t *testing.T) {
 	conv := conversation.NewManager()
-	// Large prefix so keepStart > 0.
+	
 	for i := 0; i < 8; i++ {
 		conv.AddUserMessage(bigMsg(3000))
 		conv.AddAssistantMessage(bigMsg(3000))
 	}
-	// A tool_use / tool_result pair near the tail. The tool_result is a big
-	// message so the budget boundary is likely to land right on it.
+	
+	
 	conv.AddToolUseMessage("calling tool", "tu-1", "ReadFile", map[string]any{"path": "/x"})
 	conv.AddToolResultMessage("tu-1", bigMsg(9000), false)
 	msgs := conv.GetMessages()
@@ -366,13 +491,13 @@ func TestComputeKeepStartIndexDoesNotSplitToolPair(t *testing.T) {
 	if keepStart <= 0 || keepStart >= len(msgs) {
 		t.Fatalf("keepStart=%d out of expected range (0, %d)", keepStart, len(msgs))
 	}
-	// The boundary message must not be a lone tool_result whose matching
-	// tool_use was left in the summarized prefix.
+	
+	
 	if hasToolResults(msgs[keepStart]) {
 		t.Fatalf("keepStart landed on a tool_result message (orphaned); keepStart=%d", keepStart)
 	}
-	// Verify the pair is whole inside the kept tail: walk it and ensure every
-	// tool_result has a preceding tool_use within the kept slice.
+	
+	
 	keep := msgs[keepStart:]
 	openUses := map[string]bool{}
 	for _, m := range keep {
@@ -387,9 +512,9 @@ func TestComputeKeepStartIndexDoesNotSplitToolPair(t *testing.T) {
 	}
 }
 
-// When the conversation is too short to have any summarizable prefix (keepStart
-// <= 0), autoCompact must degrade to a no-op: no summarization, conversation
-// left untouched.
+
+
+
 func TestAutoCompactDegradesWhenTooFewMessages(t *testing.T) {
 	conv := conversation.NewManager()
 	conv.AddUserMessage("just one")

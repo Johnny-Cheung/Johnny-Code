@@ -149,7 +149,7 @@ func TestScanMemoryFilesContextCancel(t *testing.T) {
 	if err != nil {
 		t.Errorf("cancellation should not produce error, got: %v", err)
 	}
-	_ = got // size depends on race with cancel; we just verify it does not panic
+	_ = got 
 }
 
 func writeMD(t *testing.T, path, content string) {

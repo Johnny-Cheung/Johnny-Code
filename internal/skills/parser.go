@@ -9,13 +9,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// parseFrontmatterOnly does phase-1 loading: read just enough of the skill
-// file to extract the SkillMeta, leave PromptBody empty. Cheap enough to run
-// for hundreds of skills at startup.
-//
-// Accepts both layouts:
-//   - <dir>/skill.yaml (+ optional prompt.md, ignored at phase 1)
-//   - <dir>/SKILL.md with `---` YAML frontmatter
+
+
+
+
+
+
+
 func parseFrontmatterOnly(dir string) (*Skill, error) {
 	yamlPath := filepath.Join(dir, "skill.yaml")
 	if data, err := os.ReadFile(yamlPath); err == nil {
@@ -47,10 +47,10 @@ func parseFrontmatterOnly(dir string) (*Skill, error) {
 	}, nil
 }
 
-// loadSkillBody reads the body for an already-frontmatter-parsed skill.
-// Called by Catalog.GetFull each time the skill is invoked (hot reload).
-// On any read/parse error, leaves the existing PromptBody untouched and
-// returns the error so the caller can fall back to the cached version.
+
+
+
+
 func loadSkillBody(skill *Skill) error {
 	yamlPath := filepath.Join(skill.SourceDir, "skill.yaml")
 	if _, err := os.Stat(yamlPath); err == nil {
@@ -75,8 +75,8 @@ func loadSkillBody(skill *Skill) error {
 	return nil
 }
 
-// loadSkillFromBytes parses a skill from in-memory bytes (used for go:embed
-// builtins where there's no on-disk directory to re-read).
+
+
 func loadSkillFromBytes(name string, mdBytes []byte) (*Skill, error) {
 	meta, body := splitFrontmatter(string(mdBytes))
 	if meta.Name == "" {
@@ -86,14 +86,14 @@ func loadSkillFromBytes(name string, mdBytes []byte) (*Skill, error) {
 	return &Skill{
 		Meta:        meta,
 		PromptBody:  body,
-		SourceDir:   "", // embedded — no source dir
+		SourceDir:   "", 
 		IsDirectory: false,
 		BodyLoaded:  true,
 	}, nil
 }
 
-// splitFrontmatter separates the YAML frontmatter from the markdown body.
-// Returns zero-value meta if no `---` frontmatter is present.
+
+
 func splitFrontmatter(content string) (SkillMeta, string) {
 	var meta SkillMeta
 	body := content
@@ -109,12 +109,12 @@ func splitFrontmatter(content string) (SkillMeta, string) {
 	return meta, body
 }
 
-// applyMetaDefaults fills in name/description fallbacks the way the legacy
-// parseSkillMD did:
-//   - missing name → derive from dir basename (lower + kebab)
-//   - missing description → first non-blank, non-heading body line
-//   - missing Mode → "inline"
-//   - missing ForkContext → "none" (only relevant when Mode == "fork")
+
+
+
+
+
+
 func applyMetaDefaults(meta *SkillMeta, dirOrName, body string) {
 	if meta.Name == "" {
 		base := filepath.Base(dirOrName)

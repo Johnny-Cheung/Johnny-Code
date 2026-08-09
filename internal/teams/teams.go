@@ -35,8 +35,8 @@ type Member struct {
 	Conv     *conversation.Manager
 	Active   bool
 	Cancel   context.CancelFunc
-	// PaneID is the backend-specific handle assigned by tmux/iTerm
-	// spawn (e.g. window or tab name). Empty for in-process members.
+	
+	
 	PaneID   string
 	Progress *TeammateProgress
 }
@@ -99,9 +99,9 @@ func (t *Team) StopMember(name string) {
 	if !ok {
 		return
 	}
-	// External backends (tmux/iTerm) own a real OS pane that must be
-	// torn down before clearing the local handle. In-process members
-	// just need the goroutine cancelled.
+	
+	
+	
 	if member.PaneID != "" {
 		switch t.Mode {
 		case ModeTmux:
@@ -153,10 +153,10 @@ func (tm *TeamManager) CreateTeam(name string, mode TeamMode) *Team {
 	return team
 }
 
-// CreateTeamWith registers an externally-constructed Team. Worker
-// processes spawned by tmux/iTerm build a Team locally (pointing at
-// the same mailbox dir as the lead's) and use this to expose it to
-// SendMessage in the same process.
+
+
+
+
 func (tm *TeamManager) CreateTeamWith(team *Team) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()

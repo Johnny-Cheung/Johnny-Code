@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// Recovery limits for the attachment block that gets appended to the
-// summary message. Compact wipes the working conversation; without these
-// snapshots the model would forget which files it just read and which
-// skill SOPs it was operating under.
+
+
+
+
 const (
 	RecoveryFileLimit      = 5
 	RecoveryTokensPerFile  = 5_000
@@ -20,35 +20,35 @@ const (
 	recoveryCharsPerToken  = 3.5
 )
 
-// FileReadRecord snapshots the bytes a ReadFile call returned to the
-// model. Re-injected post-compact so the model still has the content it
-// was reasoning about when the threshold tripped.
+
+
+
 type FileReadRecord struct {
 	Path      string
 	Content   string
 	Timestamp time.Time
 }
 
-// SkillInvocationRecord captures the SOP body that was attached when a
-// skill was invoked. After compaction the same definition gets stitched
-// back in so behaviour stays consistent across the boundary.
+
+
+
 type SkillInvocationRecord struct {
 	Name      string
 	Body      string
 	Timestamp time.Time
 }
 
-// RecoveryState tracks the per-agent data that needs to survive
-// compaction. The struct is safe for concurrent recording — tool
-// callbacks can fire from parallel goroutines in the streaming
-// executor.
+
+
+
+
 type RecoveryState struct {
 	mu     sync.Mutex
 	files  map[string]FileReadRecord
 	skills map[string]SkillInvocationRecord
 }
 
-// NewRecoveryState returns an empty state ready for recording.
+
 func NewRecoveryState() *RecoveryState {
 	return &RecoveryState{
 		files:  map[string]FileReadRecord{},
@@ -56,8 +56,8 @@ func NewRecoveryState() *RecoveryState {
 	}
 }
 
-// RecordFileRead overwrites any prior record for the same path so the
-// most recent snapshot wins. Safe to call on a nil receiver.
+
+
 func (s *RecoveryState) RecordFileRead(path, content string) {
 	if s == nil || path == "" {
 		return
@@ -67,8 +67,8 @@ func (s *RecoveryState) RecordFileRead(path, content string) {
 	s.mu.Unlock()
 }
 
-// RecordSkillInvocation overwrites any prior record for the same skill
-// name. Safe to call on a nil receiver.
+
+
 func (s *RecoveryState) RecordSkillInvocation(name, body string) {
 	if s == nil || name == "" {
 		return
@@ -78,7 +78,7 @@ func (s *RecoveryState) RecordSkillInvocation(name, body string) {
 	s.mu.Unlock()
 }
 
-// snapshotFiles returns at most `limit` records, newest first.
+
 func (s *RecoveryState) snapshotFiles(limit int) []FileReadRecord {
 	if s == nil {
 		return nil
@@ -96,7 +96,7 @@ func (s *RecoveryState) snapshotFiles(limit int) []FileReadRecord {
 	return out
 }
 
-// snapshotSkills returns every recorded skill, newest first.
+
 func (s *RecoveryState) snapshotSkills() []SkillInvocationRecord {
 	if s == nil {
 		return nil
@@ -111,11 +111,11 @@ func (s *RecoveryState) snapshotSkills() []SkillInvocationRecord {
 	return out
 }
 
-// BuildRecoveryAttachment renders the post-compact recovery sections
-// (recently read files, skill definitions, tool listing, plus a closing
-// note about not guessing from the summary) into a single block of text.
-// Returns "" when there is nothing worth emitting so the caller can keep
-// the summary message clean.
+
+
+
+
+
 func BuildRecoveryAttachment(state *RecoveryState, toolSchemas []map[string]any) string {
 	var sb strings.Builder
 
@@ -182,8 +182,8 @@ func BuildRecoveryAttachment(state *RecoveryState, toolSchemas []map[string]any)
 	return sb.String()
 }
 
-// approxTokens uses the same chars-per-token heuristic as EstimateTokens
-// so budgeting stays consistent across the package.
+
+
 func approxTokens(s string) int {
 	if s == "" {
 		return 0
@@ -191,9 +191,9 @@ func approxTokens(s string) int {
 	return int(float64(len(s)) / recoveryCharsPerToken)
 }
 
-// truncateByTokens cuts s at the byte offset that puts it just under the
-// token budget and appends a marker so the model can see content was
-// clipped.
+
+
+
 func truncateByTokens(s string, tokenBudget int) string {
 	if tokenBudget <= 0 || s == "" {
 		return s
@@ -208,8 +208,8 @@ func truncateByTokens(s string, tokenBudget int) string {
 	return s[:maxChars] + "\n… (content truncated)"
 }
 
-// firstLine returns the first non-empty line of s, trimmed. Used to keep
-// the tool listing compact when descriptions are multi-paragraph.
+
+
 func firstLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		trimmed := strings.TrimSpace(line)

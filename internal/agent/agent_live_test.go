@@ -17,18 +17,22 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// Live integration tests that hit the real LLM API.
-// Run with: go test ./internal/agent/ -run TestLive -v -count=1
-// Requires config.yaml in the project root with a valid API key.
+
+
+
 
 func loadRealConfig(t *testing.T) *config.ProviderConfig {
 	t.Helper()
 	wd, _ := os.Getwd()
-	for wd != "/" {
+	for {
 		if _, err := os.Stat(filepath.Join(wd, "config.yaml")); err == nil {
 			break
 		}
-		wd = filepath.Dir(wd)
+		parent := filepath.Dir(wd)
+		if parent == wd { // reached the filesystem root (works on both / and C:\)
+			break
+		}
+		wd = parent
 	}
 	cfg, err := config.LoadConfig(filepath.Join(wd, "config.yaml"))
 	if err != nil {
@@ -47,11 +51,15 @@ func loadRealConfig(t *testing.T) *config.ProviderConfig {
 func loadRealSkills(t *testing.T) (*skills.Catalog, string) {
 	t.Helper()
 	wd, _ := os.Getwd()
-	for wd != "/" {
+	for {
 		if _, err := os.Stat(filepath.Join(wd, ".johnnycode", "skills")); err == nil {
 			break
 		}
-		wd = filepath.Dir(wd)
+		parent := filepath.Dir(wd)
+		if parent == wd { // reached the filesystem root (works on both / and C:\)
+			break
+		}
+		wd = parent
 	}
 	skillsDir := filepath.Join(wd, ".johnnycode", "skills")
 	catalog, err := skills.LoadFromDirectory(skillsDir)
@@ -61,8 +69,8 @@ func loadRealSkills(t *testing.T) (*skills.Catalog, string) {
 	return catalog, skillsDir
 }
 
-// liveRound sends a user message, runs the agent, and returns the text + all events.
-// It auto-approves all tool permission requests.
+
+
 func liveRound(t *testing.T, ag *Agent, conv *conversation.Manager, userMsg string) (string, []AgentEvent) {
 	t.Helper()
 	t.Logf(">>> USER: %s", truncate(userMsg, 200))
@@ -85,7 +93,7 @@ func liveRound(t *testing.T, ag *Agent, conv *conversation.Manager, userMsg stri
 		case StreamText:
 			textParts = append(textParts, e.Text)
 		case ThinkingText:
-			// skip logging thinking to reduce noise
+			
 		case ToolUseEvent:
 			if e.Args != nil {
 				t.Logf("    [TOOL CALL] %s(%s)", e.ToolName, truncateArgs(e.Args))
@@ -152,18 +160,18 @@ func TestLiveFrontendDesignSkill(t *testing.T) {
 	ag.WorkDir = workDir
 	conv := conversation.NewManager()
 
-	// Round 1: invoke the skill with a specific and direct request
+	
 	skillPrompt := skill.PromptBody + "\n\n## User Request\n\nCreate a login page with email and password fields. " +
 		"Use modern CSS, responsive design, and include aria-label attributes for accessibility. " +
 		"Save it to " + filepath.Join(workDir, "login.html") + ". " +
 		"Write the file directly."
 	text1, _ := liveRound(t, ag, conv, skillPrompt)
 
-	// The agent might ask questions or go straight to building.
-	// If it asks questions, we respond. If it already built something, great.
+	
+	
 	loginFile := filepath.Join(workDir, "login.html")
 	if _, err := os.Stat(loginFile); os.IsNotExist(err) {
-		// Agent probably asked a question or needs more info — respond
+		
 		if strings.Contains(strings.ToLower(text1), "?") || !fileExistsInDir(workDir) {
 			text2, _ := liveRound(t, ag, conv,
 				"Yes, please create a simple clean login page. Save it to "+loginFile+". Use modern CSS, make it responsive, include aria labels for accessibility.")
@@ -171,9 +179,9 @@ func TestLiveFrontendDesignSkill(t *testing.T) {
 		}
 	}
 
-	// Check if a third round is needed
+	
 	if _, err := os.Stat(loginFile); os.IsNotExist(err) {
-		// Maybe agent wrote to a different filename, check workDir
+		
 		files := listFiles(workDir)
 		if len(files) == 0 {
 			text3, _ := liveRound(t, ag, conv,
@@ -184,7 +192,7 @@ func TestLiveFrontendDesignSkill(t *testing.T) {
 		}
 	}
 
-	// Final verification
+	
 	files := listFiles(workDir)
 	t.Logf("Files in workDir: %v", files)
 
@@ -192,7 +200,7 @@ func TestLiveFrontendDesignSkill(t *testing.T) {
 		t.Fatal("Agent did not create any files")
 	}
 
-	// Find and check the HTML file
+	
 	var htmlContent string
 	for _, f := range files {
 		if strings.HasSuffix(f, ".html") {
@@ -209,7 +217,7 @@ func TestLiveFrontendDesignSkill(t *testing.T) {
 		t.Fatal("No HTML file was created by the agent")
 	}
 
-	// Content quality checks
+	
 	checks := map[string]string{
 		"<html":     "valid HTML",
 		"<form":     "has a form",
@@ -232,7 +240,7 @@ func TestLiveFrontendDesignSkill(t *testing.T) {
 		t.Errorf("Too few content checks passed (%d/%d), output quality too low", passed, len(checks))
 	}
 
-	// Log conversation summary
+	
 	msgs := conv.GetMessages()
 	t.Logf("\n=== Conversation Summary (%d messages) ===", len(msgs))
 	for i, m := range msgs {
@@ -261,7 +269,7 @@ func TestLiveSkillCreatorOutputPath(t *testing.T) {
 		t.Skip("skill-creator skill not installed")
 	}
 
-	// Use a temp dir to simulate a project with .johnnycode/skills/
+	
 	workDir := t.TempDir()
 	testSkillsDir := filepath.Join(workDir, ".johnnycode", "skills")
 	os.MkdirAll(testSkillsDir, 0o755)
@@ -277,7 +285,7 @@ func TestLiveSkillCreatorOutputPath(t *testing.T) {
 	ag.WorkDir = workDir
 	conv := conversation.NewManager()
 
-	// Round 1: ask to create a simple skill
+	
 	prompt := skill.PromptBody + "\n\n## User Request\n\n" +
 		"Create a simple skill called 'hello-world' that greets the user. " +
 		"Just write the SKILL.md file directly, no evals needed. " +
@@ -287,7 +295,7 @@ func TestLiveSkillCreatorOutputPath(t *testing.T) {
 	expectedDir := filepath.Join(testSkillsDir, "hello-world")
 	expectedFile := filepath.Join(expectedDir, "SKILL.md")
 
-	// Agent might ask questions first
+	
 	if _, err := os.Stat(expectedFile); os.IsNotExist(err) {
 		liveRound(t, ag, conv,
 			"Just create a minimal SKILL.md with frontmatter (name: hello-world, description: greet the user) "+
@@ -295,15 +303,15 @@ func TestLiveSkillCreatorOutputPath(t *testing.T) {
 				"Write it to "+expectedFile+". No tests, no evals, just the file.")
 	}
 
-	// Maybe one more nudge
+	
 	if _, err := os.Stat(expectedFile); os.IsNotExist(err) {
 		liveRound(t, ag, conv,
 			"Please write the file now to "+expectedFile)
 	}
 
-	// Verify the skill was created in the right place
+	
 	if _, err := os.Stat(expectedFile); os.IsNotExist(err) {
-		// Check if it was created somewhere else
+		
 		allFiles := listFilesRecursive(workDir)
 		t.Logf("All files in workDir: %v", allFiles)
 
@@ -322,7 +330,7 @@ func TestLiveSkillCreatorOutputPath(t *testing.T) {
 
 	t.Logf("Skill file created at correct path: %s", expectedFile)
 
-	// Verify it can be loaded
+	
 	content, _ := os.ReadFile(expectedFile)
 	t.Logf("SKILL.md content:\n%s", string(content))
 
@@ -355,7 +363,7 @@ func TestLiveSimpleChat(t *testing.T) {
 	ag := New(client, reg, providerCfg.Protocol)
 	conv := conversation.NewManager()
 
-	// Simple smoke test: just verify the API works
+	
 	text, _ := liveRound(t, ag, conv, "Reply with exactly: JOHNNYCODE_OK")
 
 	if !strings.Contains(text, "JOHNNYCODE_OK") {
@@ -363,7 +371,7 @@ func TestLiveSimpleChat(t *testing.T) {
 	}
 }
 
-// --- helpers ---
+
 
 func fileExistsInDir(dir string) bool {
 	entries, _ := os.ReadDir(dir)

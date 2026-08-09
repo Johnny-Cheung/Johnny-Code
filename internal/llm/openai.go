@@ -107,9 +107,9 @@ func (c *openaiClient) Stream(ctx context.Context, conv *conversation.Manager, t
 		var currentToolName, currentCallID, jsonAccum string
 		var reasoningID, reasoningText string
 
-		// Read SSE events in a separate goroutine so we can respect ctx cancellation
-		// and detect silent connection drops. The SDK's stream.Next() may block
-		// indefinitely if the underlying connection dies without FIN/RST.
+		
+		
+		
 		type sseResult struct {
 			hasNext bool
 		}
@@ -191,11 +191,11 @@ func (c *openaiClient) Stream(ctx context.Context, conv *conversation.Manager, t
 				if event.Response.Usage.InputTokens != 0 || event.Response.Usage.OutputTokens != 0 {
 					usage.InputTokens = int(event.Response.Usage.InputTokens)
 					usage.OutputTokens = int(event.Response.Usage.OutputTokens)
-					// cache_read from input_tokens_details.cached_tokens; the
-					// Responses API has no cache_creation counterpart, so it's 0.
+					
+					
 					usage.CacheReadTokens = int(event.Response.Usage.InputTokensDetails.CachedTokens)
-					// input_tokens already includes the cached prefix; subtract so the
-					// usage anchor (input + cache_read) doesn't double-count it.
+					
+					
 					usage.InputTokens -= usage.CacheReadTokens
 					if usage.InputTokens < 0 {
 						usage.InputTokens = 0

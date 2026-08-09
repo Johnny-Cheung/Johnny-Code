@@ -65,10 +65,10 @@ Body text.`
 }
 
 func TestParseAgentFileThirdPartyModelAllowed(t *testing.T) {
-	// Matches AgentJsonSchema — model is "any non-empty string"; availability
-	// is the ModelResolver's call, not the parser's. Used to be a hard
-	// whitelist that silently broke definitions targeting GLM / OpenAI /
-	// custom router names.
+	
+	
+	
+	
 	dir := t.TempDir()
 	path := filepath.Join(dir, "glm.md")
 	content := `---
@@ -134,9 +134,9 @@ func TestLoaderBuiltinsAvailable(t *testing.T) {
 }
 
 func TestLoaderRecordsFailedFilesAndWarns(t *testing.T) {
-	// loadDir used to silently swallow parse errors, hiding the cause when a
-	// user-edited definition broke. Failed files must now show up in
-	// FailedFiles and on ErrorWriter.
+	
+	
+	
 	dir := t.TempDir()
 	agentsDir := filepath.Join(dir, ".johnnycode", "agents")
 	os.MkdirAll(agentsDir, 0o755)
@@ -173,8 +173,8 @@ body`
 }
 
 func TestParseAgentDefinitionExtendedFields(t *testing.T) {
-	// All extended frontmatter fields must round-trip from YAML through ParseAgentFile into
-	// AgentDefinition.
+	
+	
 	dir := t.TempDir()
 	path := filepath.Join(dir, "verify.md")
 	content := `---
@@ -224,7 +224,7 @@ body`
 		t.Errorf("RequiredMcpServers = %v", def.RequiredMcpServers)
 	}
 
-	// ToSpec must forward the extended fields so runSync / runAsync see them.
+	
 	spec := def.ToSpec()
 	if spec.PermissionMode != "acceptEdits" || !spec.Background || spec.Isolation != IsolationWorktree {
 		t.Errorf("ToSpec did not forward extended fields: %+v", spec)

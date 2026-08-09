@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// WorktreeSession tracks the state of an active worktree session.
+
 type WorktreeSession struct {
 	OriginalCwd        string `json:"original_cwd"`
 	WorktreePath       string `json:"worktree_path"`
@@ -22,33 +22,33 @@ type WorktreeSession struct {
 	CreationDurationMs int64  `json:"creation_duration_ms,omitempty"`
 }
 
-// Module-level singleton + mutex.
+
 var (
 	currentWorktreeSession *WorktreeSession
 	sessionMu              sync.RWMutex
 )
 
-// GetCurrentWorktreeSession returns the active worktree session, or nil.
+
 func GetCurrentWorktreeSession() *WorktreeSession {
 	sessionMu.RLock()
 	defer sessionMu.RUnlock()
 	return currentWorktreeSession
 }
 
-// RestoreWorktreeSession restores a session on --resume. The caller must have already verified the
-// directory exists and set bootstrap state.
+
+
 func RestoreWorktreeSession(session *WorktreeSession) {
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 	currentWorktreeSession = session
 }
 
-// sessionFilePath returns the path to the session persistence file.
+
 func sessionFilePath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".johnnycode", "worktree_session.json")
 }
 
-// SaveWorktreeSession persists session state to disk. Pass nil to clear.
+
 func SaveWorktreeSession(repoRoot string, session *WorktreeSession) error {
 	path := sessionFilePath(repoRoot)
 	if session == nil {
@@ -65,8 +65,8 @@ func SaveWorktreeSession(repoRoot string, session *WorktreeSession) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// LoadWorktreeSession reads a previously persisted session from disk. Returns (nil, nil) if the
-// file does not exist.
+
+
 func LoadWorktreeSession(repoRoot string) (*WorktreeSession, error) {
 	path := sessionFilePath(repoRoot)
 	data, err := os.ReadFile(path)
@@ -83,7 +83,7 @@ func LoadWorktreeSession(repoRoot string) (*WorktreeSession, error) {
 	return &session, nil
 }
 
-// CreateWorktreeForSession creates or resumes a worktree and sets up the global session singleton.
+
 func CreateWorktreeForSession(ctx context.Context, sessionID, slug, repoRoot string) (*WorktreeSession, error) {
 	if err := ValidateWorktreeSlug(slug); err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func CreateWorktreeForSession(ctx context.Context, sessionID, slug, repoRoot str
 	return session, nil
 }
 
-// KeepWorktree preserves the worktree on disk and clears session state.
+
 func KeepWorktree(repoRoot string) error {
 	sessionMu.Lock()
 	session := currentWorktreeSession
@@ -146,7 +146,7 @@ func KeepWorktree(repoRoot string) error {
 	return nil
 }
 
-// CleanupWorktree removes the worktree and its temporary branch, then clears session state.
+
 func CleanupWorktree(ctx context.Context, repoRoot string) error {
 	sessionMu.Lock()
 	session := currentWorktreeSession
@@ -161,16 +161,16 @@ func CleanupWorktree(ctx context.Context, repoRoot string) error {
 		return err
 	}
 
-	// Remove the worktree directory via git.
+	
 	_, _, code := runGit(ctx, session.OriginalCwd,
 		"worktree", "remove", "--force", session.WorktreePath)
 	if code != 0 {
-		// best-effort: proceed to branch cleanup.
+		
 	}
 
-	// Delete the temporary branch.
+	
 	if session.WorktreeBranch != "" {
-		// Wait for git lockfile release.
+		
 		time.Sleep(100 * time.Millisecond)
 		runGit(ctx, session.OriginalCwd, "branch", "-D", session.WorktreeBranch)
 	}

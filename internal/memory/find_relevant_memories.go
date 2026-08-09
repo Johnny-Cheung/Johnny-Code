@@ -8,22 +8,22 @@ import (
 	"strings"
 )
 
-// RelevantMemory is one memory file selected for surfacing into the main conversation. MtimeMs is
-// threaded through so callers can render freshness without a second stat.
+
+
 type RelevantMemory struct {
 	Path    string
 	MtimeMs int64
 }
 
-// SelectorFn is the abstraction for the side-query LLM call used by the recall selector. Given a
-// system prompt and a user message, the caller is expected to issue a one-shot model call and
-// return the raw assistant text. Errors are treated as "selector failed → no recall" by
-// FindRelevantMemories. Johnny Code's llm.Client is a streaming + system-prompt-bound interface, so
-// this callback lets the caller stand up a dedicated side-query client without coupling memory →
-// llm at the package level.
+
+
+
+
+
+
 type SelectorFn func(ctx context.Context, systemPrompt, userMessage string) (string, error)
 
-// SelectMemoriesSystemPrompt is the system prompt for the selector agent. Client.
+
 const SelectMemoriesSystemPrompt = `You are selecting memories that will be useful to Johnny Code as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
 
 Return a list of filenames for the memories that will clearly be useful to Johnny Code as it processes the user's query (up to 5). Only include memories that you are certain will be helpful based on their name and description.
@@ -33,19 +33,19 @@ Return a list of filenames for the memories that will clearly be useful to Johnn
 
 Respond with valid JSON only, no markdown, in this exact shape: {"selected_memories": ["filename1.md", "filename2.md"]}`
 
-// FindRelevantMemories scans both userMemDir and projectMemDir, asks the selector to pick up to 5
-// relevant filenames for query, and returns the corresponding absolute paths + mtimes. Excludes
-// MEMORY.md (already loaded in system prompt). mtime is threaded through so callers can surface
-// freshness without a second stat.
-//
-// alreadySurfaced filters paths shown in prior turns before the selector call, so the 5-slot budget
-// is spent on fresh candidates instead of re-picking files the caller will discard.
-//
-// Either dir may be empty — only the non-empty one is scanned. Filename collisions across the two
-// dirs are disambiguated by FilePath in the returned RelevantMemory.
-//
-// Selector failures are silent — recall is best-effort and must never block the main conversation.
-// Returns empty slice + nil error on any selector/parse error.
+
+
+
+
+
+
+
+
+
+
+
+
+
 func FindRelevantMemories(
 	ctx context.Context,
 	query string,
@@ -87,7 +87,7 @@ func FindRelevantMemories(
 	byKey := make(map[string]MemoryHeader, len(memories))
 	for _, m := range memories {
 		byKey[m.FilePath] = m
-		// Also index by Filename for selector outputs that drop the path.
+		
 		if _, exists := byKey[m.Filename]; !exists {
 			byKey[m.Filename] = m
 		}
@@ -117,9 +117,9 @@ func selectRelevantMemories(
 
 	manifest := FormatMemoryManifest(memories)
 
-	// When Johnny Code is actively using a tool (e.g. mcp__X__spawn), surfacing that tool's reference docs
-	// is noise — the conversation already contains working usage. The selector otherwise matches on
-	// keyword overlap ("spawn" in query + "spawn" in a memory description → false positive).
+	
+	
+	
 	toolsSection := ""
 	if len(recentTools) > 0 {
 		toolsSection = "\n\nRecently used tools: " + strings.Join(recentTools, ", ")
@@ -150,8 +150,8 @@ func selectRelevantMemories(
 	return out, nil
 }
 
-// extractJSONObject returns the first {.} substring found in raw, or the raw text trimmed if it
-// already starts with `{`. Tolerates markdown fences or prose around the JSON despite the prompt.
+
+
 func extractJSONObject(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if strings.HasPrefix(trimmed, "{") {

@@ -8,10 +8,10 @@ import (
 	"johnnycode/internal/worktree"
 )
 
-// ExitWorktreeTool exits a worktree session created by EnterWorktree and restores the original
-// working directory.
+
+
 type ExitWorktreeTool struct {
-	RepoRoot string // injected by TUI at startup
+	RepoRoot string 
 }
 
 func (t *ExitWorktreeTool) Name() string           { return "ExitWorktree" }
@@ -47,7 +47,7 @@ func (t *ExitWorktreeTool) Schema() map[string]any {
 }
 
 func (t *ExitWorktreeTool) Execute(ctx context.Context, args map[string]any) ToolResult {
-	// Scope guard: only operates on worktrees created by EnterWorktree in THIS session.
+	
 	session := worktree.GetCurrentWorktreeSession()
 	if session == nil {
 		return ToolResult{
@@ -64,7 +64,7 @@ func (t *ExitWorktreeTool) Execute(ctx context.Context, args map[string]any) Too
 		repoRoot = session.OriginalCwd
 	}
 
-	// Validate: if removing without discard_changes, check for changes.
+	
 	if action == "remove" && !discardChanges {
 		summary := worktree.CountWorktreeChanges(ctx, session.WorktreePath, session.OriginalHeadCommit)
 		if summary == nil {
@@ -106,7 +106,7 @@ func (t *ExitWorktreeTool) Execute(ctx context.Context, args map[string]any) Too
 		}
 	}
 
-	// Capture session info before cleanup.
+	
 	originalCwd := session.OriginalCwd
 	worktreePath := session.WorktreePath
 	worktreeBranch := session.WorktreeBranch
@@ -131,7 +131,7 @@ func (t *ExitWorktreeTool) Execute(ctx context.Context, args map[string]any) Too
 		}
 	}
 
-	// action == "remove".
+	
 	if err := worktree.CleanupWorktree(ctx, repoRoot); err != nil {
 		return ToolResult{
 			Output:  fmt.Sprintf("Error removing worktree: %s", err),

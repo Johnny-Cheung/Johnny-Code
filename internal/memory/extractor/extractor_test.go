@@ -15,7 +15,7 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// --- Mock infrastructure ---
+
 
 type mockClient struct {
 	mu       sync.Mutex
@@ -69,7 +69,7 @@ func (t *mockTool) Execute(ctx context.Context, args map[string]any) tools.ToolR
 	return tools.ToolResult{Output: "ok"}
 }
 
-// --- Unit tests for pure helpers ---
+
 
 func TestGetWrittenFilePath(t *testing.T) {
 	cases := []struct {
@@ -100,8 +100,8 @@ func TestExtractWrittenPathsDedupes(t *testing.T) {
 		}},
 		{Role: "user"},
 		{Role: "assistant", ToolUses: []conversation.ToolUseBlock{
-			{ToolName: "WriteFile", Arguments: map[string]any{"file_path": "/m/a.md"}}, // dup
-			{ToolName: "ReadFile", Arguments: map[string]any{"file_path": "/m/a.md"}},  // not Write/Edit
+			{ToolName: "WriteFile", Arguments: map[string]any{"file_path": "/m/a.md"}}, 
+			{ToolName: "ReadFile", Arguments: map[string]any{"file_path": "/m/a.md"}},  
 			{ToolName: "WriteFile", Arguments: map[string]any{"file_path": "/m/b.md"}},
 		}},
 	}
@@ -114,11 +114,11 @@ func TestExtractWrittenPathsDedupes(t *testing.T) {
 
 func TestCountModelVisibleMessagesSince(t *testing.T) {
 	msgs := []conversation.Message{
-		{Role: "user"},      // 0
-		{Role: "assistant"}, // 1
-		{Role: "user"},      // 2
-		{Role: "tool"},      // 3 — not model-visible
-		{Role: "assistant"}, // 4
+		{Role: "user"},      
+		{Role: "assistant"}, 
+		{Role: "user"},      
+		{Role: "tool"},      
+		{Role: "assistant"}, 
 	}
 	if got := countModelVisibleMessagesSince(msgs, 0); got != 4 {
 		t.Errorf("from 0: got %d, want 4", got)
@@ -139,7 +139,7 @@ func TestCountModelVisibleMessagesSince(t *testing.T) {
 
 func TestHasMemoryWritesSince(t *testing.T) {
 	tmp := t.TempDir()
-	memDir := memory.GetAutoMemPath(tmp) // <tmp>/.johnnycode/memory/
+	memDir := memory.GetAutoMemPath(tmp) 
 	memFile := memDir + "user_role.md"
 	outsideFile := filepath.Join(tmp, "other.md")
 
@@ -157,22 +157,22 @@ func TestHasMemoryWritesSince(t *testing.T) {
 	if hasMemoryWritesSince(msgs, 0, tmp) != true {
 		t.Error("should detect memory write at idx 3")
 	}
-	// Skip past the memory write: cursor at 4 → nothing left
+	
 	if hasMemoryWritesSince(msgs, 4, tmp) != false {
 		t.Error("cursor past all writes should return false")
 	}
-	// Cursor at 2: still has the memory write at 3
+	
 	if hasMemoryWritesSince(msgs, 2, tmp) != true {
 		t.Error("cursor before memory write should return true")
 	}
-	// Only outside-memory writes
+	
 	subset := msgs[:2]
 	if hasMemoryWritesSince(subset, 0, tmp) != false {
 		t.Error("outside-memory writes alone should not trigger skip")
 	}
 }
 
-// --- Integration: full extraction round trip ---
+
 
 func TestExtractorEndToEnd(t *testing.T) {
 	tmp := t.TempDir()
@@ -181,13 +181,13 @@ func TestExtractorEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Parent conversation with one user/assistant exchange — the extractor
-	// will see this as "newMessageCount" worth of content to consider.
+	
+	
 	parent := conversation.NewManager()
 	parent.AddUserMessage("Remember I'm a Go engineer")
 	parent.AddAssistantMessage("Sure, I'll remember.")
 
-	// Forked agent script: write user_role.md, end turn.
+	
 	writePath := filepath.Join(memDir, "user_role.md")
 	client := &mockClient{handlers: []func([]conversation.Message) []llm.StreamEvent{
 		func(_ []conversation.Message) []llm.StreamEvent {
@@ -247,7 +247,7 @@ func TestExtractorEndToEnd(t *testing.T) {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 
-	// Verify file landed on disk
+	
 	if _, err := os.Stat(writePath); err != nil {
 		t.Fatalf("expected user_role.md to exist after extraction: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestExtractorEndToEnd(t *testing.T) {
 		t.Errorf("AppendSystem should announce saved memory, got %q", got)
 	}
 
-	// Cursor should have advanced past all parent messages
+	
 	if e.lastMemoryMessageIdx != len(parent.GetMessages()) {
 		t.Errorf("cursor not advanced: got %d, want %d",
 			e.lastMemoryMessageIdx, len(parent.GetMessages()))
@@ -333,7 +333,7 @@ func TestExtractorBuildExtractorConversationAppendsPrompt(t *testing.T) {
 	if msgs[2].Role != "user" || !strings.Contains(msgs[2].Content, "EXTRACTION_PROMPT") {
 		t.Errorf("last message should be user with prompt; got %+v", msgs[2])
 	}
-	// Forked is a new Manager — modifying it must not touch parent
+	
 	if len(parent.GetMessages()) != 2 {
 		t.Error("parent conversation was mutated")
 	}

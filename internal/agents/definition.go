@@ -9,8 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AgentMemoryScope Persistent memory location: per-user, per-project, or per-checkout (not version
-// controlled).
+
+
 type AgentMemoryScope string
 
 const (
@@ -19,7 +19,7 @@ const (
 	AgentMemoryScopeLocal   AgentMemoryScope = "local"
 )
 
-// IsolationMode encodes the `isolation` frontmatter field.
+
 type IsolationMode string
 
 const (
@@ -27,9 +27,9 @@ const (
 	IsolationRemote   IsolationMode = "remote"
 )
 
-// AgentDefinition Fields with no runtime usage yet (Effort, Skills, McpServers, Hooks, Memory,
-// InitialPrompt, OmitJohnnycodeMd, RequiredMcpServers) are still parsed so user definitions don't lose
-// data on the round-trip and so future channels can pick them up without another schema migration.
+
+
+
 type AgentDefinition struct {
 	AgentType       string   `yaml:"name"`
 	WhenToUse       string   `yaml:"description"`
@@ -38,56 +38,56 @@ type AgentDefinition struct {
 	Model           string   `yaml:"model"`
 	MaxTurns        int      `yaml:"maxTurns"`
 
-	// permissionMode overrides the parent agent's permission mode for this sub-agent. Valid values
-	// match internal/permissions.PermissionMode.
+	
+	
 	PermissionMode string `yaml:"permissionMode"`
 
-	// Effort is a hint to the model about task complexity ("low" | "medium" | "high" | int). Currently
-	// stored only, not yet consumed.
+	
+	
 	Effort any `yaml:"effort"`
 
-	// Skills are skill names to preload when the sub-agent starts.
+	
 	Skills []string `yaml:"skills"`
 
-	// McpServers are MCP server names or inline configs scoped to this agent. Stored as raw any so
-	// future loading can interpret either string refs or inline configs.
+	
+	
 	McpServers []any `yaml:"mcpServers"`
 
-	// RequiredMcpServers gates the agent: if listed servers aren't available at load time, the agent
-	// is filtered out by hasRequiredMcpServers.
+	
+	
 	RequiredMcpServers []string `yaml:"requiredMcpServers"`
 
-	// Hooks are session-scoped hooks registered when this agent starts. Stored as raw YAML; the hooks
-	// package will type-check on consumption.
+	
+	
 	Hooks any `yaml:"hooks"`
 
-	// Memory enables persistent memory in one of three scopes.
+	
 	Memory AgentMemoryScope `yaml:"memory"`
 
-	// Background forces this agent to always run as a background task when spawned, regardless of
-	// run_in_background parameter.
+	
+	
 	Background bool `yaml:"background"`
 
-	// Isolation selects a file-system isolation mode for the spawn.
+	
 	Isolation IsolationMode `yaml:"isolation"`
 
-	// InitialPrompt is prepended to the first user turn (slash commands work).
+	
 	InitialPrompt string `yaml:"initialPrompt"`
 
-	// OmitJohnnycodeMd drops the JOHNNYCODE.md hierarchy from this agent's user context. Read-only agents
-	// (Explore, Plan) save tokens by skipping it.
+	
+	
 	OmitJohnnycodeMd bool `yaml:"omitJohnnycodeMd"`
 
-	// SystemPrompt is the Markdown body of the definition file.
+	
 	SystemPrompt string `yaml:"-"`
 
-	// FilePath / Source / Filename are populated at load time.
+	
 	FilePath string `yaml:"-"`
 	Source   string `yaml:"-"`
 	Filename string `yaml:"-"`
 }
 
-// validPermissionModes matches PERMISSION_MODES from the design TypeScript implementation.
+
 var validPermissionModes = map[string]bool{
 	"":                  true,
 	"acceptEdits":       true,
@@ -138,10 +138,10 @@ func ParseAgentFile(path string) (*AgentDefinition, error) {
 		return nil, fmt.Errorf("agent definition %s: missing required field 'description'", path)
 	}
 
-	// Normalize and validate `model`. Matches AgentJsonSchema: only "must be a non-empty string" —
-	// actual availability is left to the host's ModelResolver / LLM router. Third-party model names
-	// like "glm-5.1" must round-trip. Lowercase "inherit" normalizes to "inherit" (the sentinel that
-	// means "use parent's client"); everything else stays verbatim so the router can match.
+	
+	
+	
+	
 	def.Model = strings.TrimSpace(def.Model)
 	if strings.EqualFold(def.Model, "inherit") {
 		def.Model = "inherit"
@@ -185,8 +185,8 @@ func (d *AgentDefinition) ToSpec() SubAgentSpec {
 	}
 }
 
-// HasRequiredMcpServers Returns true when the agent has no MCP requirements or every required
-// pattern matches an available server name (case-insensitive substring).
+
+
 func (d *AgentDefinition) HasRequiredMcpServers(availableServers []string) bool {
 	if len(d.RequiredMcpServers) == 0 {
 		return true

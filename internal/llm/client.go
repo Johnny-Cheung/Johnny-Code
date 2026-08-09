@@ -30,26 +30,26 @@ func NewClient(cfg *config.ProviderConfig, systemPrompt string) (Client, error) 
 	}
 }
 
-// contextWindowFetcher is implemented by clients that can pull the model's
-// context window from their provider. Only the Anthropic client does so.
+
+
 type contextWindowFetcher interface {
 	FetchModelContextWindow(ctx context.Context) int
 }
 
-// ResolveContextWindow performs layer 2 of context-window resolution: for
-// Anthropic-protocol providers it pulls the model's max_input_tokens from
-// {base_url}/v1/models/{model} once and caches it on cfg via
-// SetFetchedContextWindow, so later cfg.GetContextWindow() calls use it
-// without hitting the network again.
-//
-// It is fully best-effort and never returns an error: a non-Anthropic
-// provider, a client-construction failure, or a failed/timed-out fetch all
-// leave the cache untouched, letting GetContextWindow fall back to the
-// built-in mapping table / default. Safe to call at startup — it will not
-// block beyond the fetch's own timeout and will not panic.
+
+
+
+
+
+
+
+
+
+
+
 func ResolveContextWindow(ctx context.Context, cfg *config.ProviderConfig) {
-	// An explicit config value already wins in GetContextWindow, so there's
-	// nothing to fetch. Likewise skip if we've already cached a value.
+	
+	
 	if cfg == nil || cfg.ContextWindow > 0 {
 		return
 	}

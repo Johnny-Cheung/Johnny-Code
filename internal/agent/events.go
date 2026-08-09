@@ -42,26 +42,19 @@ type PermissionRequestEvent struct {
 	ResponseCh chan<- PermissionResponse
 }
 
-func (StreamText) agentEvent()           {}
+func (StreamText) agentEvent() {}
 
-func (ThinkingText) agentEvent()         {}
+func (ThinkingText) agentEvent() {}
 
-func (ToolUseEvent) agentEvent()         {}
-func (ToolResultEvent) agentEvent()      {}
+func (ToolUseEvent) agentEvent()    {}
+func (ToolResultEvent) agentEvent() {}
 
-func (TurnComplete) agentEvent()         {}
+func (TurnComplete) agentEvent() {}
 
-func (LoopComplete) agentEvent()         {}
-func (UsageEvent) agentEvent()           {}
-func (ErrorEvent) agentEvent()             {}
-func (CompactEvent) agentEvent()           {}
+func (LoopComplete) agentEvent() {}
+func (UsageEvent) agentEvent()   {}
+func (ErrorEvent) agentEvent()   {}
+func (CompactEvent) agentEvent() {}
 
 func (RetryEvent) agentEvent()             {}
 func (PermissionRequestEvent) agentEvent() {}
-
-type AskUserQuestionEvent struct {
-	Questions  []map[string]any
-	ResponseCh chan map[string]string
-}
-
-func (AskUserQuestionEvent) agentEvent() {}

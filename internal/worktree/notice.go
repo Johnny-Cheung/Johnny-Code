@@ -3,9 +3,9 @@ package worktree
 
 import "fmt"
 
-// BuildWorktreeNotice returns the notice text injected into sub-agent prompts when they run in an
-// isolated worktree. Tells the child to translate paths from the inherited context and re-read
-// files.
+
+
+
 func BuildWorktreeNotice(parentCwd, worktreeCwd string) string {
 	return fmt.Sprintf(
 		"You've inherited the conversation context above from a parent agent working in %s. "+

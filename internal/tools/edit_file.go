@@ -45,7 +45,7 @@ func (t *EditFileTool) Execute(_ context.Context, args map[string]any) ToolResul
 		return ToolResult{Output: "Error: file_path is required", IsError: true}
 	}
 
-	// Read-before-edit gate
+	
 	if t.FileStateCache != nil {
 		if ok, errMsg := t.FileStateCache.Check(filePath); !ok {
 			return ToolResult{Output: errMsg, IsError: true}
@@ -78,7 +78,7 @@ func (t *EditFileTool) Execute(_ context.Context, args map[string]any) ToolResul
 		return ToolResult{Output: fmt.Sprintf("Error writing file: %s", err), IsError: true}
 	}
 
-	// Update cache after successful edit
+	
 	if t.FileStateCache != nil {
 		t.FileStateCache.Update(filePath, newContent)
 	}

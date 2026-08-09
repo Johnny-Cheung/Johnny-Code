@@ -8,7 +8,7 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// SendMessageTool allows agents to send messages to named teammates.
+
 type SendMessageTool struct {
 	TeamMgr   *TeamManager
 	SenderName string
@@ -48,9 +48,9 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) tool
 		return tools.ToolResult{Output: "Error: 'to' and 'content' are required", IsError: true}
 	}
 
-	// The lead is not registered as a Member (it lives in the parent
-	// process and only reads from its own mailbox), so route to it by
-	// finding any team the sender belongs to.
+	
+	
+	
 	if to == LeadName {
 		for _, teamName := range t.TeamMgr.ListTeams() {
 			team := t.TeamMgr.GetTeam(teamName)
@@ -70,11 +70,11 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) tool
 		}
 	}
 
-	// Find a registered teammate with this name, or fall back to the
-	// file-based mailbox. In tmux/iTerm mode each teammate runs in a
-	// separate process and only knows about itself in Members, so the
-	// in-memory lookup will miss peers. The mailbox write always works
-	// because all processes share the same inbox directory on disk.
+	
+	
+	
+	
+	
 	for _, teamName := range t.TeamMgr.ListTeams() {
 		team := t.TeamMgr.GetTeam(teamName)
 		if team == nil {
@@ -86,9 +86,9 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) tool
 				Output: fmt.Sprintf("Message sent to %s.", to),
 			}
 		}
-		// Recipient not in Members but we belong to this team — write
-		// directly to the file mailbox so external-process peers pick
-		// it up on their next poll.
+		
+		
+		
 		if _, ok := team.Members[t.SenderName]; ok {
 			team.SendMessage(t.SenderName, to, content)
 			return tools.ToolResult{
@@ -103,7 +103,7 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) tool
 	}
 }
 
-// TeamCreateTool creates a new agent team.
+
 type TeamCreateTool struct {
 	TeamMgr *TeamManager
 }
@@ -181,7 +181,7 @@ func (t *TeamCreateTool) Execute(ctx context.Context, args map[string]any) tools
 		return tools.ToolResult{Output: "Error: team_name is required", IsError: true}
 	}
 
-	// Deduplicate: if name exists, append suffix
+	
 	baseName := name
 	for i := 2; t.TeamMgr.GetTeam(name) != nil; i++ {
 		name = fmt.Sprintf("%s-%d", baseName, i)
@@ -197,7 +197,7 @@ func (t *TeamCreateTool) Execute(ctx context.Context, args map[string]any) tools
 	}
 }
 
-// TeamDeleteTool deletes an agent team and stops all members.
+
 type TeamDeleteTool struct {
 	TeamMgr *TeamManager
 }

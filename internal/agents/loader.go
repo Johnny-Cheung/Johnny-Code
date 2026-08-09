@@ -13,12 +13,12 @@ type AgentLoader struct {
 	workDir string
 	agents  map[string]*AgentDefinition
 
-	// FailedFiles records definition files that failed to parse during the most recent LoadAll. Each
-	// entry is "<path>: <reason>".
+	
+	
 	FailedFiles []string
 
-	// ErrorWriter receives one-line warnings for parse failures. Defaults to os.Stderr; tests override
-	// it to capture output.
+	
+	
 	ErrorWriter io.Writer
 }
 
@@ -30,8 +30,8 @@ func NewAgentLoader(workDir string) *AgentLoader {
 	}
 }
 
-// getBuiltinSpecs Verification is feature-gated upstream (`feature('VERIFICATION_AGENT') && `);
-// locally that's a JOHNNYCODE_VERIFICATION_AGENT env var.
+
+
 func getBuiltinSpecs() map[string]SubAgentSpec {
 	result := make(map[string]SubAgentSpec, len(BuiltinSpecs)+1)
 	for name, spec := range BuiltinSpecs {

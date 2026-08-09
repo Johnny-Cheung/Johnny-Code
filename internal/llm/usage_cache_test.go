@@ -11,11 +11,11 @@ import (
 	"johnnycode/internal/conversation"
 )
 
-// TestAnthropicUsageCacheParse verifies the Anthropic stream parser lifts
-// cache_read_input_tokens / cache_creation_input_tokens out of the API usage
-// into UsageInfo, alongside input/output. These are reported on message_start
-// (input + cache_*) and finalized on message_delta (output), then accumulated
-// by accMessage.
+
+
+
+
+
 func TestAnthropicUsageCacheParse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.ReadAll(r.Body)

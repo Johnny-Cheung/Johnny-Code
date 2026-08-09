@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// AgentWorktreeResult holds the result of CreateAgentWorktree.
+
 type AgentWorktreeResult struct {
 	WorktreePath   string
 	WorktreeBranch string
@@ -15,9 +15,9 @@ type AgentWorktreeResult struct {
 	GitRoot        string
 }
 
-// CreateAgentWorktree creates a lightweight worktree for a sub-agent. Unlike
-// CreateWorktreeForSession, it does NOT touch global session state (currentWorktreeSession,
-// process.chdir, project config).
+
+
+
 func CreateAgentWorktree(ctx context.Context, slug string) (*AgentWorktreeResult, error) {
 	if err := ValidateWorktreeSlug(slug); err != nil {
 		return nil, err
@@ -37,7 +37,7 @@ func CreateAgentWorktree(ctx context.Context, slug string) (*AgentWorktreeResult
 	if !result.Existed {
 		performPostCreationSetup(ctx, gitRoot, result.WorktreePath)
 	} else {
-		// Bump mtime so periodic stale cleanup doesn't consider this stale.
+		
 		now := time.Now()
 		_ = os.Chtimes(result.WorktreePath, now, now)
 	}
@@ -50,7 +50,7 @@ func CreateAgentWorktree(ctx context.Context, slug string) (*AgentWorktreeResult
 	}, nil
 }
 
-// RemoveAgentWorktree removes a worktree created by CreateAgentWorktree.
+
 func RemoveAgentWorktree(ctx context.Context, worktreePath, worktreeBranch, gitRoot string) bool {
 	if gitRoot == "" {
 		return false
@@ -62,7 +62,7 @@ func RemoveAgentWorktree(ctx context.Context, worktreePath, worktreeBranch, gitR
 	}
 
 	if worktreeBranch != "" {
-		// Wait for git lockfile release (sleep).
+		
 		time.Sleep(100 * time.Millisecond)
 		runGit(ctx, gitRoot, "branch", "-D", worktreeBranch)
 	}

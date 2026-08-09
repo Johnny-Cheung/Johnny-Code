@@ -9,7 +9,7 @@ import (
 func TestBuildWorktreeNotice(t *testing.T) {
 	notice := BuildWorktreeNotice("/home/user/project", "/home/user/project/.johnnycode/worktrees/agent-a1234567")
 
-	// Must contain both paths
+	
 	if !strings.Contains(notice, "/home/user/project") {
 
 		t.Fatal("notice should contain parent CWD")
@@ -17,7 +17,7 @@ func TestBuildWorktreeNotice(t *testing.T) {
 	if !strings.Contains(notice, "agent-a1234567") {
 		t.Fatal("notice should contain worktree path")
 	}
-	// Must mention isolation concepts
+	
 
 	if !strings.Contains(notice, "isolated") {
 		t.Fatal("notice should mention isolation")

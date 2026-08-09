@@ -1,13 +1,13 @@
 
 package memory
 
-// Memory type taxonomy.
-//
-// Memories are constrained to four types capturing context NOT derivable
-// from the current project state. Code patterns, architecture, git history,
-// and file structure are derivable (via grep/git/JOHNNYCODE.md) and should NOT
-// be saved as memories.
-//
+
+
+
+
+
+
+
 type MemoryType string
 
 const (
@@ -19,9 +19,9 @@ const (
 
 var MemoryTypes = []MemoryType{TypeUser, TypeFeedback, TypeProject, TypeReference}
 
-// ParseMemoryType validates a raw frontmatter value into a MemoryType.
-// Returns ("", false) for invalid or missing values — legacy files without
-// a `type:` field keep working, files with unknown types degrade gracefully.
+
+
+
 func ParseMemoryType(raw string) (MemoryType, bool) {
 	for _, t := range MemoryTypes {
 		if string(t) == raw {
@@ -31,11 +31,11 @@ func ParseMemoryType(raw string) (MemoryType, bool) {
 	return "", false
 }
 
-// TypesSectionDualPath is the `## Types of memory` section for DUAL-PATH mode:
-// `user` and `feedback` memories live in the user-level dir (~/.johnnycode/memory/)
-// because they follow the human across projects; `project` and `reference`
-// memories live in the project-level dir (./.johnnycode/memory/) because they
-// describe the current repo and should be team-shareable / git-trackable.
+
+
+
+
+
 const TypesSectionDualPath = `## Types of memory
 
 There are four discrete types of memory. **The type decides which directory the file lives in** — user-level memories cross projects (so they're saved to the user-level dir), project-level memories belong to the current repo (so they're saved alongside the code).
@@ -102,8 +102,8 @@ There are four discrete types of memory. **The type decides which directory the 
 </types>
 `
 
-// TypesSectionIndividual is the `## Types of memory` section for
-// INDIVIDUAL-ONLY mode (single directory). No <scope> tags.
+
+
 const TypesSectionIndividual = `## Types of memory
 
 There are several discrete types of memory that you can store in your memory system:
@@ -169,7 +169,7 @@ There are several discrete types of memory that you can store in your memory sys
 </types>
 `
 
-// WhatNotToSaveSection is the `## What NOT to save in memory` section.
+
 const WhatNotToSaveSection = `## What NOT to save in memory
 
 - Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state.
@@ -180,17 +180,17 @@ const WhatNotToSaveSection = `## What NOT to save in memory
 
 These exclusions apply even when the user explicitly asks you to save. If they ask you to save a PR list or activity summary, ask what was *surprising* or *non-obvious* about it — that is the part worth keeping.`
 
-// MemoryDriftCaveat is the recall-side drift caveat.
+
 const MemoryDriftCaveat = `- Memory records can become stale over time. Use memory as context for what was true at a given point in time. Before answering the user or building assumptions based solely on information in memory records, verify that the memory is still correct and up-to-date by reading the current state of the files or resources. If a recalled memory conflicts with current information, trust what you observe now — and update or remove the stale memory rather than acting on it.`
 
-// WhenToAccessSection is the `## When to access memories` section.
+
 var WhenToAccessSection = `## When to access memories
 - When memories seem relevant, or the user references prior-conversation work.
 - You MUST access memory when the user explicitly asks you to check, recall, or remember.
 - If the user says to *ignore* or *not use* memory: proceed as if MEMORY.md were empty. Do not apply remembered facts, cite, compare against, or mention memory content.
 ` + MemoryDriftCaveat
 
-// TrustingRecallSection is the `## Before recommending from memory` section.
+
 const TrustingRecallSection = `## Before recommending from memory
 
 A memory that names a specific function, file, or flag is a claim that it existed *when the memory was written*. It may have been renamed, removed, or never merged. Before recommending it:
@@ -203,8 +203,8 @@ A memory that names a specific function, file, or flag is a claim that it existe
 
 A memory that summarizes repo state (activity logs, architecture snapshots) is frozen in time. If the user asks about *recent* or *current* state, prefer ` + "`git log`" + ` or reading the code over recalling the snapshot.`
 
-// MemoryFrontmatterExample shows the frontmatter format including the
-// `type` field. Used in How-to-save instructions.
+
+
 const MemoryFrontmatterExample = "```markdown\n" +
 	`---
 name: {{memory name}}

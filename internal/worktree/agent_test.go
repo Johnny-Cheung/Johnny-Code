@@ -17,7 +17,7 @@ func TestCreateAgentWorktree(t *testing.T) {
 	repo := t.TempDir()
 	initTestRepo(t, repo)
 
-	// CreateAgentWorktree needs to be called from within a git repo
+	
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 	os.Chdir(repo)
@@ -38,12 +38,12 @@ func TestCreateAgentWorktree(t *testing.T) {
 		t.Fatal("expected non-empty head commit")
 	}
 
-	// Directory should exist
+	
 	if _, err := os.Stat(result.WorktreePath); err != nil {
 		t.Fatalf("worktree directory not created: %v", err)
 	}
 
-	// Session singleton should NOT be set (agent worktrees are session-less)
+	
 	if s := GetCurrentWorktreeSession(); s != nil {
 		t.Fatal("CreateAgentWorktree should not touch global session")
 	}
@@ -61,13 +61,13 @@ func TestCreateAgentWorktree_Resume(t *testing.T) {
 	defer os.Chdir(origDir)
 	os.Chdir(repo)
 
-	// First call creates
+	
 	r1, err := CreateAgentWorktree(context.Background(), "agent-a7777777")
 	if err != nil {
 		t.Fatalf("first call failed: %v", err)
 	}
 
-	// Second call should resume (mtime bumped)
+	
 	r2, err := CreateAgentWorktree(context.Background(), "agent-a7777777")
 	if err != nil {
 		t.Fatalf("second call failed: %v", err)
@@ -99,7 +99,7 @@ func TestRemoveAgentWorktree(t *testing.T) {
 		t.Fatal("RemoveAgentWorktree returned false")
 	}
 
-	// Directory should be gone
+	
 	if _, err := os.Stat(result.WorktreePath); !os.IsNotExist(err) {
 		t.Fatal("worktree directory should be removed")
 	}

@@ -1,11 +1,11 @@
 
-// Package extractor implements the background memory extraction subagent.
-//
-// The extraction agent runs as a perfect fork of the main conversation — same system prompt, same
-// message prefix. The main agent's system prompt always has full save instructions; when the main
-// agent writes memories itself, extractor.Execute skips that turn (hasMemoryWritesSince). This
-// prompt fires only when the main agent didn't write, so the save-criteria here overlap the system
-// prompt's harmlessly.
+
+
+
+
+
+
+
 package extractor
 
 import (
@@ -15,9 +15,9 @@ import (
 	"johnnycode/internal/memory"
 )
 
-// Tool names used in the extraction prompt. Match Johnny Code's tool registry (capitalized, no
-// underscores) — these strings are baked into prompts so the model issues calls that the registry
-// recognizes.
+
+
+
 const (
 	bashToolName      = "Bash"
 	fileEditToolName  = "EditFile"
@@ -27,7 +27,7 @@ const (
 	grepToolName      = "Grep"
 )
 
-// opener is the shared opening section for both extract-prompt variants.
+
 func opener(newMessageCount int, existingMemories string) string {
 	manifest := ""
 	if existingMemories != "" {
@@ -51,12 +51,12 @@ func opener(newMessageCount int, existingMemories string) string {
 	}, "\n")
 }
 
-// BuildExtractAutoOnlyPrompt builds the extraction prompt for auto-only memory (no team memory).
-// Four-type taxonomy with dual-path scoping: user/feedback memories live in userMemDir,
-// project/reference memories live in projectMemDir.
-//
-// userMemDir may be empty (e.g. when $HOME is unset) — in which case the prompt collapses to
-// project-only routing and the user/feedback types are effectively unavailable.
+
+
+
+
+
+
 func BuildExtractAutoOnlyPrompt(newMessageCount int, existingMemories string, skipIndex bool, userMemDir, projectMemDir string) string {
 	var routing strings.Builder
 	routing.WriteString("## Memory storage paths\n\n")

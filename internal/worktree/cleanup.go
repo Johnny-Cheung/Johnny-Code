@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// ephemeralWorktreePatterns identifies throwaway worktrees that can be auto-cleaned. User-named
-// worktrees (e.g. "my-feature") never match.
+
+
 var ephemeralWorktreePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^agent-a[0-9a-f]{7}$`),
 	regexp.MustCompile(`^wf_[0-9a-f]{8}-[0-9a-f]{3}-\d+$`),
@@ -28,11 +28,11 @@ func isEphemeralSlug(slug string) bool {
 	return false
 }
 
-// CleanupStaleAgentWorktrees removes stale agent/workflow worktrees older than cutoffDate. Three-
-// layer safety filter:
-//
-// 1. Name pattern: only ephemeral slugs 2. Age + session: skip current session and recently
-// modified 3. Change check: skip if tracked changes or unpushed commits.
+
+
+
+
+
 func CleanupStaleAgentWorktrees(ctx context.Context, cutoffDate time.Time) int {
 	cwd, _ := os.Getwd()
 	gitRoot := FindCanonicalGitRoot(cwd)
@@ -55,7 +55,7 @@ func CleanupStaleAgentWorktrees(ctx context.Context, cutoffDate time.Time) int {
 	for _, entry := range entries {
 		slug := entry.Name()
 
-		// Layer 1: only ephemeral patterns.
+		
 		if !isEphemeralSlug(slug) {
 			continue
 		}
@@ -65,7 +65,7 @@ func CleanupStaleAgentWorktrees(ctx context.Context, cutoffDate time.Time) int {
 			continue
 		}
 
-		// Layer 2: age check.
+		
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -74,8 +74,8 @@ func CleanupStaleAgentWorktrees(ctx context.Context, cutoffDate time.Time) int {
 			continue
 		}
 
-		// Layer 3: fail-closed change checks -uno: untracked files in a stale crashed agent worktree are
-		// build artifacts; skipping the untracked scan is 5-10× faster on large repos.
+		
+		
 		statusOut, _, statusCode := runGit(ctx, worktreePath,
 			"--no-optional-locks", "status", "--porcelain", "-uno")
 		if statusCode != 0 || strings.TrimSpace(statusOut) != "" {
@@ -99,8 +99,8 @@ func CleanupStaleAgentWorktrees(ctx context.Context, cutoffDate time.Time) int {
 	return removed
 }
 
-// StartCleanupLoop runs periodic stale worktree cleanup in a background goroutine. Returns
-// immediately; the goroutine exits when ctx is cancelled.
+
+
 func StartCleanupLoop(ctx context.Context) {
 	interval := GetStaleCleanupInterval()
 	if interval <= 0 {

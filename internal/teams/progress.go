@@ -7,13 +7,13 @@ import (
 	"time"
 )
 
-// ToolActivity describes a single tool invocation.
+
 type ToolActivity struct {
 	ToolName    string
 	Description string
 }
 
-// NewToolActivity creates a ToolActivity with an auto-generated description.
+
 func NewToolActivity(toolName string, input map[string]interface{}) ToolActivity {
 	return ToolActivity{
 		ToolName:    toolName,
@@ -50,19 +50,19 @@ func describeActivity(toolName string, input map[string]interface{}) string {
 	}
 }
 
-// TeammateProgress tracks real-time progress for one teammate.
-// All methods are goroutine-safe.
+
+
 type TeammateProgress struct {
 	mu               sync.Mutex
 	Name             string
 	TeamName         string
-	Status           string // "running", "idle", "completed", "failed", "stopped"
+	Status           string 
 	ToolUseCount     int
 	TokenCount       int64
 	LastActivity     *ToolActivity
-	RecentActivities []ToolActivity // max 5
+	RecentActivities []ToolActivity 
 	SpinnerVerb      string
-	StartTime        int64 // unix ms
+	StartTime        int64 
 	LastMessage      string
 }
 
@@ -143,7 +143,7 @@ func (p *TeammateProgress) GetTokenCount() int64 {
 	return p.TokenCount
 }
 
-// FormatTokens formats a token count for display.
+
 func FormatTokens(n int64) string {
 	if n >= 1_000_000 {
 		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)

@@ -7,16 +7,16 @@ import (
 	"strings"
 )
 
-// ModeITerm spawns each teammate in its own iTerm2 tab via AppleScript.
-// macOS-only; detectBackend selects it when ITERM_SESSION_ID is set.
+
+
 const ModeITerm TeamMode = "iterm"
 
-// spawnITermTeammate opens a new iTerm2 tab and runs cliCommand in it.
-// Returns the script-side tab identifier ("team-member") so the caller can
-// later target it for shutdown.
+
+
+
 func spawnITermTeammate(teamName, memberName, cliCommand string) (string, error) {
 	tabName := fmt.Sprintf("%s-%s", teamName, memberName)
-	// Escape any embedded double quotes so the AppleScript string literal stays valid.
+	
 	safeCmd := strings.ReplaceAll(cliCommand, `"`, `\"`)
 	safeName := strings.ReplaceAll(tabName, `"`, `\"`)
 	script := fmt.Sprintf(`tell application "iTerm2"
@@ -39,8 +39,8 @@ end tell`, safeName, safeCmd)
 	return tabName, nil
 }
 
-// stopITermTeammate closes the iTerm2 tab created by spawnITermTeammate.
-// Best-effort: missing tab / closed window are not reported as errors.
+
+
 func stopITermTeammate(tabName string) {
 	safeName := strings.ReplaceAll(tabName, `"`, `\"`)
 	script := fmt.Sprintf(`tell application "iTerm2"

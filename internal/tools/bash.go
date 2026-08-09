@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -12,11 +14,11 @@ const maxTimeout = 600
 
 type BashTool struct{}
 
-func (t *BashTool) Name() string            { return "Bash" }
+func (t *BashTool) Name() string { return "Bash" }
 
-func (t *BashTool) Description() string     { return BashDescription }
+func (t *BashTool) Description() string { return BashDescription }
 
-func (t *BashTool) Category() ToolCategory  { return CategoryCommand }
+func (t *BashTool) Category() ToolCategory { return CategoryCommand }
 
 func (t *BashTool) Schema() map[string]any {
 	return map[string]any{
@@ -47,8 +49,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ToolResult 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	var stdout, stderr bytes.Buffer
+	cmd := shellCommand(ctx, command)
+	stdout := cappedBuffer{limit: MaxOutputChars}
+	stderr := cappedBuffer{limit: MaxOutputChars}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -85,5 +88,48 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ToolResult 
 	}
 	fmt.Fprintf(&sb, "(exit code %d)", exitCode)
 
-	return ToolResult{Output: sb.String(), IsError: isError}
+	return ToolResult{Output: TruncateOutput(sb.String(), MaxOutputChars), IsError: isError}
+}
+
+func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", normalizeWindowsCommand(command))
+	}
+	return exec.CommandContext(ctx, "bash", "-c", command)
+}
+
+func normalizeWindowsCommand(command string) string {
+	trimmed := strings.TrimSpace(command)
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"cmd.exe /d /s /c", "cmd.exe /c", "cmd /c"} {
+		if strings.HasPrefix(lower, prefix) {
+			inner := strings.TrimSpace(trimmed[len(prefix):])
+			if len(inner) >= 2 && inner[0] == '"' && inner[len(inner)-1] == '"' {
+				inner = inner[1 : len(inner)-1]
+			}
+			return inner
+		}
+	}
+	return trimmed
+}
+
+// cappedBuffer keeps command output bounded even before the Agent layer sees
+// the ToolResult. Returning len(p) from Write lets the child process continue
+// normally while preventing an unbounded bytes.Buffer allocation in Johnny
+// Code itself.
+type cappedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	remaining := b.limit - b.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.Buffer.Write(p[:remaining])
+		} else {
+			_, _ = b.Buffer.Write(p)
+		}
+	}
+	return len(p), nil
 }

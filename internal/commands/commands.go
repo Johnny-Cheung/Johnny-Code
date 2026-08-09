@@ -12,11 +12,11 @@ const (
 	TypeLocal   CommandType = "local"
 	TypeLocalUI CommandType = "local-ui"
 	TypePrompt  CommandType = "prompt"
-	// TypeSkillFork is for skills declared with `mode: fork`. The handler
-	// runs the skill in an isolated sub-agent (no main-loop touch) and
-	// returns the final assistant text; the TUI dispatcher inserts that
-	// text into the main chat as an assistant message instead of pumping
-	// it through the regular Agent Loop.
+	
+	
+	
+	
+	
 	TypeSkillFork CommandType = "skill-fork"
 )
 
@@ -85,10 +85,10 @@ func (r *Registry) Register(cmd *Command) {
 	}
 }
 
-// HasConflict reports whether cmd's name or any of its aliases would collide
-// with something already in the registry. Dynamic loaders (e.g. user
-// commands from disk) should call this before Register to filter out
-// conflicting entries, since Register panics on collision.
+
+
+
+
 func (r *Registry) HasConflict(cmd *Command) bool {
 	if r.Find(cmd.Name) != nil {
 		return true

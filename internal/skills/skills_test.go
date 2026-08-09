@@ -47,12 +47,16 @@ Do the thing.
 
 func TestLoadJohnnycodeSkills(t *testing.T) {
 	wd, _ := os.Getwd()
-	// Walk up to find project root
-	for wd != "/" {
+
+	for {
 		if _, err := os.Stat(filepath.Join(wd, ".johnnycode", "skills")); err == nil {
 			break
 		}
-		wd = filepath.Dir(wd)
+		parent := filepath.Dir(wd)
+		if parent == wd { // reached the filesystem root (works on both / and C:\)
+			break
+		}
+		wd = parent
 	}
 
 	skillsDir := filepath.Join(wd, ".johnnycode", "skills")
@@ -217,7 +221,7 @@ body content`), 0o644)
 func TestSkillIntegration(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create two skills
+	
 	s1Dir := filepath.Join(dir, "greeting")
 	os.MkdirAll(s1Dir, 0o755)
 	os.WriteFile(filepath.Join(s1Dir, "SKILL.md"), []byte(`---
@@ -252,7 +256,7 @@ Provide a concise summary of the given text.
 		t.Fatalf("expected 2 skills, got %d", len(metas))
 	}
 
-	// Verify both skills are retrievable
+	
 	for _, name := range []string{"greeting", "summarize"} {
 		s := catalog.Get(name)
 		if s == nil {
@@ -266,7 +270,7 @@ Provide a concise summary of the given text.
 		}
 	}
 
-	// Simulate system prompt building (same logic as tui.go)
+	
 	var sb strings.Builder
 	sb.WriteString("## Available Skills\n\n")
 	sb.WriteString("Skills are installed at: " + dir + "\n")
@@ -294,17 +298,17 @@ Provide a concise summary of the given text.
 		t.Fatal("system prompt missing /summarize command")
 	}
 
-	// Simulate skill command handler (same logic as tui.go)
+	
 	skill := catalog.Get("greeting")
 	body := skill.PromptBody
 
-	// Without args
+	
 	result := body
 	if !strings.Contains(result, "Greeting Skill") {
 		t.Fatal("handler without args should return skill body")
 	}
 
-	// With args
+	
 	args := "say hi to Alice"
 	result = body + "\n\n## User Request\n\n" + args
 	if !strings.Contains(result, "## User Request") {

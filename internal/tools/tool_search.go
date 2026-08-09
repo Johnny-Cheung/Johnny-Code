@@ -87,7 +87,6 @@ func (t *ToolSearchTool) Execute(ctx context.Context, args map[string]any) ToolR
 		}
 	}
 
-	// Mark discovered tools so their schemas are included in subsequent API requests
 	for _, s := range schemas {
 		if name, ok := s["name"].(string); ok {
 			t.Registry.MarkDiscovered(name)

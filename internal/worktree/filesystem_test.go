@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// initBareRepoWithCommit creates a regular git repo at root with one commit on
-// the default branch. Returns the HEAD SHA of that commit. Skips the test if
-// git isn't on PATH.
+
+
+
 func initBareRepoWithCommit(t *testing.T, root string) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -95,7 +95,7 @@ func TestReadWorktreeHeadSha_RoundTrip(t *testing.T) {
 	root := t.TempDir()
 	initBareRepoWithCommit(t, root)
 
-	// git worktree add ../wt -b test-branch HEAD
+	
 	wtPath := filepath.Join(t.TempDir(), "wt")
 	cmd := exec.Command("git", "worktree", "add", "-b", "test-branch", wtPath, "HEAD")
 	cmd.Dir = root
@@ -111,7 +111,7 @@ func TestReadWorktreeHeadSha_RoundTrip(t *testing.T) {
 		t.Errorf("ReadWorktreeHeadSha = %q, not a valid SHA", got)
 	}
 
-	// Cross-check with `git rev-parse HEAD` in the worktree.
+	
 	rp := exec.Command("git", "rev-parse", "HEAD")
 	rp.Dir = wtPath
 	out, err := rp.CombinedOutput()
@@ -142,7 +142,7 @@ func TestResolveRef_LooseRef(t *testing.T) {
 		t.Fatalf("ResolveGitDir error: %v", err)
 	}
 
-	// Default branch name varies (main or master); read HEAD to discover it.
+	
 	head, err := readGitHead(gitDir)
 	if err != nil || head == nil || head.branch == "" {
 		t.Fatalf("expected branch HEAD, got %+v err=%v", head, err)

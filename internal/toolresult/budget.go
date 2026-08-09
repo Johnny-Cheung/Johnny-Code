@@ -10,30 +10,15 @@ import (
 	"johnnycode/internal/conversation"
 )
 
-// Budget thresholds. Values match the ch08 spec; ContentReplacementState
-// freezes decisions, but the actual numerical limits stay the same as the
-// pre-state implementation so behavior on a fresh conversation is identical.
 const (
-	// SingleResultLimit gates the per-tool spill. Aligned with Claude Code's
-	// DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000. Must stay strictly above
-	// tools.MaxOutputChars (10000) + truncation suffix; otherwise a tool
-	// result truncated to MaxOutputChars trips the spill on every iteration
-	// — and reading the spilled file back is itself a ~10K result that
-	// would re-spill, looping.
 	SingleResultLimit = 50000
 
-	// MessageAggregateLimit triggers Pass 2 when a single user message's
-	// tool_result content sums above this. Aligned with Claude Code's
-	// MAX_TOOL_RESULTS_PER_MESSAGE_CHARS = 200_000.
 	MessageAggregateLimit = 200000
 
-	// OldResultSnipChars is the stale-tail snip threshold.
 	OldResultSnipChars = 2000
 
-	// KeepRecentTurns is the recent-window boundary that snip never touches.
 	KeepRecentTurns = 10
 
-	// SpillSubdir lives under the agent's workdir.
 	SpillSubdir = ".johnnycode/tool_results"
 )
 
@@ -46,21 +31,33 @@ func isAlreadyReplaced(s string) bool {
 	return strings.HasPrefix(s, persistedTagPrefix) || strings.HasPrefix(s, snippedTagPrefix)
 }
 
-// Apply is Design B: walk conv, decide each tool_result's fate against state,
-// return a NEW *conversation.Manager with replacements applied. The input
-// conv is never mutated. state's SeenIDs/Replacements are mutated to record
-// this turn's decisions; subsequent calls re-apply those decisions verbatim
-// (byte-identical preview strings, no I/O) so the prompt-cache prefix is
-// stable across turns.
-//
-// Returns the new manager, any newly-recorded decisions (caller should
-// append to the session transcript), and an error only on catastrophic
-// failure (filesystem errors during spill are swallowed per-result so a
-// spill failure freezes that one id as raw rather than aborting the turn).
 func Apply(
 	conv *conversation.Manager,
 	workDir string,
 	state *ContentReplacementState,
+) (*conversation.Manager, []Record, error) {
+	return apply(conv, workDir, state, nil)
+}
+
+// ApplyWithFresh gives newly-created tool results one pass through the model
+// before the normal spill policy is applied. This keeps the first response
+// complete when it fits, while the next turn still gets the 50k/200k budget
+// protections. Results are intentionally not frozen in state during this
+// pass; the following Apply call can therefore spill them if necessary.
+func ApplyWithFresh(
+	conv *conversation.Manager,
+	workDir string,
+	state *ContentReplacementState,
+	freshIDs map[string]struct{},
+) (*conversation.Manager, []Record, error) {
+	return apply(conv, workDir, state, freshIDs)
+}
+
+func apply(
+	conv *conversation.Manager,
+	workDir string,
+	state *ContentReplacementState,
+	freshIDs map[string]struct{},
 ) (*conversation.Manager, []Record, error) {
 	messages := conv.GetMessages()
 	if len(messages) == 0 {
@@ -85,19 +82,17 @@ func Apply(
 
 		for _, tr := range msg.ToolResults {
 			if rep, ok := state.Replacements[tr.ToolUseID]; ok {
-				// Already decided "replace" — re-apply the exact preview.
+
 				decisions[tr.ToolUseID] = rep
 				continue
 			}
 			if _, ok := state.SeenIDs[tr.ToolUseID]; ok {
-				// Seen but not replaced — frozen as raw forever.
+
 				decisions[tr.ToolUseID] = tr.Content
 				continue
 			}
 			if isAlreadyReplaced(tr.Content) {
-				// External pre-tagged content (e.g. resumed from disk where
-				// the persisted preview was already written into history).
-				// Freeze as the tag itself so subsequent turns stay stable.
+
 				state.SeenIDs[tr.ToolUseID] = struct{}{}
 				state.Replacements[tr.ToolUseID] = tr.Content
 				decisions[tr.ToolUseID] = tr.Content
@@ -111,16 +106,14 @@ func Apply(
 			fresh = append(fresh, tr)
 		}
 
-		// Pass 1: persist any single result above SingleResultLimit.
 		persistedByP1 := make(map[string]struct{})
 		for _, tr := range fresh {
-			if len(tr.Content) <= SingleResultLimit {
+			_, preserveFresh := freshIDs[tr.ToolUseID]
+			if len(tr.Content) <= SingleResultLimit || preserveFresh {
 				continue
 			}
 			if isSpillReadback(toolUseByID[tr.ToolUseID], absSpillDir) {
-				// Reading a previously-spilled file back — don't spill the
-				// readback (it would loop: the readback's own result is
-				// ~same size as the spilled file).
+
 				state.SeenIDs[tr.ToolUseID] = struct{}{}
 				decisions[tr.ToolUseID] = tr.Content
 				persistedByP1[tr.ToolUseID] = struct{}{}
@@ -128,9 +121,7 @@ func Apply(
 			}
 			path, err := writeSpill(spillDir, tr.ToolUseID, tr.Content)
 			if err != nil {
-				// Spill failed → freeze as raw (decision still made: never
-				// revisit). Subsequent turns will treat this id as frozen-
-				// not-replaced and send the raw content.
+
 				state.SeenIDs[tr.ToolUseID] = struct{}{}
 				decisions[tr.ToolUseID] = tr.Content
 				persistedByP1[tr.ToolUseID] = struct{}{}
@@ -148,8 +139,6 @@ func Apply(
 			persistedByP1[tr.ToolUseID] = struct{}{}
 		}
 
-		// Pass 2: aggregate-spill the largest remaining fresh candidates
-		// until total ≤ MessageAggregateLimit.
 		var remaining []conversation.ToolResultBlock
 		for _, tr := range fresh {
 			if _, done := persistedByP1[tr.ToolUseID]; done {
@@ -199,16 +188,20 @@ func Apply(
 			}
 		}
 
-		// Freeze remaining fresh as "seen but not replaced".
 		for _, tr := range fresh {
 			if _, decided := decisions[tr.ToolUseID]; decided {
+				continue
+			}
+			if _, preserveFresh := freshIDs[tr.ToolUseID]; preserveFresh {
+				// Leave this ID out of SeenIDs so the next turn can apply the
+				// ordinary spill policy to the same raw result.
+				decisions[tr.ToolUseID] = tr.Content
 				continue
 			}
 			state.SeenIDs[tr.ToolUseID] = struct{}{}
 			decisions[tr.ToolUseID] = tr.Content
 		}
 
-		// Materialize new tool_results in original order.
 		newResults := make([]conversation.ToolResultBlock, len(msg.ToolResults))
 		for k, tr := range msg.ToolResults {
 			newResults[k] = conversation.ToolResultBlock{
@@ -222,19 +215,11 @@ func Apply(
 		newMessages[i] = newMsg
 	}
 
-	// Pass 3: stale-snip on the new history. Stateless — the boundary moves
-	// as turns add, so an id can flip from raw to snipped at one turn (this
-	// is a known prefix-cache drift, accepted as out-of-scope for the state
-	// machine — fixing it requires either snipping eagerly or making snip
-	// state-aware too).
 	newMessages = snipStale(newMessages)
 
 	return buildManager(newMessages), records, nil
 }
 
-// buildSpillPreview is the canonical stub format. Once written into
-// state.Replacements it is replayed byte-for-byte forever, so the format is
-// load-bearing for prompt-cache stability — do not change it lightly.
 func buildSpillPreview(originalSize int, path string) string {
 	return fmt.Sprintf(
 		"[Result of %d chars saved to %s — read with ReadFile if needed]",
@@ -288,10 +273,6 @@ func snipStale(messages []conversation.Message) []conversation.Message {
 	return out
 }
 
-// buildToolUseIndex maps tool_use_id → ToolUseBlock so spill decisions can
-// inspect the originating tool name and arguments. Tool uses live on
-// assistant messages while results live on the next user message, paired
-// only by ID — pre-indexing avoids an O(n²) cross-message scan.
 func buildToolUseIndex(messages []conversation.Message) map[string]conversation.ToolUseBlock {
 	idx := make(map[string]conversation.ToolUseBlock, len(messages))
 	for _, m := range messages {
@@ -302,10 +283,6 @@ func buildToolUseIndex(messages []conversation.Message) map[string]conversation.
 	return idx
 }
 
-// isSpillReadback reports whether the originating tool call was a ReadFile
-// of a path inside the spill directory. Spilling the readback would loop —
-// the readback's own result is ~same size as the spilled file, so it'd trip
-// SingleResultLimit again and produce a chain of stub-of-stub files.
 func isSpillReadback(tu conversation.ToolUseBlock, absSpillDir string) bool {
 	if tu.ToolName != "ReadFile" || absSpillDir == "" {
 		return false
@@ -343,11 +320,6 @@ func writeSpill(dir, toolUseID, content string) (string, error) {
 	return path, nil
 }
 
-// buildManager constructs a fresh *conversation.Manager from a message
-// slice. We can't set the unexported `history` field from outside the
-// conversation package, so we replay messages through the public Add*
-// API. Same pattern as compact.rebuildConversation, kept local to avoid a
-// cross-package dependency.
 func buildManager(messages []conversation.Message) *conversation.Manager {
 	out := conversation.NewManager()
 	for _, m := range messages {

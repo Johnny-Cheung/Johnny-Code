@@ -32,8 +32,8 @@ func (c *ServerConfig) IsStdio() bool {
 	return c.Command != ""
 }
 
-// transportKind picks the HTTP transport variant. Empty/"http"/"streamable" →
-// Streamable HTTP (2025-03-26 spec); "sse" → legacy SSE (2024-11-05 spec).
+
+
 func (c *ServerConfig) transportKind() string {
 	switch strings.ToLower(c.Transport) {
 	case "sse":
@@ -43,7 +43,7 @@ func (c *ServerConfig) transportKind() string {
 	}
 }
 
-// headerRoundTripper injects fixed headers onto every outgoing request.
+
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
@@ -91,9 +91,9 @@ func (c *Client) Connect(ctx context.Context) error {
 		for k, v := range c.config.Env {
 			cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
 		}
-		// Detach stderr from the parent tty. Otherwise child processes (npx/node)
-		// detect stderr as a TTY and emit OSC color queries; the terminal sends
-		// the response to the controlling process's stdin, polluting the TUI input.
+		
+		
+		
 		cmd.Stderr = io.Discard
 		transport = &mcp.CommandTransport{Command: cmd}
 	case c.config.URL != "":
@@ -150,7 +150,7 @@ func (c *Client) Close() {
 	}
 }
 
-// Manager handles multiple MCP servers
+
 
 type Manager struct {
 	configs map[string]ServerConfig
@@ -236,7 +236,7 @@ func (m *Manager) Shutdown() {
 	m.clients = make(map[string]*Client)
 }
 
-// MCPToolWrapper adapts an MCP tool to the Tool interface
+
 
 type MCPToolWrapper struct {
 	serverName string

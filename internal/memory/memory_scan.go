@@ -13,32 +13,32 @@ import (
 	"time"
 )
 
-// MemoryHeader is one scanned memory file's metadata.
+
 type MemoryHeader struct {
-	Filename    string     // path relative to memoryDir
-	FilePath    string     // absolute path
-	Scope       string     // "user" or "project"; empty for callers that don't care
-	MtimeMs     int64      // modification time, ms since epoch
-	Description string     // frontmatter description; "" if absent
-	Type        MemoryType // frontmatter type; "" if unrecognized
+	Filename    string     
+	FilePath    string     
+	Scope       string     
+	MtimeMs     int64      
+	Description string     
+	Type        MemoryType 
 }
 
-// MaxMemoryFiles caps the number of memories surfaced to the model.
-// FrontmatterMaxLines caps how much of each file we read for header parsing.
+
+
 const (
 	MaxMemoryFiles      = 200
 	FrontmatterMaxLines = 30
 )
 
-// ScanMemoryFiles scans a memory directory for .md files, reads their
-// frontmatter, and returns a header list sorted newest-first (capped at
-// MaxMemoryFiles). Shared by findRelevantMemories (query-time recall) and
-// extractMemories (pre-injects the listing so the extraction agent doesn't
-// spend a turn on `ls`).
-//
-// Single-pass: each file's mtime is read alongside its content so we
-// read-then-sort rather than stat-sort-read. Per-file errors are silently
-// dropped (a file that won't open shouldn't tank the whole scan).
+
+
+
+
+
+
+
+
+
 func ScanMemoryFiles(ctx context.Context, memoryDir string, scope string) ([]MemoryHeader, error) {
 	var mdFiles []string
 	walkErr := filepath.WalkDir(memoryDir, func(path string, d os.DirEntry, err error) error {
@@ -122,9 +122,9 @@ func readMemoryHeader(filePath, memoryDir string) (MemoryHeader, bool) {
 	}, true
 }
 
-// FormatMemoryManifest formats memory headers as a text manifest: one
-// line per file with [type] filename (timestamp): description. Used by
-// both the recall selector prompt and the extraction-agent prompt.
+
+
+
 func FormatMemoryManifest(memories []MemoryHeader) string {
 	if len(memories) == 0 {
 		return ""

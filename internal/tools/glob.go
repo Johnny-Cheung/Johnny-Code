@@ -11,11 +11,11 @@ import (
 
 type GlobTool struct{}
 
-func (t *GlobTool) Name() string            { return "Glob" }
+func (t *GlobTool) Name() string { return "Glob" }
 
-func (t *GlobTool) Description() string     { return GlobDescription }
+func (t *GlobTool) Description() string { return GlobDescription }
 
-func (t *GlobTool) Category() ToolCategory  { return CategoryRead }
+func (t *GlobTool) Category() ToolCategory { return CategoryRead }
 
 func (t *GlobTool) Schema() map[string]any {
 	return map[string]any{
@@ -32,7 +32,7 @@ func (t *GlobTool) Schema() map[string]any {
 	}
 }
 
-func (t *GlobTool) Execute(_ context.Context, args map[string]any) ToolResult {
+func (t *GlobTool) Execute(ctx context.Context, args map[string]any) ToolResult {
 	pattern, _ := args["pattern"].(string)
 	basePath, _ := args["path"].(string)
 	if basePath == "" {
@@ -50,43 +50,12 @@ func (t *GlobTool) Execute(_ context.Context, args map[string]any) ToolResult {
 		return ToolResult{Output: fmt.Sprintf("Error: path not found: %s", basePath), IsError: true}
 	}
 
-	// Recognize doublestar `**/` prefix and treat it as "match basePattern at
-	// any depth". Go's filepath.Match doesn't understand `**`; without this,
-	// the most common LLM-issued patterns like `**/*.go` silently match nothing.
-	recursive := false
-	basePattern := pattern
-	for strings.HasPrefix(basePattern, "**/") {
-		basePattern = basePattern[3:]
-		recursive = true
-	}
-
 	var matches []string
-	err = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			if SkipDirs[info.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, _ := filepath.Rel(basePath, path)
-		matched := false
-		if recursive {
-			// `**/<basePattern>` — match basePattern against base name at any depth.
-			matched, _ = filepath.Match(basePattern, filepath.Base(path))
-		} else {
-			matched, _ = filepath.Match(pattern, filepath.Base(path))
-			if !matched {
-				matched, _ = filepath.Match(pattern, rel)
-			}
-		}
-		if matched {
-			matches = append(matches, rel)
-		}
-		return nil
-	})
+	if strings.Contains(filepath.ToSlash(pattern), "**") {
+		matches, err = recursiveGlob(ctx, basePath, filepath.ToSlash(pattern))
+	} else {
+		matches, err = flatGlob(basePath, pattern)
+	}
 	if err != nil {
 		return ToolResult{Output: fmt.Sprintf("Error: %s", err), IsError: true}
 	}
@@ -95,5 +64,112 @@ func (t *GlobTool) Execute(_ context.Context, args map[string]any) ToolResult {
 	if len(matches) == 0 {
 		return ToolResult{Output: "No files matched the pattern."}
 	}
-	return ToolResult{Output: strings.Join(matches, "\n")}
+	return ToolResult{Output: formatGlobOutput(matches)}
+}
+
+func formatGlobOutput(matches []string) string {
+	joined := strings.Join(matches, "\n")
+	if len(joined) > MaxOutputChars {
+		joined += fmt.Sprintf("\n[Glob output truncated: %d matching paths; refine the pattern or query a subdirectory]\n", len(matches))
+	}
+	return TruncateOutput(joined, MaxOutputChars)
+}
+
+func flatGlob(basePath, pattern string) ([]string, error) {
+	pattern = normalizeGlobPattern(pattern)
+	joined := filepath.Join(basePath, filepath.FromSlash(pattern))
+	paths, err := filepath.Glob(joined)
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]string, 0, len(paths))
+	for _, path := range paths {
+		info, statErr := os.Stat(path)
+		if statErr != nil || (info.IsDir() && SkipDirs[info.Name()]) {
+			continue
+		}
+		rel, relErr := filepath.Rel(basePath, path)
+		if relErr != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if info.IsDir() {
+			rel += "/"
+		}
+		matches = append(matches, rel)
+	}
+	return matches, nil
+}
+
+func recursiveGlob(ctx context.Context, basePath, pattern string) ([]string, error) {
+	var matches []string
+	err := filepath.Walk(basePath, func(path string, info os.FileInfo, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if path != basePath && SkipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, relErr := filepath.Rel(basePath, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if matchGlobPath(pattern, rel) {
+			matches = append(matches, rel)
+		}
+		return nil
+	})
+	return matches, err
+}
+
+func matchGlobPath(pattern, path string) bool {
+	patterns := splitGlobPath(normalizeGlobPattern(pattern))
+	paths := splitGlobPath(path)
+	type key struct{ pi, si int }
+	memo := make(map[key]bool)
+	done := make(map[key]bool)
+	var match func(int, int) bool
+	match = func(pi, si int) bool {
+		k := key{pi, si}
+		if done[k] {
+			return memo[k]
+		}
+		done[k] = true
+		if pi == len(patterns) {
+			memo[k] = si == len(paths)
+			return memo[k]
+		}
+		if patterns[pi] == "**" {
+			memo[k] = match(pi+1, si) || (si < len(paths) && match(pi, si+1))
+			return memo[k]
+		}
+		if si < len(paths) {
+			segmentMatch, _ := filepath.Match(patterns[pi], paths[si])
+			memo[k] = segmentMatch && match(pi+1, si+1)
+		}
+		return memo[k]
+	}
+	return match(0, 0)
+}
+
+func normalizeGlobPattern(pattern string) string {
+	// Users commonly write [!.]* to mean "anything except a dot-file".
+	// Go's filepath.Match uses ^ for class negation, so translate that shell
+	// spelling before matching.
+	return strings.ReplaceAll(pattern, "[!.]", "[^.]")
+}
+
+func splitGlobPath(path string) []string {
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return nil
+	}
+	return strings.Split(path, "/")
 }

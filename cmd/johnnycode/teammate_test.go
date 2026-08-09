@@ -28,8 +28,8 @@ func TestParseTeammateFlagsBasic(t *testing.T) {
 }
 
 func TestParseTeammateFlagsMissingValue(t *testing.T) {
-	// Trailing flag without its value should not panic and just leave
-	// the field empty so runTeammate can return a friendly error.
+	
+	
 	args := []string{"--teammate", "--team-name"}
 	got, ok := parseTeammateFlags(args)
 	if !ok {

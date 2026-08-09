@@ -67,11 +67,11 @@ func (mb *FileMailBox) MarkAllRead(agentID string) error {
 	})
 }
 
-// withLock acquires a file lock, reads the inbox, applies the mutation, and writes back.
+
 func (mb *FileMailBox) withLock(agentID string, fn func([]FileMailMessage) ([]FileMailMessage, error)) error {
 	lockFile := mb.lockPath(agentID)
 
-	// Acquire lock with retries
+	
 	var lockFd *os.File
 	var err error
 	for attempt := 0; attempt < 10; attempt++ {
@@ -82,13 +82,13 @@ func (mb *FileMailBox) withLock(agentID string, fn func([]FileMailMessage) ([]Fi
 		if !os.IsExist(err) {
 			return err
 		}
-		// Lock exists, check if stale (>10s old)
+		
 		if info, statErr := os.Stat(lockFile); statErr == nil {
 			if time.Since(info.ModTime()) > 10*time.Second {
 				os.Remove(lockFile)
 			}
 		}
-		sleepMs := 5 + rand.Intn(96) // 5-100ms
+		sleepMs := 5 + rand.Intn(96) 
 		time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 	}
 	if lockFd == nil {
@@ -97,16 +97,16 @@ func (mb *FileMailBox) withLock(agentID string, fn func([]FileMailMessage) ([]Fi
 	lockFd.Close()
 	defer os.Remove(lockFile)
 
-	// Re-read inbox after acquiring lock
+	
 	messages, _ := mb.readInbox(agentID)
 
-	// Apply mutation
+	
 	messages, err = fn(messages)
 	if err != nil {
 		return err
 	}
 
-	// Write back
+	
 	return mb.writeInbox(agentID, messages)
 }
 

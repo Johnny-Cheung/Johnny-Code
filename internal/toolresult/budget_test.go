@@ -8,9 +8,6 @@ import (
 	"johnnycode/internal/conversation"
 )
 
-// oneToolResultMsg builds a conv with a single user message carrying the
-// supplied tool_results — the canonical shape produced by Agent's
-// AddToolResultsMessage.
 func oneToolResultMsg(results ...conversation.ToolResultBlock) *conversation.Manager {
 	conv := conversation.NewManager()
 	conv.AddToolResultsMessage(results)
@@ -22,7 +19,7 @@ func TestApplyDoesNotMutateConv(t *testing.T) {
 	conv := oneToolResultMsg(conversation.ToolResultBlock{ToolUseID: "t1", Content: big})
 	state := New()
 
-	origSnapshot := conv.GetMessages() // GetMessages returns a copy
+	origSnapshot := conv.GetMessages()
 	origContent := conv.GetMessages()[0].ToolResults[0].Content
 
 	apiConv, _, err := Apply(conv, t.TempDir(), state)
@@ -33,7 +30,6 @@ func TestApplyDoesNotMutateConv(t *testing.T) {
 		t.Fatal("Apply returned the same *Manager — Design B requires a new one")
 	}
 
-	// Original conv must still hold raw content.
 	if got := conv.GetMessages()[0].ToolResults[0].Content; got != origContent {
 		t.Fatalf("original conv mutated: got=%q want=%q", got[:50], origContent[:50])
 	}
@@ -41,7 +37,6 @@ func TestApplyDoesNotMutateConv(t *testing.T) {
 		t.Fatal("original conv history shape mutated")
 	}
 
-	// api_conv carries the replacement.
 	apiContent := apiConv.GetMessages()[0].ToolResults[0].Content
 	if !strings.HasPrefix(apiContent, "[Result of ") {
 		t.Fatalf("apiConv tool_result not replaced: %q", apiContent)
@@ -99,11 +94,41 @@ func TestReplacementByteIdentical(t *testing.T) {
 	}
 }
 
+func TestApplyWithFreshDefersSingleResultSpill(t *testing.T) {
+	big := strings.Repeat("z", SingleResultLimit+200)
+	conv := oneToolResultMsg(conversation.ToolResultBlock{ToolUseID: "fresh", Content: big})
+	state := New()
+	dir := t.TempDir()
+
+	first, firstRecords, err := ApplyWithFresh(conv, dir, state, map[string]struct{}{"fresh": {}})
+	if err != nil {
+		t.Fatalf("fresh Apply: %v", err)
+	}
+	if len(firstRecords) != 0 {
+		t.Fatalf("fresh pass unexpectedly spilled result: %d records", len(firstRecords))
+	}
+	if got := first.GetMessages()[0].ToolResults[0].Content; got != big {
+		t.Fatal("fresh pass did not preserve the complete result")
+	}
+	if _, ok := state.SeenIDs["fresh"]; ok {
+		t.Fatal("fresh result was frozen before its first model pass")
+	}
+
+	second, secondRecords, err := Apply(conv, dir, state)
+	if err != nil {
+		t.Fatalf("normal Apply: %v", err)
+	}
+	if len(secondRecords) != 1 {
+		t.Fatalf("normal pass records = %d, want 1", len(secondRecords))
+	}
+	if got := second.GetMessages()[0].ToolResults[0].Content; !strings.HasPrefix(got, "[Result of ") {
+		t.Fatalf("normal pass did not spill result: %q", got)
+	}
+}
+
 func TestFrozenNeverReplaced(t *testing.T) {
-	// Turn 1: a single quarter-budget result, well under aggregate budget
-	// (and not over SingleResultLimit). It gets frozen as "seen but not
-	// replaced".
-	const quarter = MessageAggregateLimit / 4 // 50000
+
+	const quarter = MessageAggregateLimit / 4
 	first := conversation.ToolResultBlock{ToolUseID: "t1", Content: strings.Repeat("a", quarter)}
 	conv := oneToolResultMsg(first)
 	state := New()
@@ -116,10 +141,6 @@ func TestFrozenNeverReplaced(t *testing.T) {
 		t.Fatal("t1 should not be replaced after turn 1")
 	}
 
-	// Turn 2: force the same message to grow with a fresh huge candidate
-	// so aggregate exceeds the budget. We build a NEW conv (callers can't
-	// directly grow an existing Manager's message), reusing t1's original
-	// content unchanged.
 	huge := conversation.ToolResultBlock{
 		ToolUseID: "t2",
 		Content:   strings.Repeat("b", quarter*3+200),
@@ -131,7 +152,6 @@ func TestFrozenNeverReplaced(t *testing.T) {
 		t.Fatalf("turn 2 Apply: %v", err)
 	}
 
-	// t1 must remain raw — its decision was frozen at turn 1.
 	var t1Got string
 	for _, tr := range api.GetMessages()[0].ToolResults {
 		if tr.ToolUseID == "t1" {
@@ -147,9 +167,7 @@ func TestFrozenNeverReplaced(t *testing.T) {
 }
 
 func TestAggregateOnlyPicksFresh(t *testing.T) {
-	// Five fresh results, each just under SingleResultLimit so Pass 1
-	// doesn't fire. Aggregate exceeds MessageAggregateLimit so Pass 2 must
-	// kick in. All should ultimately be in SeenIDs after Apply.
+
 	bigUnder := SingleResultLimit - 1
 	var rs []conversation.ToolResultBlock
 	for _, id := range []string{"t1", "t2", "t3", "t4", "t5"} {

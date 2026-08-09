@@ -20,8 +20,8 @@ import (
 	"johnnycode/internal/worktree"
 )
 
-// sanitizeSlugSegment replaces any character outside [a-zA-Z0-9._-] with '-' and trims redundant
-// separators so the result is safe for a git branch name.
+
+
 var unsafeSlugChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func sanitizeSlugSegment(s string) string {
@@ -50,12 +50,12 @@ type SubAgentProgress struct {
 
 const ForkBoilerplateTag = "<fork_boilerplate>"
 
-// ForkAgentType matches FORK_AGENT.agentType from the design TypeScript implementation.
+
 const ForkAgentType = "fork"
 
-// ForkQuerySource matches the value produced by getQuerySourceForAgent for fork children
-// (`agent:builtin:${FORK_AGENT.agentType}`). Used as the primary fork-nesting signal; falls back to
-// scanning conversation history for ForkBoilerplateTag.
+
+
+
 const ForkQuerySource = "agent:builtin:" + ForkAgentType
 
 type AgentTool struct {
@@ -66,26 +66,26 @@ type AgentTool struct {
 	TaskMgr       *TaskManager
 	ProgressCh    chan<- SubAgentProgress
 	Loader        *AgentLoader
-	Conversation  *conversation.Manager // parent conversation, needed for Fork
-	TeamMgr       *teams.TeamManager    // optional, enables team_name parameter
+	Conversation  *conversation.Manager 
+	TeamMgr       *teams.TeamManager    
 
-	// ParentChecker is the parent agent's permission checker. The Sandbox and RuleEngine are reused;
-	// only Mode is overridden when the sub-agent definition / call sets a different permissionMode.
-	// Optional — when nil, sub-agents inherit no checker (early bootstrap / tests).
+	
+	
+	
 	ParentChecker *permissions.Checker
 
-	// ParentReplacementState is the parent agent's tool-result decision log.
-	// Fork children Clone() it at construction so they share frozen
-	// decisions on tool_use_ids inherited from the parent (necessary for
-	// prompt-cache prefix stability across parent/child). Non-fork
-	// sub-agents (subagent_type=*) start with a fresh state — they have no
-	// shared history, so they have no shared cache prefix to preserve.
+	
+	
+	
+	
+	
+	
 	ParentReplacementState *toolresult.ContentReplacementState
 
-	// QuerySource identifies the spawning agent for nested-fork detection. Empty for the main thread;
-	// set to ForkQuerySource (or "agent:builtin:<type>") when the AgentTool instance lives inside a
-	// spawned sub-agent. Compaction-resistant — survives even when the fork boilerplate gets
-	// summarized out of conversation history.
+	
+	
+	
+	
 	QuerySource string
 }
 
@@ -221,7 +221,7 @@ func (t *AgentTool) Execute(ctx context.Context, args map[string]any) tools.Tool
 	cwdOverride, _ := args["cwd"].(string)
 	isolation, _ := args["isolation"].(string)
 
-	// cwd and isolation: "worktree" are mutually exclusive.
+	
 	if cwdOverride != "" && isolation == "worktree" {
 		return tools.ToolResult{
 			Output:  "Error: cwd and isolation: 'worktree' are mutually exclusive",
@@ -236,19 +236,19 @@ func (t *AgentTool) Execute(ctx context.Context, args map[string]any) tools.Tool
 		}
 	}
 
-	// Team-member path: an explicit team_name turns this spawn into a long-running teammate under that
-	// team's backend. The lead gets control back as soon as the teammate boots; further coordination
-	// flows through SendMessage / mailbox notifications.
+	
+	
+	
 	if teamName != "" && t.TeamMgr != nil {
 		return t.runAsTeammate(ctx, teamName, agentName, description, prompt, modelOverride, subagentType, isolation)
 	}
 
-	// Fork path: no subagent_type specified.
+	
 	if subagentType == "" {
 		return t.runFork(ctx, description, prompt, modelOverride, agentName)
 	}
 
-	// Definition path: resolve spec from loader or builtins.
+	
 	var spec SubAgentSpec
 	if t.Loader != nil {
 		def := t.Loader.Get(subagentType)
@@ -270,13 +270,13 @@ func (t *AgentTool) Execute(ctx context.Context, args map[string]any) tools.Tool
 		spec = s
 	}
 
-	// Per-call mode override beats the definition's permissionMode.
+	
 	if modeOverride != "" {
 		spec.PermissionMode = modeOverride
 	}
 
-	// Definition-level `background: true` forces the spawn to run async, matching the
-	// `run_in_background || selectedAgent.background` gating.
+	
+	
 	if runInBackground || spec.Background {
 		return t.runAsync(ctx, spec, description, prompt, modelOverride)
 	}
@@ -295,7 +295,7 @@ func (t *AgentTool) runSync(ctx context.Context, spec SubAgentSpec, description,
 		subAgent.MaxIterations = 200
 	}
 
-	// Worktree isolation: create an isolated worktree for the sub-agent.
+	
 	var wtResult *worktree.AgentWorktreeResult
 	if isolation == "worktree" {
 		slug := generateAgentSlug(description)
@@ -309,7 +309,7 @@ func (t *AgentTool) runSync(ctx context.Context, spec SubAgentSpec, description,
 		}
 		subAgent.WorkDir = wtResult.WorktreePath
 
-		// Inject worktree notice into the prompt.
+		
 		parentCwd, _ := os.Getwd()
 		notice := worktree.BuildWorktreeNotice(parentCwd, wtResult.WorktreePath)
 		prompt = notice + "\n\n" + prompt
@@ -321,7 +321,7 @@ func (t *AgentTool) runSync(ctx context.Context, spec SubAgentSpec, description,
 	if spec.SystemPromptOverride != "" {
 		conv.AddSystemReminder(spec.SystemPromptOverride)
 	}
-	// initialPrompt is prepended to the first user turn.
+	
 	if spec.InitialPrompt != "" {
 		conv.AddUserMessage(spec.InitialPrompt)
 	}
@@ -337,9 +337,9 @@ func (t *AgentTool) runSync(ctx context.Context, spec SubAgentSpec, description,
 		case agent.StreamText:
 			output.WriteString(e.Text)
 		case agent.PermissionRequestEvent:
-			// Sub-agents are headless — there's no UI to prompt. Auto-deny keeps the sub-agent's
-			// executeSingleTool unblocked instead of stalling on respCh forever. respCh has buffer=1, so
-			// this send is non-blocking.
+			
+			
+			
 			e.ResponseCh <- agent.PermDeny
 		case agent.ToolResultEvent:
 			toolCount++
@@ -382,8 +382,8 @@ func (t *AgentTool) runSync(ctx context.Context, spec SubAgentSpec, description,
 		result = "(agent produced no output)"
 	}
 
-	// Worktree cleanup: if the sub-agent ran in an isolated worktree, auto-remove if clean, preserve
-	// if dirty.
+	
+	
 	if wtResult != nil {
 		if worktree.HasWorktreeChanges(ctx, wtResult.WorktreePath, wtResult.HeadCommit) {
 			result += fmt.Sprintf("\n\nWorktree kept at %s (branch %s) — has uncommitted changes or new commits.",
@@ -403,11 +403,11 @@ func (t *AgentTool) runFork(ctx context.Context, description, prompt, modelOverr
 		return tools.ToolResult{Output: "Error: fork requires parent conversation context", IsError: true}
 	}
 
-	// Nested fork guard, two layers:
-	// (1) Primary: querySource — set on the AgentTool instance when it's constructed inside a fork
-	//     child. Compaction-resistant; catches the case where conversation history was rewritten or
-	//     summarized.
-	// (2) Fallback: message scan for ForkBoilerplateTag.
+	
+	
+	
+	
+	
 	if t.QuerySource == ForkQuerySource {
 		return tools.ToolResult{
 			Output:  "Error: cannot fork from a forked agent. Use subagent_type to spawn a definition-based agent instead.",
@@ -423,28 +423,28 @@ func (t *AgentTool) runFork(ctx context.Context, description, prompt, modelOverr
 		}
 	}
 
-	// Build forked conversation: copy parent messages + patch incomplete tool_use + append task.
+	
 	forkedConv := buildForkedConversation(t.Conversation, prompt)
 
 	client := t.selectClient("", modelOverride)
-	// Fork inherits the parent's exact tool pool to keep API request prefixes byte-identical for
-	// prompt cache hits (matches FORK_AGENT.tools=['*'] + useExactTools=true). The Agent tool gets
-	// cloned with QuerySource=ForkQuerySource so any nested fork attempt is rejected by the primary
-	// check in runFork.
+	
+	
+	
+	
 	subRegistry := cloneRegistryForFork(t.Registry)
 
 	subAgent := agent.New(client, subRegistry, t.Protocol)
-	subAgent.Checker = t.ParentChecker // fork inherits parent's permission state verbatim
+	subAgent.Checker = t.ParentChecker 
 	subAgent.MaxIterations = 200
-	// Fork inherits the parent's tool-result decision log so any tool_use_id
-	// already seen in the shared history makes the same decision in the
-	// child — necessary to keep the prompt-cache prefix byte-identical
-	// across parent and child.
+	
+	
+	
+	
 	if t.ParentReplacementState != nil {
 		subAgent.ReplacementState = t.ParentReplacementState.Clone()
 	}
 
-	// Fork always runs in background.
+	
 	taskName := "fork"
 	if agentName != "" {
 		taskName = agentName
@@ -461,7 +461,7 @@ func (t *AgentTool) runFork(ctx context.Context, description, prompt, modelOverr
 			case agent.StreamText:
 				output += e.Text
 			case agent.PermissionRequestEvent:
-				// Headless: auto-deny so the fork doesn't stall on respCh.
+				
 				e.ResponseCh <- agent.PermDeny
 			case agent.ErrorEvent:
 				t.TaskMgr.SetFailed(taskID, e.Message)
@@ -479,11 +479,11 @@ func (t *AgentTool) runFork(ctx context.Context, description, prompt, modelOverr
 	}
 }
 
-// emitProgress sends a SubAgentProgress event without ever blocking the caller. If the consumer
-// (TUI) is behind, the event is dropped — progress is best-effort UI feedback, not load-bearing
-// state. Blocking sends here caused sub-agent loops to deadlock when ProgressCh's buffer filled up,
-// which in turn prevented ESC / ctx cancel from ever taking effect because the sub-agent was stuck
-// in this send rather than at a ctx-aware point.
+
+
+
+
+
 func emitProgress(ch chan<- SubAgentProgress, ctx context.Context, p SubAgentProgress) {
 	if ch == nil {
 		return
@@ -492,16 +492,16 @@ func emitProgress(ch chan<- SubAgentProgress, ctx context.Context, p SubAgentPro
 	case ch <- p:
 	case <-ctx.Done():
 	default:
-		// Consumer is behind. Drop the event rather than stalling the sub-agent's event loop.
+		
 	}
 }
 
-// deriveSubAgentChecker threads a sub-agent's permissionMode through to the spawned agent: `mode`
-// overrides the agent definition's permissionMode, which then feeds the sub-agent's
-// ToolPermissionContext. The Sandbox and RuleEngine are shared — we only swap the Mode so the
-// sub-agent's tool calls hit a different decision matrix without diverging permission state.
-//
-// Returns the parent checker unchanged when no override is requested.
+
+
+
+
+
+
 func deriveSubAgentChecker(parent *permissions.Checker, modeOverride string) *permissions.Checker {
 	if parent == nil {
 		return nil
@@ -512,11 +512,11 @@ func deriveSubAgentChecker(parent *permissions.Checker, modeOverride string) *pe
 	return permissions.NewChecker(parent.Sandbox, parent.RuleEngine, permissions.PermissionMode(modeOverride))
 }
 
-// cloneRegistryForFork returns a registry that copies the parent verbatim except that any
-// *AgentTool instance is replaced with a shallow copy whose QuerySource is set to ForkQuerySource.
-// This is the local equivalent of useExactTools=true plus getQuerySourceForAgent: the fork child
-// sees the same wire-level tool definitions as its parent (so prompt cache hits) but a nested fork
-// attempt is caught at call time by the QuerySource check in runFork.
+
+
+
+
+
 func cloneRegistryForFork(reg *tools.Registry) *tools.Registry {
 	forked := tools.NewRegistry()
 	for _, tool := range reg.ListTools() {
@@ -545,9 +545,9 @@ func buildForkedConversation(parent *conversation.Manager, task string) *convers
 	forked := conversation.NewManager()
 	msgs := parent.GetMessages()
 
-	// Byte-exact replay: preserve thinking blocks alongside tool_use so the API request prefix matches
-	// the parent's exactly (cf. "keeping all content blocks (thinking, text, and every tool_use)").
-	// Missing thinking blocks would change the assistant message shape and bust the prompt cache.
+	
+	
+	
 	for _, msg := range msgs {
 		if len(msg.ToolUses) > 0 && len(msg.ToolResults) == 0 {
 			forked.AddAssistantFull(msg.Content, msg.ThinkingBlocks, msg.ToolUses)
@@ -575,7 +575,7 @@ func buildForkedConversation(parent *conversation.Manager, task string) *convers
 		}
 	}
 
-	// Append fork boilerplate + task as user message.
+	
 	forked.AddUserMessage(forkBoilerplate + "\n\nYour task:\n" + task)
 	return forked
 }
@@ -592,13 +592,13 @@ func (t *AgentTool) runAsync(ctx context.Context, spec SubAgentSpec, description
 	}
 }
 
-// runAsTeammate registers a long-running team member on an existing Team. Unlike runSync/runAsync,
-// this path never blocks the lead on the member's output: the lead always returns immediately and
-// coordinates through SendMessage + idle notifications in the team mailbox. The backend (in-process
-// / tmux / iTerm) is picked from Team.Mode by teams.SpawnTeammate.
-//
-// When isolation == "worktree" and a WorktreeMgr is configured, the teammate gets a dedicated git
-// worktree so its file edits don't collide with peers' work.
+
+
+
+
+
+
+
 func (t *AgentTool) runAsTeammate(
 	ctx context.Context,
 	teamName, memberName, description, prompt, modelOverride, subagentType, isolation string,
@@ -621,8 +621,8 @@ func (t *AgentTool) runAsTeammate(
 		}
 	}
 
-	// Resolve spec when subagent_type is set so the teammate respects the same disallow list any other
-	// sub-agent of that type would. Without a spec we hand the full registry to the teammate.
+	
+	
 	var spec SubAgentSpec
 	if subagentType != "" {
 		if t.Loader != nil {
@@ -676,8 +676,8 @@ func (t *AgentTool) runAsTeammate(
 		}
 	}
 
-	// In-process spawns hand back a live event channel; drain it in the background so the goroutine
-	// doesn't block on a full chan. Lead-visible progress flows through the mailbox, not this drain.
+	
+	
 	if result.Mode == teams.ModeInProcess && result.EventCh != nil {
 		go drainTeammateEvents(memberName, result.EventCh, t.ProgressCh)
 	}
@@ -697,9 +697,9 @@ func (t *AgentTool) runAsTeammate(
 	}
 }
 
-// drainTeammateEvents consumes a teammate's event stream so the producer side never blocks on a
-// full channel. Tool/error events are forwarded to ProgressCh when set so the parent UI can show
-// activity.
+
+
+
 func drainTeammateEvents(name string, ch <-chan agent.AgentEvent, progressCh chan<- SubAgentProgress) {
 	for ev := range ch {
 		if progressCh == nil {
@@ -725,7 +725,7 @@ func drainTeammateEvents(name string, ch <-chan agent.AgentEvent, progressCh cha
 	}
 }
 
-// generateAgentSlug produces a slug matching ^agent-a[0-9a-f]{7}$ for sub-agent worktrees.x.
+
 func generateAgentSlug(description string) string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)

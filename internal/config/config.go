@@ -39,44 +39,44 @@ type ProviderConfig struct {
 	ContextWindow   int    `yaml:"context_window"`
 	MaxOutputTokens int    `yaml:"max_output_tokens"`
 
-	// fetchedContextWindow caches the max_input_tokens auto-pulled from the
-	// provider's /v1/models endpoint (layer 2 of GetContextWindow). Populated
-	// once at client init via SetFetchedContextWindow; 0 means "not fetched".
-	// Not a yaml field — it's a runtime cache, never persisted.
+	
+	
+	
+	
 	fetchedContextWindow int
 }
 
-// modelContextWindows maps a model-name substring to its context window
-// (max input tokens). Matched from most specific to most generic; the first
-// substring hit wins. Values are reasonable starting points only — they may
-// drift as models are updated/renamed. When a value is wrong, set
-// `context_window` in config to override (that takes top priority).
+
+
+
+
+
 var modelContextWindows = []struct {
 	substr string
 	window int
 }{
-	{"1m", 1000000},      // also covers "-1m" suffixes (e.g. claude-...-1m)
-	{"gpt-4.1", 1000000}, // GPT-4.1 family ships a 1M window
+	{"1m", 1000000},      
+	{"gpt-4.1", 1000000}, 
 	{"gpt-4o", 128000},
 	{"gpt-4-turbo", 128000},
-	{"o1", 200000}, // OpenAI reasoning models o1 / o3 / o4
+	{"o1", 200000}, 
 	{"o3", 200000},
 	{"o4", 200000},
 	{"gpt-3.5", 16385},
 	{"claude", 200000},
 }
 
-// SetFetchedContextWindow records the context window auto-pulled from the
-// provider (layer 2). A non-positive value is ignored so a failed fetch never
-// pollutes the cache. Called once per provider at client init.
+
+
+
 func (p *ProviderConfig) SetFetchedContextWindow(window int) {
 	if window > 0 {
 		p.fetchedContextWindow = window
 	}
 }
 
-// lookupModelContextWindow returns the built-in mapping-table window for the
-// given model via substring match (layer 3), or 0 if nothing matches.
+
+
 func lookupModelContextWindow(model string) int {
 	m := strings.ToLower(model)
 	for _, e := range modelContextWindows {
@@ -87,15 +87,15 @@ func lookupModelContextWindow(model string) int {
 	return 0
 }
 
-// GetContextWindow resolves the model's context window with four layers of
-// fallback, highest priority first:
-//
-//  1. config-supplied context_window (> 0) — explicit override, always wins.
-//  2. value auto-fetched from the provider's /v1/models endpoint, cached via
-//     SetFetchedContextWindow (only Anthropic-protocol providers ever set it;
-//     a failed/absent fetch leaves it 0 and is skipped).
-//  3. built-in model-name → window mapping table (substring match).
-//  4. conservative default (claude → 200000, otherwise → 128000).
+
+
+
+
+
+
+
+
+
 func (p *ProviderConfig) GetContextWindow() int {
 	if p.ContextWindow > 0 {
 		return p.ContextWindow
@@ -238,10 +238,10 @@ func LoadConfig(path string) (*AppConfig, error) {
 
 	home, _ := os.UserHomeDir()
 	candidates := []string{
-		filepath.Join(home, ".johnnycode", "config.yaml"),   // user global (lowest)
-		filepath.Join(wd, "config.yaml"),                     // project root
-		filepath.Join(wd, ".johnnycode", "config.yaml"),      // project dot-dir
-		filepath.Join(wd, ".johnnycode", "config.local.yaml"), // local override (highest)
+		filepath.Join(home, ".johnnycode", "config.yaml"),   
+		filepath.Join(wd, "config.yaml"),                     
+		filepath.Join(wd, ".johnnycode", "config.yaml"),      
+		filepath.Join(wd, ".johnnycode", "config.local.yaml"), 
 	}
 
 	var merged *AppConfig
@@ -268,8 +268,8 @@ func LoadConfig(path string) (*AppConfig, error) {
 		return nil, err
 	}
 
-	// Auto-seed: copy project config.yaml to ~/.johnnycode/ if the global
-	// config doesn't exist yet, so johnnycode works from any directory.
+	
+	
 	home, _ = os.UserHomeDir()
 	if home != "" {
 		globalPath := filepath.Join(home, ".johnnycode", "config.yaml")

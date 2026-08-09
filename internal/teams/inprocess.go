@@ -10,13 +10,13 @@ import (
 	"johnnycode/internal/tools"
 )
 
-// StartInProcessMember registers a teammate on the team and launches its long-running main loop in
-// a background goroutine. The returned channel forwards every AgentEvent emitted across all turns;
-// it closes when the loop exits (ctx cancellation or shutdown request in the inbox).
-//
-// The lifecycle of the goroutine is bound to ctx: the caller cancels ctx to stop the teammate. Each
-// pass through the loop calls RunInProcessTeammate, which handles waiting, agent execution, and
-// idle notification.
+
+
+
+
+
+
+
 func StartInProcessMember(
 	ctx context.Context,
 	team *Team,
@@ -47,8 +47,8 @@ func StartInProcessMember(
 	return eventCh
 }
 
-// BuildTeammateAddendum creates the system-reminder text injected at the top of every teammate's
-// conversation. It tells the model its identity, who else is on the team, and how to send messages.
+
+
 func BuildTeammateAddendum(teamName, memberName string, otherMembers []string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a member of team \"" + teamName + "\". Your name is \"" + memberName + "\".\n\n")
@@ -62,9 +62,9 @@ func BuildTeammateAddendum(teamName, memberName string, otherMembers []string) s
 	return sb.String()
 }
 
-// InjectPendingMessages returns any unread mailbox messages formatted as a system-reminder string
-// and marks them read. It is called at the top of every teammate turn by RunInProcessTeammate; the
-// empty return means no new mail.
+
+
+
 func InjectPendingMessages(team *Team, memberName string) string {
 	msgs, err := team.MailBox.ReadUnread(memberName)
 	if err != nil || len(msgs) == 0 {

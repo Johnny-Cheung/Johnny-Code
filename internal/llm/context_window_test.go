@@ -10,9 +10,9 @@ import (
 	"johnnycode/internal/config"
 )
 
-// TestResolveContextWindow_FetchSuccess covers layer 2 working: a healthy
-// /v1/models/{model} endpoint returns max_input_tokens, which is cached on the
-// provider config and surfaced by GetContextWindow.
+
+
+
 func TestResolveContextWindow_FetchSuccess(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,9 +36,9 @@ func TestResolveContextWindow_FetchSuccess(t *testing.T) {
 	}
 }
 
-// TestResolveContextWindow_FetchErrorDegrades covers the critical path: when
-// the endpoint errors (here 500), the fetch must fail silently — no panic, no
-// blocking — and GetContextWindow falls back to the mapping table.
+
+
+
 func TestResolveContextWindow_FetchErrorDegrades(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
@@ -49,21 +49,21 @@ func TestResolveContextWindow_FetchErrorDegrades(t *testing.T) {
 	cfg := &config.ProviderConfig{
 		Protocol: "anthropic", BaseURL: srv.URL, APIKey: "k", Model: "claude-sonnet-4-6",
 	}
-	ResolveContextWindow(context.Background(), cfg) // must not panic
+	ResolveContextWindow(context.Background(), cfg) 
 
-	// Mapping table gives 200000 for claude; the failed fetch must not lower it.
+	
 	if got := cfg.GetContextWindow(); got != 200000 {
 		t.Fatalf("on fetch error should fall back to mapping table: got %d, want 200000", got)
 	}
 }
 
-// TestResolveContextWindow_UnreachableDegrades simulates a dead endpoint
-// (closed server). The bounded-timeout fetch must degrade to the mapping table
-// without hanging or crashing.
+
+
+
 func TestResolveContextWindow_UnreachableDegrades(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	url := srv.URL
-	srv.Close() // close immediately so connections are refused
+	srv.Close() 
 
 	cfg := &config.ProviderConfig{
 		Protocol: "anthropic", BaseURL: url, APIKey: "k", Model: "gpt-4o",
@@ -75,9 +75,9 @@ func TestResolveContextWindow_UnreachableDegrades(t *testing.T) {
 	}
 }
 
-// TestResolveContextWindow_NonAnthropicSkipped confirms layer 2 only applies to
-// Anthropic-protocol providers: a non-anthropic provider is never fetched and
-// resolves via the mapping table.
+
+
+
 func TestResolveContextWindow_NonAnthropicSkipped(t *testing.T) {
 	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,8 +99,8 @@ func TestResolveContextWindow_NonAnthropicSkipped(t *testing.T) {
 	}
 }
 
-// TestResolveContextWindow_ConfigOverrideSkipsFetch confirms that an explicit
-// config window short-circuits the fetch entirely (no network call).
+
+
 func TestResolveContextWindow_ConfigOverrideSkipsFetch(t *testing.T) {
 	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

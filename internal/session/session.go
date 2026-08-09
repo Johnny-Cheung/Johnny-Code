@@ -14,45 +14,45 @@ import (
 	"time"
 )
 
-// TypeCompactBoundary marks a session record as a compaction boundary rather
-// than a plain conversation message. A boundary record's Content holds a JSON
-// blob (see CompactBoundary) carrying the summary text plus the recent tail
-// (keep) that was preserved verbatim at compaction time. Plain messages leave
-// Type empty (omitempty), so old sessions and normal turns are unaffected.
+
+
+
+
+
 const TypeCompactBoundary = "compact_boundary"
 
 type Message struct {
 	Role string `json:"role"`
-	// Type distinguishes record kinds. Empty (the default, omitted from JSON)
-	// means a plain conversation message; TypeCompactBoundary means Content is a
-	// CompactBoundary JSON blob written by SaveCompactBoundary.
+	
+	
+	
 	Type    string `json:"type,omitempty"`
 	Content string `json:"content"`
 	Ts      int64  `json:"ts"`
 }
 
-// KeepMessage is one verbatim message preserved in the recent tail at the moment
-// of compaction. Only role + content text is stored (matching how the session
-// log already persists messages — text only, no tool blocks).
+
+
+
 type KeepMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-// CompactBoundary is the structured payload stored (as JSON) in the Content of a
-// TypeCompactBoundary record. Summary is the LLM-produced summary of the
-// older prefix; Keep is the recent tail that was kept verbatim. On resume the
-// compacted state is rebuilt as: [user message = Summary] + Keep + any plain
-// messages appended after the boundary.
+
+
+
+
+
 type CompactBoundary struct {
 	Summary string        `json:"summary"`
 	Keep    []KeepMessage `json:"keep"`
 }
 
-// SaveCompactBoundary appends a compaction boundary record to the session log.
-// The boundary is append-only: the original prefix messages stay in the file but
-// are not replayed on resume (see FindLastCompactBoundary). The summary + keep
-// are inlined into the record's Content as a CompactBoundary JSON blob.
+
+
+
+
 func SaveCompactBoundary(workDir, sessionID, summary string, keep []KeepMessage) {
 	blob, err := json.Marshal(CompactBoundary{Summary: summary, Keep: keep})
 	if err != nil {
@@ -66,11 +66,11 @@ func SaveCompactBoundary(workDir, sessionID, summary string, keep []KeepMessage)
 	})
 }
 
-// FindLastCompactBoundary scans the loaded records for the last compaction
-// boundary. It returns the parsed boundary, the slice of plain messages appended
-// after that boundary, and ok=true when a boundary was found. When no boundary
-// exists (ok=false) the caller should replay all records verbatim
-// (backward-compatible: old sessions have no boundary records).
+
+
+
+
+
 func FindLastCompactBoundary(msgs []Message) (boundary CompactBoundary, after []Message, ok bool) {
 	last := -1
 	for i, m := range msgs {
@@ -82,13 +82,13 @@ func FindLastCompactBoundary(msgs []Message) (boundary CompactBoundary, after []
 		return CompactBoundary{}, nil, false
 	}
 	if err := json.Unmarshal([]byte(msgs[last].Content), &boundary); err != nil {
-		// Corrupt boundary blob — fall back to full replay rather than losing
-		// the conversation.
+		
+		
 		return CompactBoundary{}, nil, false
 	}
 	for _, m := range msgs[last+1:] {
 		if m.Type == TypeCompactBoundary {
-			continue // defensive; FindLast already targeted the final one
+			continue 
 		}
 		after = append(after, m)
 	}
@@ -107,7 +107,7 @@ type SessionInfo struct {
 func NewID() string {
 	var b [2]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand 极少失败；兜底用纳秒低 16 位，仍能避免同秒同进程冲突
+		
 		return fmt.Sprintf("%s-%04x", time.Now().Format("20060102-150405"), time.Now().UnixNano()&0xFFFF)
 	}
 	return time.Now().Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
@@ -121,15 +121,15 @@ func SessionFilePath(workDir, id string) string {
 	return filepath.Join(sessionsDir(workDir), id+".jsonl")
 }
 
-// SnapshotFilePath returns the path to the structured live-context snapshot for a
-// session. Used by faithful resume to restore tool calls, results, and thinking
-// blocks that the text-only JSONL log does not preserve.
+
+
+
 func SnapshotFilePath(workDir, id string) string {
 	return filepath.Join(sessionsDir(workDir), id+".snapshot.json")
 }
 
-// SessionRecordsDir returns the directory where per-session replacement_records
-// are stored, scoping Layer 1 spill decisions to a single session.
+
+
 func SessionRecordsDir(workDir, id string) string {
 	return filepath.Join(sessionsDir(workDir), id)
 }

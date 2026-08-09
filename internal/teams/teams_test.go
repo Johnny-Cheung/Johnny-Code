@@ -83,7 +83,7 @@ func TestTeamManagerCRUD(t *testing.T) {
 func TestDetectBackendFallback(t *testing.T) {
 	t.Setenv("TMUX", "")
 	t.Setenv("ITERM_SESSION_ID", "")
-	// PATH manipulation: point to an empty dir so `tmux` lookup fails.
+	
 	emptyDir := t.TempDir()
 	t.Setenv("PATH", emptyDir)
 	if got := detectBackend(); got != ModeInProcess {
@@ -101,7 +101,7 @@ func TestDetectBackendPrefersTmuxWhenInside(t *testing.T) {
 func TestDetectBackendPicksITermWhenInside(t *testing.T) {
 	t.Setenv("TMUX", "")
 	t.Setenv("ITERM_SESSION_ID", "w0t0p0:ABC")
-	// PATH without tmux so we don't fall back to it.
+	
 	emptyDir := t.TempDir()
 	t.Setenv("PATH", emptyDir)
 	if got := detectBackend(); got != ModeITerm {
@@ -109,11 +109,11 @@ func TestDetectBackendPicksITermWhenInside(t *testing.T) {
 	}
 }
 
-// TestSendMessageToolRoutesToLead pins the fix for the bug where a
-// teammate calling SendMessage(to="lead", ...) saw "recipient 'lead' not
-// found in any team" because the lead is never registered as a Member.
-// The tool must recognize LeadName and route via the sender's team
-// mailbox so the lead can read the reply on its next sweep.
+
+
+
+
+
 func TestSendMessageToolRoutesToLead(t *testing.T) {
 	tm := NewTeamManager()
 	team := tm.CreateTeam("demo", ModeInProcess)
@@ -143,12 +143,12 @@ func TestSendMessageToolRoutesToLead(t *testing.T) {
 	}
 }
 
-// TestSendMessageToolUnknownSenderToLead guards the failure path: if no
-// team contains the sender, sending to the lead can't pick a mailbox and
-// must surface a clear error rather than silently dropping the message.
+
+
+
 func TestSendMessageToolUnknownSenderToLead(t *testing.T) {
 	tm := NewTeamManager()
-	tm.CreateTeam("demo", ModeInProcess) // no members added
+	tm.CreateTeam("demo", ModeInProcess) 
 
 	tool := &SendMessageTool{TeamMgr: tm, SenderName: "ghost"}
 	res := tool.Execute(context.Background(), map[string]any{
