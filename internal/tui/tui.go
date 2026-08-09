@@ -564,7 +564,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streaming {
 			return m, nil
 		}
-		notifications := teams.DrainLeadMailbox(m.teamMgr)
+		// 空闲时统一拉取：后台任务完成 + 团队邮件 + 异步 hook 通知。
+		// 任务通知与团队邮件走同一唤醒路径——子代理返回后自动注入主对话并启动新一轮。
+		notifications := m.drainTaskNotifications()
 		if len(notifications) == 0 {
 			return m, m.pollMailbox()
 		}

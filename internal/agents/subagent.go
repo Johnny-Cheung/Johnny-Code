@@ -273,11 +273,7 @@ var BuiltinSpecs = map[string]SubAgentSpec{
 		Name:            "explore",
 		Description:     "Fast read-only search agent for locating code",
 		DisallowedTools: []string{"EditFile", "WriteFile"},
-		
-		
-		
-		
-		Model: "haiku",
+		Model:           "inherit",
 	},
 }
 

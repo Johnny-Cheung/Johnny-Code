@@ -635,6 +635,10 @@ func (t *AgentTool) runAsTeammate(
 	}
 
 	subRegistry := FilterToolsForAgent(t.Registry, spec.Tools, spec.DisallowedTools, false)
+	// 用成员自己的名字重新注册 SendMessage 工具。主 registry 里的实例
+	// SenderName 是 "lead"，成员若沿用它在 to=lead 时无法定位自己的团队
+	// （team.Members 里没有 "lead"），导致成员永远无法向 lead 交付结果。
+	subRegistry.Register(&teams.SendMessageTool{TeamMgr: t.TeamMgr, SenderName: memberName})
 	client := t.selectClient(spec.Model, modelOverride)
 
 	var otherMembers []string
