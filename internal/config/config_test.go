@@ -14,7 +14,7 @@ func TestLoadDotEnvAndEnvironmentOverride(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data := "JOHNNY_API_KEY=file-key\nJOHNNY_BASE_URL=https://relay.example/gateway/v1\nJOHNNY_MODEL=relay-deepseek\n"
+	data := "JOHNNY_API_KEY=file-key\nJOHNNY_BASE_URL=https://relay.example/gateway\nJOHNNY_MODEL=relay-deepseek\n"
 	if err := os.WriteFile(".env", []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -24,12 +24,12 @@ func TestLoadDotEnvAndEnvironmentOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.APIKey != "environment-key" || cfg.BaseURL != "https://relay.example/gateway/v1" || cfg.Model != "relay-deepseek" {
+	if cfg.APIKey != "environment-key" || cfg.BaseURL != "https://relay.example/gateway" || cfg.Model != "relay-deepseek" {
 		t.Fatal("配置未正确读取 .env 或遵循环境变量优先级")
 	}
 }
 
-func TestLoadRejectsMissingConfigAndCompletionURL(t *testing.T) {
+func TestLoadRejectsMissingConfigAndMessageURL(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("JOHNNY_API_KEY", "")
 	t.Setenv("JOHNNY_BASE_URL", "")
@@ -40,7 +40,7 @@ func TestLoadRejectsMissingConfigAndCompletionURL(t *testing.T) {
 
 	t.Setenv("JOHNNY_API_KEY", "test-key")
 	t.Setenv("JOHNNY_MODEL", "relay-deepseek")
-	t.Setenv("JOHNNY_BASE_URL", "https://relay.example/v1/chat/completions")
+	t.Setenv("JOHNNY_BASE_URL", "https://relay.example/v1/messages")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "去掉末尾") {
 		t.Fatalf("应提示填写 API 根地址，实际为 %v", err)
 	}

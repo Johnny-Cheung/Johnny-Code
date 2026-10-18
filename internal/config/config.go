@@ -56,8 +56,8 @@ func Load() (Config, error) {
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return Config{}, errors.New("JOHNNY_BASE_URL 应仅包含 API 根地址，凭据请填写在 JOHNNY_API_KEY 中")
 	}
-	if strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/chat/completions") {
-		return Config{}, errors.New("JOHNNY_BASE_URL 请去掉末尾的 /chat/completions，保留中转站要求的路径前缀")
+	if strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/v1/messages") {
+		return Config{}, errors.New("JOHNNY_BASE_URL 请去掉末尾的 /v1/messages，保留中转站根路径")
 	}
 
 	return cfg, nil
