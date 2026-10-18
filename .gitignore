@@ -1,3 +1,6 @@
 .DS_Store
 /johnny
 /bin/
+.env
+.env.*
+!.env.example
