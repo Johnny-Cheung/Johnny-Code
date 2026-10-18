@@ -16,10 +16,10 @@ type Config struct {
 	Model   string
 }
 
-func Load() (Config, error) {
-	values, err := godotenv.Read(".env")
+func Load(path string) (Config, error) {
+	values, err := godotenv.Read(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Config{}, errors.New("读取 .env 失败，请检查文件权限和格式")
+		return Config{}, fmt.Errorf("读取配置文件 %q 失败，请检查文件权限和格式", path)
 	}
 
 	get := func(name string) string {
@@ -46,7 +46,7 @@ func Load() (Config, error) {
 		}
 	}
 	if len(missing) > 0 {
-		return Config{}, fmt.Errorf("请在 .env 或环境变量中填写：%s", strings.Join(missing, "、"))
+		return Config{}, fmt.Errorf("请在配置文件 %q 或环境变量中填写：%s", path, strings.Join(missing, "、"))
 	}
 
 	u, err := url.Parse(cfg.BaseURL)
