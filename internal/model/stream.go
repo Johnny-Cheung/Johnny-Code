@@ -117,7 +117,18 @@ func (c *collector) complete(reason StopReason) error {
 	if reason == "" {
 		return protocolError("模型未返回可识别的结束原因")
 	}
+	if reason == StopMaxTokens {
+		c.response.StopReason = reason
+		return nil
+	}
+	calls := make(map[string]bool)
 	for i, b := range c.response.Message.Content {
+		if b.Type == BlockToolCall && b.ToolCall != nil {
+			if calls[b.ToolCall.ID] {
+				return protocolError("模型返回了重复的工具调用 ID")
+			}
+			calls[b.ToolCall.ID] = true
+		}
 		if !c.ended[i] {
 			return protocolError("流式连接在内容块完成前结束")
 		}
@@ -136,6 +147,28 @@ func (c *collector) complete(reason StopReason) error {
 	}
 	c.response.StopReason = reason
 	return nil
+}
+
+// 截断只允许保留无法完成的工具块，不能吞掉回调错误。
+func endOpenBlocks(c *collector, truncated bool) error {
+	for index := range c.response.Message.Content {
+		if c.ended[index] {
+			continue
+		}
+		block := &c.response.Message.Content[index]
+		if truncated && block.Type == BlockToolCall && !toolCallComplete(block) {
+			continue
+		}
+		if err := c.end(index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func toolCallComplete(block *ContentBlock) bool {
+	call := block.ToolCall
+	return call != nil && call.ID != "" && call.Name != "" && (len(call.Arguments) == 0 || jsonObject(call.Arguments))
 }
 
 func protocolError(message string) error { return &Error{Kind: ErrProtocol, Message: message} }

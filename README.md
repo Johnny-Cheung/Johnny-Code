@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.2 支持本地安装、任意目录启动，以及单轮文本问答和流式输出；模型服务使用 Anthropic 原生 Messages 协议。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.3 提供统一模型接口，支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型进行单轮流式问答。
 
 ## 安装和更新
 
@@ -32,6 +32,16 @@ johnny
 
 两种方式均只处理一个问题，流式输出后退出。无参数模式输入空行会提示错误；没有输入时按 `Ctrl+D` 退出，按 `Ctrl+C` 取消输入或模型请求。
 
+临时切换模型或协议，不修改 `.env`：
+
+```sh
+johnny --model "服务提供的另一个模型名" "请用一句话介绍自己"
+johnny --api openai-responses --model "服务提供的GPT模型名" "请回复：调用成功"
+johnny --api openai-chat-completions --model "服务提供的模型名" "你好"
+```
+
+选项放在问题之前；包含空格的模型名用引号包围。`--model` 只替换模型名，`--api` 只替换协议，服务地址和 Key 继续使用当前配置。跨服务切换时，用 `JOHNNY_BASE_URL`、`JOHNNY_API_KEY` 环境变量提供相应配置。每次运行仍只访问一个服务，不自动探测或切换协议。
+
 本地查询：
 
 ```sh
@@ -55,11 +65,18 @@ JOHNNY_BASE_URL=https://你的中转站地址
 JOHNNY_MODEL=中转站提供的模型名称
 ```
 
-- `JOHNNY_API_KEY`：通过 `Authorization: Bearer` 发送，对应 `ANTHROPIC_AUTH_TOKEN` 认证方式。
-- `JOHNNY_BASE_URL`：服务根地址，SDK 追加 `v1/messages`。例如实际接口为 `https://relay.example/v1/messages`，这里填写 `https://relay.example`。
-- `JOHNNY_MODEL`：中转站提供的模型标识。
+- `JOHNNY_API_KEY`：通过 `Authorization: Bearer` 发送。Anthropic 模式对应 `ANTHROPIC_AUTH_TOKEN` 认证方式。
+- `JOHNNY_BASE_URL`：服务根地址或以 `/v1` 结尾的 API 根地址，程序按协议追加接口路径，避免重复 `/v1`。不支持填入完整接口地址。
+- `JOHNNY_MODEL`：服务提供的模型标识。
+- `JOHNNY_API`：可选协议字段，未配置时为 `anthropic-messages`。
 
-`JOHNNY_*` 环境变量按字段优先于文件值；显式设置为空也会覆盖文件并被报告为缺失。其他应用的 Anthropic 凭据不会覆盖本项目认证。`.env` 被 Git 忽略，仓库只包含模板。
+| JOHNNY_API | 调用接口 |
+| --- | --- |
+| `anthropic-messages` | `/v1/messages` |
+| `openai-responses` | `/v1/responses`，使用 `store: false` |
+| `openai-chat-completions` | `/v1/chat/completions` |
+
+命令行 `--api`、`--model` 优先于相应环境变量；`JOHNNY_*` 环境变量按字段优先于文件值。显式空值也会覆盖配置并报错；可选协议字段只有在完全未提供时才使用默认值。其他应用的 Anthropic/OpenAI 凭据不会覆盖本项目认证。`.env` 被 Git 忽略，仓库只包含模板。
 
 请求最多等待 5 分钟，回复上限为 4096 个输出 token，思考字段不作为正文显示。正文写入标准输出，输入提示、等待状态和错误写入标准错误。成功退出码为 0，失败为 1，取消为 130。
 
@@ -86,10 +103,13 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置和本地模拟服务，不读取真实 Key。覆盖原生协议、流式输出、取消、单轮输入、跨目录配置复用，以及隔离目录中的安装、更新、PATH 幂等与碰撞保护。
+测试使用临时配置和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消，以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。
+
+统一模型层位于 `internal/model`。一次调用传入 `Request`，按序同步触发块级 `Event`，返回完整 `Response` 和错误。消息支持正文、思考数据、工具调用和文本工具结果；工具注册执行与 Agent Loop 在后续版本实现。带协议专用续接数据的历史暂不支持直接跨服务或模型重放；当前 CLI 每次运行从新问题开始，不受该限制。
 
 ## 项目规划
 
 - [总体路线图](docs/johnny-code-roadmap.md)
 - [v0.1：模型调用](docs/versions/v0.1.md)
 - [v0.2：全局 CLI 入口](docs/versions/v0.2.md)
+- [v0.3：统一模型接口](docs/versions/v0.3.md)

@@ -37,7 +37,21 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"go.mod", "go.sum", "cmd/johnny/main.go", "internal/config/config.go", "internal/model/client.go", "scripts/install.sh"} {
+	names := []string{"go.mod", "go.sum", "cmd/johnny/main.go", "internal/config/config.go", "scripts/install.sh"}
+	modelFiles, err := filepath.Glob(filepath.Join(root, "internal/model/*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range modelFiles {
+		if !strings.HasSuffix(path, "_test.go") {
+			name, err := filepath.Rel(root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, name)
+		}
+	}
+	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil {
 			t.Fatal(err)
@@ -56,7 +70,7 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 			t.Error("安装后的程序未读取原位配置")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"安装成功\"}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"安装成功\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer server.Close()
 	configPath := filepath.Join(source, ".env")
@@ -74,7 +88,7 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name != "JOHNNY_API_KEY" && name != "JOHNNY_BASE_URL" && name != "JOHNNY_MODEL" && name != "ZDOTDIR" {
+		if name != "JOHNNY_API_KEY" && name != "JOHNNY_BASE_URL" && name != "JOHNNY_MODEL" && name != "JOHNNY_API" && name != "ZDOTDIR" {
 			env = append(env, entry)
 		}
 	}

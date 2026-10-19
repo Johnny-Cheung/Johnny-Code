@@ -9,7 +9,7 @@ import (
 
 func TestLoadDotEnvAndEnvironmentOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "existing config.env")
-	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL"} {
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API"} {
 		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)

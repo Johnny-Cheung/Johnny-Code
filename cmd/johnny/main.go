@@ -13,13 +13,14 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/config"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 )
 
 var (
-	version          = "0.2.0"
+	version          = "0.3.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -43,6 +44,8 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	flags.BoolVar(&help, "help", false, "显示帮助")
 	flags.BoolVar(&help, "h", false, "显示帮助")
 	flags.BoolVar(&showVersion, "version", false, "显示版本")
+	api := flags.String("api", "", "临时选择 API 协议")
+	modelName := flags.String("model", "", "临时选择模型")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -60,7 +63,16 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
 	}
-	cfg, err := config.Load(path)
+	var overrides config.Overrides
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "api":
+			overrides.API = api
+		case "model":
+			overrides.Model = modelName
+		}
+	})
+	cfg, err := config.LoadWithOverrides(path, overrides)
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
 	}
@@ -82,11 +94,62 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		return 1
 	}
 
+	client, err := model.NewClient(model.Options{API: model.API(cfg.API), APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
+	if err != nil {
+		return reportError(stderr, "配置错误：", err)
+	}
 	fmt.Fprintln(stderr, "正在等待模型回复…")
-	if err := model.Stream(ctx, cfg, prompt, output); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	response, err := streamText(ctx, client, model.Request{
+		Model:           cfg.Model,
+		Messages:        []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: prompt}}}},
+		MaxOutputTokens: 4096,
+	}, output)
+	if err != nil {
 		return reportError(stderr, "调用失败：", err)
 	}
-	return 0
+	switch response.StopReason {
+	case model.StopMaxTokens:
+		return reportError(stderr, "调用失败：", errors.New("模型达到输出上限，已显示的内容可能不完整"))
+	case model.StopToolUse:
+		return reportError(stderr, "调用失败：", errors.New("模型请求了工具调用，当前单轮命令尚不执行工具"))
+	case model.StopRefusal:
+		return reportError(stderr, "调用失败：", errors.New("模型拒绝了本次请求"))
+	}
+	for _, block := range response.Message.Content {
+		if block.Type == model.BlockText && block.Text != "" {
+			return 0
+		}
+	}
+	return reportError(stderr, "调用失败：", errors.New("模型没有返回文本内容，请检查模型名称及中转站兼容性"))
+}
+
+func streamText(ctx context.Context, client model.Client, req model.Request, output io.Writer) (response model.Response, err error) {
+	needsNewline := false
+	defer func() {
+		if needsNewline {
+			if _, writeErr := fmt.Fprintln(output); err == nil && writeErr != nil {
+				err = fmt.Errorf("输出回复失败：%w", writeErr)
+			}
+		}
+	}()
+	return client.Stream(ctx, req, func(event model.Event) error {
+		if event.Type != model.EventBlockDelta || event.Block.Type != model.BlockText || event.Delta == "" {
+			return nil
+		}
+		n, writeErr := io.WriteString(output, event.Delta)
+		if n > 0 {
+			needsNewline = event.Delta[n-1] != '\n'
+		}
+		if writeErr == nil && n != len(event.Delta) {
+			writeErr = io.ErrShortWrite
+		}
+		if writeErr != nil {
+			return fmt.Errorf("输出回复失败：%w", writeErr)
+		}
+		return nil
+	})
 }
 
 func configPath() (string, error) {
@@ -115,6 +178,8 @@ func printHelp(output io.Writer) {
 选项：
   -h, --help        显示帮助
   --version         显示版本和提交号
+  --model 名称      临时覆盖模型名（选项放在问题之前）
+  --api 协议        anthropic-messages、openai-responses、openai-chat-completions
 
 配置文件：%s
 Ctrl+C 取消请求，等待输入时 Ctrl+D 退出。
