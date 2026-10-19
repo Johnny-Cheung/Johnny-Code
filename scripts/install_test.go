@@ -3,6 +3,7 @@ package scripts
 import (
 	"crypto/sha256"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,20 +38,24 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	names := []string{"go.mod", "go.sum", "cmd/johnny/main.go", "internal/config/config.go", "scripts/install.sh"}
-	for _, packageDir := range []string{"internal/model", "internal/tool"} {
-		packageFiles, err := filepath.Glob(filepath.Join(root, packageDir, "*.go"))
+	names := []string{"go.mod", "go.sum", "scripts/install.sh"}
+	for _, packageDir := range []string{"cmd/johnny", "internal/config", "internal/model", "internal/tool", "internal/agent", "internal/session"} {
+		err := filepath.WalkDir(filepath.Join(root, packageDir), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() || strings.HasSuffix(entry.Name(), "_test.go") {
+				return nil
+			}
+			name, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			names = append(names, name)
+			return nil
+		})
 		if err != nil {
 			t.Fatal(err)
-		}
-		for _, path := range packageFiles {
-			if !strings.HasSuffix(path, "_test.go") {
-				name, err := filepath.Rel(root, path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				names = append(names, name)
-			}
 		}
 	}
 	for _, name := range names {
@@ -119,6 +124,13 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 	output, err := cmd.Output()
 	if err != nil || string(output) != "安装成功\n" {
 		t.Fatalf("跨目录调用失败：%v，输出 %q", err, output)
+	}
+	sessionLogs, err := filepath.Glob(filepath.Join(home, ".johnny", "sessions", "*.jsonl"))
+	if err != nil || len(sessionLogs) == 0 {
+		t.Fatalf("应在 HOME 下生成会话记录：%v %v", sessionLogs, err)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".johnny")); !os.IsNotExist(err) {
+		t.Fatal("工作目录不应创建日志目录")
 	}
 	cmd = exec.Command("bash", "--noprofile", "--rcfile", profile, "-ic", "command -v johnny; johnny --version")
 	cmd.Dir, cmd.Env = work, env

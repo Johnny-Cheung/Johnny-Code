@@ -64,7 +64,8 @@ const (
 	BlockToolResult BlockType = "tool_result"
 )
 
-// Replay 保存同一服务、协议和模型续接需要的数据，不用于显示或日志。
+// Replay 保存同一服务、协议和模型续接需要的数据，不用于终端显示。
+// 任务诊断记录会保存这些数据，但不会从旧记录恢复会话或生成记忆。
 type Replay struct {
 	Source Source          `json:"source"`
 	Data   json.RawMessage `json:"data"`
