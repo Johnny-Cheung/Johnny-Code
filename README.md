@@ -105,7 +105,16 @@ bash -n scripts/install.sh
 
 测试使用临时配置和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；v0.4 工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。
 
-统一模型层位于 `internal/model`。一次调用传入 `Request`，按序同步触发块级 `Event`，返回完整 `Response` 和错误。消息支持正文、思考数据、工具调用和文本工具结果。v0.4 的独立工具层位于 `internal/tool`，提供 `bash`、`read`、`edit`、`write` 的直接执行和注册表；它尚未接入 CLI 的 Agent Loop，权限确认与隔离留到 v0.7。
+统一模型层位于 `internal/model`。一次调用传入 `Request`，按序同步触发块级 `Event`，返回完整 `Response` 和错误。消息支持正文、思考数据、工具调用和文本工具结果。v0.4 的独立工具层位于 `internal/tool`，提供 `bash`、`read`、`edit`、`write` 的直接执行和注册表。当前模型请求尚未携带工具定义，工具通过手动命令验证；模型驱动的工具执行和 Agent Loop 在 v0.5 实现，权限确认与隔离留到 v0.7。
+
+手动验证工具：
+
+```sh
+go run ./cmd/tool-demo
+go run ./cmd/tool-demo bash '{"command":"pwd"}'
+go run ./cmd/tool-demo write '{"path":"demo.txt","content":"hello"}'
+go run ./cmd/tool-demo read '{"path":"demo.txt"}'
+```
 
 ## 项目规划
 
