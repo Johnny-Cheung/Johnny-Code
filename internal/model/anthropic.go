@@ -32,6 +32,10 @@ func (a *anthropicClient) Stream(ctx context.Context, req Request, emit func(Eve
 				block = anthropic.NewToolUseBlock(b.ToolCall.ID, b.ToolCall.Arguments, b.ToolCall.Name)
 			case BlockToolResult:
 				block = anthropic.NewToolResultBlock(b.ToolResult.ToolCallID, b.ToolResult.Content, b.ToolResult.IsError)
+				if b.ToolResult.Content == "" {
+					// 空结果可省略 content，不能发送 Anthropic 不接受的空 text 块。
+					block.OfToolResult.Content = nil
+				}
 			}
 			blocks = append(blocks, block)
 		}
