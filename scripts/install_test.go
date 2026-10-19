@@ -38,17 +38,19 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 		}
 	}
 	names := []string{"go.mod", "go.sum", "cmd/johnny/main.go", "internal/config/config.go", "scripts/install.sh"}
-	modelFiles, err := filepath.Glob(filepath.Join(root, "internal/model/*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range modelFiles {
-		if !strings.HasSuffix(path, "_test.go") {
-			name, err := filepath.Rel(root, path)
-			if err != nil {
-				t.Fatal(err)
+	for _, packageDir := range []string{"internal/model", "internal/tool"} {
+		packageFiles, err := filepath.Glob(filepath.Join(root, packageDir, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range packageFiles {
+			if !strings.HasSuffix(path, "_test.go") {
+				name, err := filepath.Rel(root, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				names = append(names, name)
 			}
-			names = append(names, name)
 		}
 	}
 	for _, name := range names {

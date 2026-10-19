@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.3 提供统一模型接口，支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型进行单轮流式问答。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.3 提供统一模型接口，支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型进行单轮流式问答；v0.4 增加独立工具层，提供 `bash`、`read`、`edit`、`write` 的定义、注册与直接执行。
 
 ## 安装和更新
 
@@ -103,9 +103,9 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消，以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。
+测试使用临时配置和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；v0.4 工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。
 
-统一模型层位于 `internal/model`。一次调用传入 `Request`，按序同步触发块级 `Event`，返回完整 `Response` 和错误。消息支持正文、思考数据、工具调用和文本工具结果；工具注册执行与 Agent Loop 在后续版本实现。带协议专用续接数据的历史暂不支持直接跨服务或模型重放；当前 CLI 每次运行从新问题开始，不受该限制。
+统一模型层位于 `internal/model`。一次调用传入 `Request`，按序同步触发块级 `Event`，返回完整 `Response` 和错误。消息支持正文、思考数据、工具调用和文本工具结果。v0.4 的独立工具层位于 `internal/tool`，提供 `bash`、`read`、`edit`、`write` 的直接执行和注册表；它尚未接入 CLI 的 Agent Loop，权限确认与隔离留到 v0.7。
 
 ## 项目规划
 
@@ -113,3 +113,4 @@ bash -n scripts/install.sh
 - [v0.1：模型调用](docs/versions/v0.1.md)
 - [v0.2：全局 CLI 入口](docs/versions/v0.2.md)
 - [v0.3：统一模型接口](docs/versions/v0.3.md)
+- [v0.4：工具系统](docs/versions/v0.4.md)
