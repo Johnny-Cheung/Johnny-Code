@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
@@ -61,31 +60,13 @@ func terminalEvent(event agent.Event) (tui.Event, bool) {
 	case agent.EventToolStart:
 		if event.Call != nil {
 			converted.Name = event.Call.Name
-			key, truncated := limitBytes(toolKey(event.Call), previewMaxKeyBytes)
-			if truncated {
-				key += "…（参数已截断）"
-			}
-			converted.Key = key
 		}
 	case agent.EventToolEnd, agent.EventToolSkipped:
+		if event.Call != nil {
+			converted.Name = event.Call.Name
+		}
 		if event.ToolResult != nil {
 			converted.Failed = event.ToolResult.IsError
-			preview, truncated := limitPreview(event.ToolResult.Content)
-			if !converted.Failed && event.Call != nil {
-				// 文件成功只展示操作摘要，读取的大段代码留在模型上下文和日志。
-				switch event.Call.Name {
-				case "read":
-					preview = "已读取文件内容"
-					truncated = false
-				case "write", "edit":
-					preview, _, _ = strings.Cut(preview, "\n")
-					truncated = false
-				}
-			}
-			converted.Text = preview
-			if truncated {
-				converted.Text += "\n…（预览已截断）"
-			}
 		}
 	default:
 		return converted, false

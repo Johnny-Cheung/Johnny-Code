@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -38,11 +39,17 @@ type Options struct {
 type delivery struct {
 	event  Event
 	notice string
-	marker string
+	ready  chan error
 	done   bool
 	result agent.Result
 	err    error
 }
+
+// toolStatusShownMsg 标记状态区已经获得一次渲染机会，可以检查输出错误并
+// 放行工具执行。
+type toolStatusShownMsg struct{}
+
+const toolStatusGrace = 20 * time.Millisecond
 
 type terminalModel struct {
 	options      Options
@@ -59,6 +66,7 @@ type terminalModel struct {
 	cancel       context.CancelFunc
 	status       string
 	markdown     markdownStream
+	pendingReady chan error
 	history      []string
 	historyIndex int
 	draft        string
@@ -164,6 +172,17 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case delivery:
 		return m, m.receive(msg)
+	case toolStatusShownMsg:
+		if m.pendingReady != nil {
+			ready := m.pendingReady
+			m.pendingReady = nil
+			if err := m.output.failure(); err != nil {
+				ready <- err
+			} else {
+				ready <- nil
+			}
+		}
+		return m, nil
 	case tea.PasteMsg:
 		if m.busy {
 			return m, nil
@@ -260,6 +279,7 @@ func (m *terminalModel) navigateHistory(direction int) {
 func (m *terminalModel) start(prompt string) tea.Cmd {
 	m.busy, m.stopping = true, false
 	m.status = "正在等待模型回复…"
+	m.pendingReady = nil
 	m.markdown.Reset()
 	m.input.Reset()
 	m.input.Blur()
@@ -277,9 +297,8 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 				return err
 			}
 			item := delivery{event: event}
-			var ack <-chan error
 			if event.Kind == agent.EventToolStart {
-				item.marker, ack = m.output.fence()
+				item.ready = make(chan error, 1)
 			}
 			// 使用会话 context，允许取消后的工具结果和收尾事件继续显示。
 			select {
@@ -287,9 +306,9 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 			case <-m.ctx.Done():
 				return m.ctx.Err()
 			}
-			if ack != nil {
+			if item.ready != nil {
 				select {
-				case err := <-ack:
+				case err := <-item.ready:
 					return err
 				case <-turnCtx.Done():
 					return turnCtx.Err()
@@ -314,6 +333,7 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 
 func (m *terminalModel) receive(item delivery) tea.Cmd {
 	var body strings.Builder
+	var afterStatus tea.Cmd
 	last := ""
 	appendText := func(text, kind string) {
 		text = strings.TrimRight(text, "\n")
@@ -339,6 +359,7 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 		appendMarkdown(m.markdown.Flush())
 		m.busy, m.stopping = false, false
 		m.cancel = nil
+		m.pendingReady = nil
 		switch {
 		case errors.Is(item.err, context.Canceled):
 			m.status = "已取消，可继续输入"
@@ -377,41 +398,44 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 		case agent.EventResponse, agent.EventEnd:
 			appendMarkdown(m.markdown.Flush())
 		case agent.EventToolStart:
-			appendMarkdown(m.markdown.Flush())
-			line := "→ " + safeText(event.Name)
-			if event.Key != "" {
-				line += "  " + safeText(event.Key)
-			}
-			appendPlain(line, "tool_start")
+			// 简洁模式不把工具开始、结果和预览写入滚动历史；状态区显示
+			// 当前工具。先给状态区一个渲染周期并检查输出错误，再放行工具，
+			// 避免终端不可用时仍然产生副作用。
 			if !m.stopping {
 				m.status = "正在执行 " + safeText(event.Name) + "…"
 			}
+			if item.ready != nil {
+				m.pendingReady = item.ready
+				afterStatus = tea.Tick(toolStatusGrace, func(time.Time) tea.Msg {
+					return toolStatusShownMsg{}
+				})
+			}
 		case agent.EventToolEnd, agent.EventToolSkipped:
-			appendMarkdown(m.markdown.Flush())
-			status := "✓ 成功"
 			if event.Failed {
-				status = "✗ 失败"
+				m.status = safeText(event.Name) + " 执行失败，等待模型继续…"
+			} else if !m.stopping {
+				m.status = "工具执行完成，等待模型继续…"
 			}
-			if m.stopping || event.Kind == agent.EventToolSkipped {
-				status = "○ 已中止"
-			}
-			line := status
-			if event.Text != "" {
-				line += "\n" + event.Text
-			}
-			appendPlain(line, "tool_result")
 		}
 	}
-	if body.Len() > 0 || item.marker != "" {
+	var cmds []tea.Cmd
+	if body.Len() > 0 {
 		output := body.String()
 		// 单独提交的 Markdown 块末尾留一空行；后续正文或状态可能在下一次
 		// 有序交付中打印，空行需要在本次打印时补上。
 		if last == "markdown" {
 			output += "\n"
 		}
-		return tea.Sequence(tea.Println(output+item.marker), m.waitEvent())
+		cmds = append(cmds, tea.Println(output))
 	}
-	return m.waitEvent()
+	if afterStatus != nil {
+		cmds = append(cmds, afterStatus)
+	}
+	if len(cmds) == 0 {
+		return m.waitEvent()
+	}
+	cmds = append(cmds, m.waitEvent())
+	return tea.Sequence(cmds...)
 }
 
 func (m *terminalModel) View() tea.View {

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -281,47 +280,24 @@ func TestResizeAndControlCharacters(t *testing.T) {
 	}
 }
 
-func TestOutputFenceAcknowledgesActualWrite(t *testing.T) {
-	var buffer bytes.Buffer
-	output := &checkedOutput{Writer: &buffer, cancel: func() {}}
-	marker, ack := output.fence()
-	select {
-	case <-ack:
-		t.Fatal("写出之前不能确认")
-	default:
-	}
-	input := "→ bash echo hello" + marker + "\r\n"
-	if n, err := output.Write([]byte(input)); err != nil || n != len(input) {
-		t.Fatalf("写入失败：%d %v", n, err)
-	}
-	if err := <-ack; err != nil {
-		t.Fatal(err)
-	}
-	if buffer.String() != "→ bash echo hello\r\n" {
-		t.Fatalf("内部标记不得泄露：%q", buffer.String())
-	}
-}
-
 type shortOutput struct{}
 
 func (shortOutput) Write(data []byte) (int, error) { return 0, nil }
 
-func TestOutputFailureCancelsAndRejectsFence(t *testing.T) {
+func TestOutputFailureCancelsSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	output := &checkedOutput{Writer: shortOutput{}, cancel: cancel}
-	marker, ack := output.fence()
-	_, err := output.Write([]byte("tool" + marker))
-	if !errors.Is(err, io.ErrShortWrite) || !errors.Is(<-ack, io.ErrShortWrite) || ctx.Err() == nil {
-		t.Fatalf("短写未传播：%v", err)
+	_, err := output.Write([]byte("tool"))
+	if !errors.Is(err, io.ErrShortWrite) || ctx.Err() == nil {
+		t.Fatalf("短写未传播或未取消会话：%v", err)
 	}
-	_, next := output.fence()
-	if !errors.Is(<-next, io.ErrShortWrite) {
-		t.Fatal("后续工具应收到原始写错误")
+	if _, next := output.Write([]byte("tool")); !errors.Is(next, io.ErrShortWrite) {
+		t.Fatal("后续写入应收到原始写错误")
 	}
 }
 
-func TestToolStartMustBeWrittenBeforeExecution(t *testing.T) {
+func TestToolStartStatusRenderedBeforeExecution(t *testing.T) {
 	m := testModel(t)
 	executed := make(chan struct{}, 1)
 	m.options.RunTurn = func(ctx context.Context, prompt string, emit func(Event) error, notice func(string)) (agent.Result, error) {
@@ -333,23 +309,23 @@ func TestToolStartMustBeWrittenBeforeExecution(t *testing.T) {
 	}
 	m.start("run")
 	item := <-m.events
+	m.receive(item)
 	select {
 	case <-executed:
-		t.Fatal("显示前已执行")
+		t.Fatal("状态渲染前已执行")
 	default:
 	}
-	if item.marker == "" {
-		t.Fatal("缺少实际写入屏障")
+	view := m.View().Content
+	if !strings.Contains(view, "正在执行 bash") {
+		t.Fatalf("状态区应显示当前工具：%q", view)
 	}
-	if _, err := m.output.Write([]byte("tool" + item.marker)); err != nil {
-		t.Fatal(err)
-	}
+	m.Update(toolStatusShownMsg{})
 	select {
 	case <-executed:
 	case <-time.After(time.Second):
-		t.Fatal("写入成功后未继续")
+		t.Fatal("状态更新后未继续")
 	}
-	<-m.events
+	m.receive(<-m.events)
 }
 
 func TestToolStartWriteFailurePreventsExecution(t *testing.T) {
@@ -365,7 +341,9 @@ func TestToolStartWriteFailurePreventsExecution(t *testing.T) {
 	}
 	m.start("run")
 	item := <-m.events
-	_, _ = m.output.Write([]byte("tool" + item.marker))
+	m.receive(item)
+	_, _ = m.output.Write([]byte(m.View().Content))
+	m.Update(toolStatusShownMsg{})
 	m.workers.Wait()
 	select {
 	case <-executed:

@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -35,19 +34,12 @@ func wrap(text string, width int) string {
 	return ansi.Hardwrap(text, max(1, width), true)
 }
 
-// Bubble Tea 的 renderer 不返回写错误。用只在内部生成的零宽标记关联一次
-// 实际终端写入和同步观察者，工具开始行写入成功之后才允许工具执行。
-// 标记在写入底层终端前移除，不会成为用户输出或终端指令。
-const fencePrefix = "\x1b]777;johnny-fence="
-const fenceEnd = "\x07"
-
+// Bubble Tea 的 renderer 不返回写错误；包装输出以捕获首次失败并取消会话。
 type checkedOutput struct {
 	io.Writer
-	mu      sync.Mutex
-	next    uint64
-	pending map[uint64]chan error
-	err     error
-	cancel  func()
+	mu     sync.Mutex
+	err    error
+	cancel func()
 }
 
 func (w *checkedOutput) Fd() uintptr {
@@ -72,66 +64,22 @@ func (w *checkedOutput) Close() error {
 	return nil
 }
 
-func (w *checkedOutput) fence() (string, <-chan error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.next++
-	ack := make(chan error, 1)
-	if w.err != nil {
-		ack <- w.err
-		return "", ack
-	}
-	if w.pending == nil {
-		w.pending = make(map[uint64]chan error)
-	}
-	w.pending[w.next] = ack
-	return fencePrefix + strconv.FormatUint(w.next, 10) + fenceEnd, ack
-}
-
 func (w *checkedOutput) Write(data []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.err != nil {
 		return 0, w.err
 	}
-	text := string(data)
-	var ids []uint64
-	for {
-		start := strings.Index(text, fencePrefix)
-		if start < 0 {
-			break
-		}
-		end := strings.Index(text[start:], fenceEnd)
-		if end < 0 {
-			break
-		}
-		end += start
-		id, err := strconv.ParseUint(text[start+len(fencePrefix):end], 10, 64)
-		if err == nil {
-			ids = append(ids, id)
-		}
-		text = text[:start] + text[end+len(fenceEnd):]
-	}
-	n, err := io.WriteString(w.Writer, text)
-	if err == nil && n != len(text) {
+	n, err := w.Writer.Write(data)
+	if err == nil && n != len(data) {
 		err = io.ErrShortWrite
 	}
 	if err != nil {
 		w.err = fmt.Errorf("输出终端界面失败：%w", err)
-		for id, ack := range w.pending {
-			ack <- w.err
-			delete(w.pending, id)
-		}
 		w.cancel()
 		return 0, w.err
 	}
-	for _, id := range ids {
-		if ack, ok := w.pending[id]; ok {
-			ack <- nil
-			delete(w.pending, id)
-		}
-	}
-	return len(data), nil
+	return n, nil
 }
 
 func (w *checkedOutput) failure() error {

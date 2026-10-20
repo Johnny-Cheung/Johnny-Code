@@ -187,12 +187,6 @@ func (p *terminalProcess) wait(t *testing.T, code int) {
 		t.Fatalf("退出码 %d，预期 %d：%v\n%s", p.cmd.ProcessState.ExitCode(), code, p.err, p.text())
 	}
 	p.expect(t, 0, "TERMINAL_RESTORED")
-	p.mu.Lock()
-	raw := p.output.String()
-	p.mu.Unlock()
-	if strings.Contains(raw, "johnny-fence=") {
-		t.Fatal("内部写入屏障泄漏到终端")
-	}
 }
 
 func terminalAnswer(w http.ResponseWriter, text string) {
@@ -277,9 +271,14 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 	if err != nil || string(data) != "world" {
 		t.Fatalf("文件未修改：%s %v", data, err)
 	}
-	for _, want := range []string{"history-line-000", "history-line-099", "→ write", "→ read", "→ edit", "→ bash", "bash-ok"} {
+	for _, want := range []string{"history-line-000", "history-line-099", "FIRST_DONE"} {
 		if !strings.Contains(p.text(), want) {
 			t.Fatalf("scrollback 缺少 %q", want)
+		}
+	}
+	for _, unwanted := range []string{"→ write", "✓ 成功", "bash-ok", "printf bash-ok"} {
+		if strings.Contains(p.text(), unwanted) {
+			t.Fatalf("简洁模式不应在滚动历史显示工具明细 %q", unwanted)
 		}
 	}
 	p.write(t, "slow\r")
@@ -309,7 +308,7 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 		t.Fatalf("每会话应一份记录：%v", files)
 	}
 	log, _ := os.ReadFile(files[0])
-	for _, want := range []string{`"user_turn":1`, `"user_turn":2`, `"user_turn":3`, `"status":"canceled"`} {
+	for _, want := range []string{`"user_turn":1`, `"user_turn":2`, `"user_turn":3`, `"status":"canceled"`, "bash-ok", "write-1"} {
 		if !bytes.Contains(log, []byte(want)) {
 			t.Fatalf("日志缺少 %s", want)
 		}
