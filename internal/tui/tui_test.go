@@ -151,46 +151,87 @@ func TestCancellationWaitsForWorkerAndAllowsNextTurn(t *testing.T) {
 	}
 }
 
-func TestStreamLinesPreserveAllTextAndBoundTail(t *testing.T) {
+func TestMarkdownStreamRendersCompletedBlocks(t *testing.T) {
 	m := testModel(t)
-	m.width = 11
-	var printed strings.Builder
-	input := "第一行中文\n\n" + strings.Repeat("长文本", 100) + "\nend"
-	for _, r := range input {
-		m.tail += safeText(string(r))
-		printed.WriteString(m.splitTail(false))
-		if ansi.StringWidth(m.tail) > m.contentWidth() {
-			t.Fatal("流式尾行没有界限")
+	m.width = 44
+	m.markdown.SetWidth(m.contentWidth())
+	source := "# 标题\n\n## 小节\n\n第一段 **粗体** 文本，包含中文和 English。\n\n```go\nfunc main() {\n\tfmt.Println(\"你好\")\n}\n```\n\n- 项目一\n- 项目二\n"
+	runes := []rune(source)
+	var rendered strings.Builder
+	appendRendered := func(part string) {
+		part = strings.TrimRight(part, "\n")
+		if part == "" {
+			return
+		}
+		if rendered.Len() > 0 {
+			rendered.WriteString("\n\n")
+		}
+		rendered.WriteString(part)
+	}
+	for start := 0; start < len(runes); start += 3 {
+		end := min(len(runes), start+3)
+		appendRendered(m.markdown.Write(string(runes[start:end])))
+	}
+	appendRendered(m.markdown.Flush())
+	out := rendered.String()
+	plain := ansi.Strip(out)
+	for _, want := range []string{"标题", "小节", "第一段", "粗体", "func main()", `fmt.Println("你好")`, "项目一", "项目二"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("渲染结果缺少 %q：%s", want, plain)
 		}
 	}
-	printed.WriteString(m.splitTail(true))
-	got := strings.ReplaceAll(printed.String(), "\n", "")
-	if got != strings.ReplaceAll(input, "\n", "") {
-		t.Fatal("长文本内容丢失或重复")
+	for _, unwanted := range []string{"# 标题", "## 小节", "**粗体**", "```"} {
+		if strings.Contains(plain, unwanted) {
+			t.Fatalf("Markdown 标记未渲染：%q", unwanted)
+		}
 	}
-	if !strings.Contains(printed.String(), "第一行中文\n\n") {
-		t.Fatal("空行丢失")
+	for _, line := range strings.Split(out, "\n") {
+		if ansi.StringWidth(line) > m.contentWidth() {
+			t.Fatalf("渲染行超过宽度：%q", ansi.Strip(line))
+		}
+	}
+	if m.markdown.Preview() != "" {
+		t.Fatal("提交后仍有未完成预览")
 	}
 }
 
-func TestResizeKeepsTailInOrderedDeliveryPath(t *testing.T) {
+func TestMarkdownPreviewIsBoundedDuringStreaming(t *testing.T) {
 	m := testModel(t)
 	m.busy = true
-	original := "0123456789abcdefghijklmnopqrst"
-	m.tail = original
-	_, cmd := m.Update(tea.WindowSizeMsg{Width: 10, Height: 5})
-	if cmd != nil || m.tail != original {
-		t.Fatal("resize 不应单独提交尾行，避免与正文打印乱序")
-	}
-	for _, line := range strings.Split(m.View(), "\n") {
-		if ansi.StringWidth(line) > 10 {
-			t.Fatal("resize 后可见尾行越界")
+	m.markdown.Write(strings.Repeat("很长的流式预览内容 ", 200))
+	for _, size := range []tea.WindowSizeMsg{{Width: 40, Height: 12}, {Width: 18, Height: 5}, {Width: 4, Height: 2}} {
+		m.Update(size)
+		view := m.View()
+		if lines := strings.Split(view, "\n"); len(lines) > size.Height {
+			t.Fatalf("动态区域高于窗口：%q", view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if ansi.StringWidth(line) > size.Width {
+				t.Fatalf("动态区域宽于窗口：%q", line)
+			}
 		}
 	}
-	m.tail += "next"
-	printed := m.splitTail(true)
-	if strings.ReplaceAll(printed, "\n", "") != original+"next" {
-		t.Fatal("后续有序提交丢失了尾行")
+	if m.markdown.Preview() == "" {
+		t.Fatal("预览内容被错误清空")
+	}
+}
+
+func TestIdleViewHasTopAndBottomInputBorders(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	lines := strings.Split(m.View(), "\n")
+	var borders []int
+	for i, line := range lines {
+		plain := strings.TrimSpace(ansi.Strip(line))
+		if plain != "" && strings.Trim(plain, "─") == "" {
+			borders = append(borders, i)
+		}
+	}
+	if len(borders) != 2 || borders[0] >= borders[1] {
+		t.Fatalf("输入框需要上下两条横线：%q", m.View())
+	}
+	if !strings.Contains(ansi.Strip(lines[len(lines)-1]), "Enter 发送") {
+		t.Fatal("状态提示应在下横线之后")
 	}
 }
 

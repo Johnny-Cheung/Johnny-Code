@@ -60,7 +60,7 @@ type terminalModel struct {
 	quitting     bool
 	cancel       context.CancelFunc
 	status       string
-	tail         string
+	markdown     markdownStream
 	history      []string
 	historyIndex int
 	draft        string
@@ -131,7 +131,8 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 	input.Cursor.SetMode(cursor.CursorStatic)
 	input.Focus()
 	return &terminalModel{options: options, ctx: ctx, output: output, events: make(chan delivery),
-		workers: workers, input: input, width: 80, height: 24, status: "空闲"}
+		workers: workers, input: input, width: 80, height: 24, status: "空闲",
+		markdown: markdownStream{width: 79}}
 }
 
 func (m *terminalModel) Init() tea.Cmd {
@@ -156,6 +157,7 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
+		m.markdown.SetWidth(m.contentWidth())
 		m.resizeInput()
 		// 尾行留到下一次有序 delivery 再提交，避免 resize 的独立 print
 		// 命令与正在到达的正文竞争顺序。View 只暂时裁剪可见部分。
@@ -247,6 +249,7 @@ func (m *terminalModel) navigateHistory(direction int) {
 func (m *terminalModel) start(prompt string) tea.Cmd {
 	m.busy, m.stopping = true, false
 	m.status = "正在等待模型回复…"
+	m.markdown.Reset()
 	m.input.Reset()
 	m.input.Blur()
 	m.history = append(m.history, prompt)
@@ -299,34 +302,57 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 }
 
 func (m *terminalModel) receive(item delivery) tea.Cmd {
-	var text string
+	var body strings.Builder
+	last := ""
+	appendText := func(text, kind string) {
+		text = strings.TrimRight(text, "\n")
+		if text == "" || (kind == "markdown" && strings.TrimSpace(ansi.Strip(text)) == "") {
+			return
+		}
+		if body.Len() > 0 {
+			if kind == "tool_result" && last == "tool_start" {
+				body.WriteString("\n")
+			} else {
+				body.WriteString("\n\n")
+			}
+		}
+		body.WriteString(text)
+		last = kind
+	}
+	appendMarkdown := func(rendered string) { appendText(rendered, "markdown") }
+	appendPlain := func(text, kind string) {
+		appendText(wrap(safeText(text), m.contentWidth()), kind)
+	}
+
 	if item.done {
-		text = m.splitTail(true)
+		appendMarkdown(m.markdown.Flush())
 		m.busy, m.stopping = false, false
 		m.cancel = nil
 		switch {
 		case errors.Is(item.err, context.Canceled):
 			m.status = "已取消，可继续输入"
-			text += "\n已取消本轮；已完成的操作和上下文已保留。\n"
+			appendPlain("已取消本轮；已完成的操作和上下文已保留。", "status")
 		case item.err != nil:
 			m.status = "本轮停止，可继续输入"
-			text += "\n本轮停止：" + safeText(item.err.Error()) + "\n"
+			appendPlain("本轮停止："+item.err.Error(), "status")
 		default:
 			m.status = "空闲"
 		}
 		focus := m.input.Focus()
-		if text != "" {
-			return tea.Sequence(tea.Println(wrap(strings.TrimSuffix(text, "\n"), m.contentWidth())), focus)
+		m.resizeInput()
+		if body.Len() > 0 {
+			return tea.Sequence(tea.Println(body.String()), focus)
 		}
 		return focus
 	}
 	if item.notice != "" {
-		text = m.splitTail(true) + safeText(item.notice)
+		appendMarkdown(m.markdown.Flush())
+		appendPlain(strings.TrimRight(item.notice, "\n"), "notice")
 	} else {
 		event := item.event
 		switch event.Kind {
 		case agent.EventRequestStart:
-			text = m.splitTail(true)
+			appendMarkdown(m.markdown.Flush())
 			if !m.stopping {
 				m.status = "正在等待模型回复…"
 			}
@@ -335,17 +361,22 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 				if !m.stopping {
 					m.status = "正在接收回复…"
 				}
-				m.tail += safeText(event.Text)
-				text = m.splitTail(false)
+				appendMarkdown(m.markdown.Write(event.Text))
 			}
 		case agent.EventResponse, agent.EventEnd:
-			text = m.splitTail(true)
+			appendMarkdown(m.markdown.Flush())
 		case agent.EventToolStart:
-			text = m.splitTail(true) + "→ " + safeText(event.Name) + "  " + safeText(event.Key)
+			appendMarkdown(m.markdown.Flush())
+			line := "→ " + safeText(event.Name)
+			if event.Key != "" {
+				line += "  " + safeText(event.Key)
+			}
+			appendPlain(line, "tool_start")
 			if !m.stopping {
 				m.status = "正在执行 " + safeText(event.Name) + "…"
 			}
 		case agent.EventToolEnd, agent.EventToolSkipped:
+			appendMarkdown(m.markdown.Flush())
 			status := "✓ 成功"
 			if event.Failed {
 				status = "✗ 失败"
@@ -353,37 +384,23 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 			if m.stopping || event.Kind == agent.EventToolSkipped {
 				status = "○ 已中止"
 			}
-			text = m.splitTail(true) + "  " + status
+			line := status
 			if event.Text != "" {
-				text += "\n" + safeText(event.Text)
+				line += "\n" + event.Text
 			}
+			appendPlain(line, "tool_result")
 		}
 	}
-	if text != "" || item.marker != "" {
-		return tea.Sequence(tea.Println(wrap(strings.TrimSuffix(text, "\n"), m.contentWidth())+item.marker), m.waitEvent())
+	if body.Len() > 0 || item.marker != "" {
+		output := body.String()
+		// 单独提交的 Markdown 块末尾留一空行；后续正文或状态可能在下一次
+		// 有序交付中打印，空行需要在本次打印时补上。
+		if last == "markdown" {
+			output += "\n"
+		}
+		return tea.Sequence(tea.Println(output+item.marker), m.waitEvent())
 	}
 	return m.waitEvent()
-}
-
-// splitTail 把完整行（包括超长单行的完整显示行）提交 scrollback，动态 View
-// 最多持有一行尾部；无需复制整段回复，也不会被 renderer 按屏幕高度裁掉。
-func (m *terminalModel) splitTail(flush bool) string {
-	m.tail = wrap(m.tail, m.contentWidth())
-	if flush {
-		text := m.tail
-		m.tail = ""
-		if text != "" && !strings.HasSuffix(text, "\n") {
-			text += "\n"
-		}
-		return text
-	}
-	index := strings.LastIndexByte(m.tail, '\n')
-	if index < 0 {
-		return ""
-	}
-	text := m.tail[:index+1]
-	m.tail = m.tail[index+1:]
-	return text
 }
 
 func (m *terminalModel) View() string {
@@ -393,12 +410,25 @@ func (m *terminalModel) View() string {
 	width := m.contentWidth()
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	if m.busy {
-		parts := []string{}
-		if m.tail != "" && m.height > 1 {
-			parts = append(parts, ansi.Truncate(m.tail, width, "…"))
+		reserve := 1
+		if m.height >= 3 {
+			reserve = 2
 		}
-		parts = append(parts, ansi.Truncate(m.status, width, "…"))
-		if m.height > len(parts) {
+		maxPreview := max(0, m.height-reserve)
+		var parts []string
+		if preview := strings.TrimRight(m.markdown.Preview(), "\n"); preview != "" && maxPreview > 0 {
+			parts = strings.Split(wrap(preview, width), "\n")
+			if len(parts) > maxPreview {
+				parts = parts[len(parts)-maxPreview:]
+			}
+			for i, line := range parts {
+				parts[i] = ansi.Truncate(line, width, "…")
+			}
+		}
+		if len(parts) < m.height {
+			parts = append(parts, ansi.Truncate(m.status, width, "…"))
+		}
+		if len(parts) < m.height {
 			parts = append(parts, muted.Render(ansi.Truncate("Ctrl+C 取消本轮", width, "…")))
 		}
 		return strings.Join(parts, "\n")
@@ -409,11 +439,19 @@ func (m *terminalModel) View() string {
 	for i, line := range lines {
 		lines[i] = ansi.Truncate(line, width, "")
 	}
-	view = strings.Join(lines, "\n")
-	parts := []string{view}
-	if m.height >= len(lines)+2 {
-		parts = append([]string{muted.Render(strings.Repeat("─", width))}, parts...)
-		parts = append(parts, muted.Render(ansi.Truncate(m.status+" · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /exit 退出", width, "…")))
+	border := muted.Render(strings.Repeat("─", width))
+	hasBorder := m.height >= len(lines)+2
+	var parts []string
+	if hasBorder {
+		parts = append(parts, border)
+	}
+	parts = append(parts, lines...)
+	if hasBorder {
+		parts = append(parts, border)
+	}
+	if m.height >= len(parts)+1 {
+		footer := m.status + " · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /exit 退出"
+		parts = append(parts, muted.Render(ansi.Truncate(footer, width, "…")))
 	}
 	return strings.Join(parts, "\n")
 }

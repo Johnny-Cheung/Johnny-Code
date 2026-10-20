@@ -229,10 +229,11 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 			})
 		case 2:
 			var text strings.Builder
+			text.WriteString("```text\n")
 			for i := 0; i < 100; i++ {
 				fmt.Fprintf(&text, "history-line-%03d\n", i)
 			}
-			text.WriteString("```go\nfmt.Println(\"world\")\n```\nFIRST_DONE")
+			text.WriteString("```\n\n```go\nfmt.Println(\"world\")\n```\n\nFIRST_DONE")
 			terminalAnswer(w, text.String())
 		case 3:
 			close(slow)
