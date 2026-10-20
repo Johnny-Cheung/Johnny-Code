@@ -34,6 +34,9 @@ func TestTerminalHelperProcess(t *testing.T) {
 		return
 	}
 	configFileBase64 = base64.StdEncoding.EncodeToString([]byte(os.Getenv("JOHNNY_TUI_TEST_CONFIG")))
+	if os.Getenv("JOHNNY_TUI_TEST_PIPE") == "1" {
+		os.Exit(run(context.Background(), nil, strings.NewReader("hello\n/exit\n"), os.Stdout, os.Stderr))
+	}
 	before, err := term.GetState(os.Stdin.Fd())
 	if err != nil {
 		os.Exit(90)
@@ -366,6 +369,72 @@ func TestTerminalPTYCancelBashOrTerminate(t *testing.T) {
 				t.Fatalf("取消后命令仍继续执行：%v", err)
 			}
 		})
+	}
+}
+
+func TestTerminalPTYOutputWithPlainReaderStaysPlain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		terminalAnswer(w, "PLAIN_OUTPUT")
+	}))
+	defer server.Close()
+	dir, home := t.TempDir(), t.TempDir()
+	path := filepath.Join(dir, "test.env")
+	if err := os.WriteFile(path, []byte("JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL="+server.URL+"\nJOHNNY_MODEL=plain-test\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	cmd := exec.Command(binary, "-test.run=^TestTerminalHelperProcess$")
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !strings.HasPrefix(name, "JOHNNY_") && name != "HOME" && name != "TERM" {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "JOHNNY_TUI_TEST_HELPER=1", "JOHNNY_TUI_TEST_CONFIG="+path, "JOHNNY_TUI_TEST_PIPE=1", "HOME="+home, "TERM=xterm-256color")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	readDone := make(chan []byte, 1)
+	go func() { output, _ := io.ReadAll(master); readDone <- output }()
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = slave.Close()
+		_ = master.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("普通文本模式被终端查询阻塞")
+	}
+	_ = slave.Close()
+	var output []byte
+	select {
+	case output = <-readDone:
+	case <-time.After(time.Second):
+		_ = master.Close()
+		output = <-readDone
+	}
+	if !bytes.Contains(output, []byte("PLAIN_OUTPUT")) || bytes.Contains(output, []byte{'\x1b'}) {
+		t.Fatalf("管道输入不应触发 TUI 或颜色查询：%q", output)
 	}
 }
 

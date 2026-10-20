@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	_ "github.com/Johnny-Cheung/Johnny-Code/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
