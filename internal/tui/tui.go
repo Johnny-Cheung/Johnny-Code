@@ -118,7 +118,7 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 	input.SetHeight(1)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
 	input.KeyMap.Paste.SetEnabled(false) // 终端括号粘贴由 KeyRunes 接收，不访问系统剪贴板。
-	// 使用终端自身的前景/背景，避免自适应颜色探测等待 OSC 回复并占用输入。
+	// 输入继承终端自身的前景/背景，使用无需动态探测的基础样式。
 	style := textarea.Style{
 		Base: lipgloss.NewStyle(), Text: lipgloss.NewStyle(),
 		CursorLine: lipgloss.NewStyle(), EndOfBuffer: lipgloss.NewStyle(),
@@ -156,10 +156,8 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
 		m.resizeInput()
-		lines := m.splitTail(false)
-		if lines != "" {
-			return m, tea.Println(strings.TrimSuffix(lines, "\n"))
-		}
+		// 尾行留到下一次有序 delivery 再提交，避免 resize 的独立 print
+		// 命令与正在到达的正文竞争顺序。View 只暂时裁剪可见部分。
 		return m, nil
 	case delivery:
 		return m, m.receive(msg)
@@ -322,7 +320,7 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 		return focus
 	}
 	if item.notice != "" {
-		text = m.splitTail(true) + safeText(strings.TrimSuffix(item.notice, "\n"))
+		text = m.splitTail(true) + safeText(item.notice)
 	} else {
 		event := item.event
 		switch event.Kind {
@@ -396,7 +394,7 @@ func (m *terminalModel) View() string {
 	if m.busy {
 		parts := []string{}
 		if m.tail != "" && m.height > 1 {
-			parts = append(parts, m.tail)
+			parts = append(parts, ansi.Truncate(m.tail, width, "…"))
 		}
 		parts = append(parts, ansi.Truncate(m.status, width, "…"))
 		if m.height > len(parts) {

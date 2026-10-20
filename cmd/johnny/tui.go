@@ -82,7 +82,7 @@ func terminalEvent(event agent.Event) (tui.Event, bool) {
 					truncated = false
 				}
 			}
-			converted.Text = strings.TrimSuffix(preview, "\n")
+			converted.Text = preview
 			if truncated {
 				converted.Text += "\n…（预览已截断）"
 			}

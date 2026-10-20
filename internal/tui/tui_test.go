@@ -173,6 +173,27 @@ func TestStreamLinesPreserveAllTextAndBoundTail(t *testing.T) {
 	}
 }
 
+func TestResizeKeepsTailInOrderedDeliveryPath(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	original := "0123456789abcdefghijklmnopqrst"
+	m.tail = original
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 10, Height: 5})
+	if cmd != nil || m.tail != original {
+		t.Fatal("resize 不应单独提交尾行，避免与正文打印乱序")
+	}
+	for _, line := range strings.Split(m.View(), "\n") {
+		if ansi.StringWidth(line) > 10 {
+			t.Fatal("resize 后可见尾行越界")
+		}
+	}
+	m.tail += "next"
+	printed := m.splitTail(true)
+	if strings.ReplaceAll(printed, "\n", "") != original+"next" {
+		t.Fatal("后续有序提交丢失了尾行")
+	}
+}
+
 func TestResizeAndControlCharacters(t *testing.T) {
 	m := testModel(t)
 	text := safeText("code\n\t中文\x1b[2J\x07\r")
