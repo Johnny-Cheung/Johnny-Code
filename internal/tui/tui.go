@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,9 +74,17 @@ func Run(ctx context.Context, options Options) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	output := &checkedOutput{Writer: options.Output, cancel: cancel}
+	inputErrors := make(chan error, 1)
+	input := watchInput(options.Input, func(err error) {
+		select {
+		case inputErrors <- err:
+		default:
+		}
+		cancel()
+	})
 	var workers sync.WaitGroup
 	m := newModel(runCtx, options, output, &workers)
-	program := tea.NewProgram(m, tea.WithInput(options.Input), tea.WithOutput(output),
+	program := tea.NewProgram(m, tea.WithInput(input), tea.WithOutput(output),
 		tea.WithContext(runCtx), tea.WithoutSignalHandler())
 	_, err := program.Run()
 	cancel()
@@ -85,6 +94,14 @@ func Run(ctx context.Context, options Options) error {
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	select {
+	case inputErr := <-inputErrors:
+		if errors.Is(inputErr, io.EOF) {
+			return nil
+		}
+		return fmt.Errorf("读取终端输入失败：%w", inputErr)
+	default:
 	}
 	return err
 }
@@ -101,8 +118,16 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 	input.SetHeight(1)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
 	input.KeyMap.Paste.SetEnabled(false) // 终端括号粘贴由 KeyRunes 接收，不访问系统剪贴板。
-	input.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	input.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	// 使用终端自身的前景/背景，避免自适应颜色探测等待 OSC 回复并占用输入。
+	style := textarea.Style{
+		Base: lipgloss.NewStyle(), Text: lipgloss.NewStyle(),
+		CursorLine: lipgloss.NewStyle(), EndOfBuffer: lipgloss.NewStyle(),
+		Prompt:      lipgloss.NewStyle().Bold(true),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+	}
+	input.FocusedStyle, input.BlurredStyle = style, style
+	// 静态光标避免组件的异步 blink 闭包访问随后被替换的输入状态。
+	input.Cursor.SetMode(cursor.CursorStatic)
 	input.Focus()
 	return &terminalModel{options: options, ctx: ctx, output: output, events: make(chan delivery),
 		workers: workers, input: input, width: 80, height: 24, status: "空闲"}
@@ -110,7 +135,7 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 
 func (m *terminalModel) Init() tea.Cmd {
 	header := fmt.Sprintf("Johnny-Code · v%s\n模型：%s\n目录：%s\n", safeText(m.options.Version), safeText(m.options.Model), safeText(m.options.WorkDir))
-	return tea.Sequence(tea.Println(wrap(header, m.contentWidth())), textarea.Blink)
+	return tea.Println(wrap(header, m.contentWidth()))
 }
 
 func (m *terminalModel) contentWidth() int { return max(1, m.width-1) }
@@ -126,14 +151,14 @@ func (m *terminalModel) waitEvent() tea.Cmd {
 	}
 }
 
-func (m *terminalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
 		m.resizeInput()
 		lines := m.splitTail(false)
 		if lines != "" {
-			return m, tea.Println(lines)
+			return m, tea.Println(strings.TrimSuffix(lines, "\n"))
 		}
 		return m, nil
 	case delivery:
@@ -147,7 +172,22 @@ func (m *terminalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.Type == tea.KeyRunes && msg.Paste {
+			text := strings.ReplaceAll(string(msg.Runes), "\r\n", "\n")
+			text = strings.ReplaceAll(text, "\r", "\n")
+			// textarea 库有 10000 行硬上限；整批拒绝，避免静默截掉任务尾部。
+			if m.input.LineCount()+strings.Count(text, "\n") > 10000 {
+				m.status = "输入最多 10000 行，本次粘贴未插入"
+				return m, nil
+			}
+			msg.Runes = []rune(text)
+			message = msg
+		}
 		if !msg.Paste {
+			if ((msg.Type == tea.KeyEnter && msg.Alt) || msg.Type == tea.KeyCtrlJ) && m.input.LineCount() >= 10000 {
+				m.status = "输入最多 10000 行"
+				return m, nil
+			}
 			switch {
 			case msg.Type == tea.KeyCtrlC:
 				m.input.Reset()
@@ -178,7 +218,7 @@ func (m *terminalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	m.input, cmd = m.input.Update(message)
 	m.resizeInput()
 	return m, cmd
 }

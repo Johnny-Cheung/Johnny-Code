@@ -57,6 +57,21 @@ func (w *checkedOutput) Fd() uintptr {
 	return ^uintptr(0)
 }
 
+// term.File 同时要求读、写和关闭方法；保留完整接口才能让库识别窗口尺寸。
+func (w *checkedOutput) Read(data []byte) (int, error) {
+	if reader, ok := w.Writer.(io.Reader); ok {
+		return reader.Read(data)
+	}
+	return 0, io.ErrClosedPipe
+}
+
+func (w *checkedOutput) Close() error {
+	if closer, ok := w.Writer.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 func (w *checkedOutput) fence() (string, <-chan error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -123,4 +138,62 @@ func (w *checkedOutput) failure() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.err
+}
+
+// Bubble Tea 将输入 EOF 当成读线程结束，默认仍保留 UI；终端断开时需同时
+// 停止会话，避免界面已无法接收取消键而工具仍在后台运行。
+type checkedReader struct {
+	io.Reader
+	stop func(error)
+}
+
+func watchInput(reader io.Reader, stop func(error)) io.Reader {
+	watched := &checkedReader{Reader: reader, stop: stop}
+	if _, ok := reader.(interface {
+		io.ReadWriteCloser
+		Fd() uintptr
+	}); ok {
+		return &checkedInput{checkedReader: watched}
+	}
+	// 非文件输入不能暴露虚假 Fd，否则 Linux cancelreader 会对 -1 注册 epoll。
+	return watched
+}
+
+type checkedInput struct{ *checkedReader }
+
+func (r *checkedInput) Fd() uintptr {
+	if file, ok := r.Reader.(interface{ Fd() uintptr }); ok {
+		return file.Fd()
+	}
+	return ^uintptr(0)
+}
+
+func (r *checkedReader) Read(data []byte) (int, error) {
+	n, err := r.Reader.Read(data)
+	if err != nil {
+		r.stop(err)
+	}
+	return n, err
+}
+
+// 保留 cancelreader.File 接口，让库可以通过文件描述符中断阻塞读取。
+func (r *checkedInput) Write(data []byte) (int, error) {
+	if writer, ok := r.Reader.(io.Writer); ok {
+		return writer.Write(data)
+	}
+	return 0, io.ErrClosedPipe
+}
+
+func (r *checkedInput) Close() error {
+	if closer, ok := r.Reader.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func (r *checkedInput) Name() string {
+	if file, ok := r.Reader.(interface{ Name() string }); ok {
+		return file.Name()
+	}
+	return "johnny-input"
 }

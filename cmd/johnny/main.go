@@ -37,7 +37,7 @@ var (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-ctx.Done()
 		// 恢复默认信号处理，让再次 Ctrl+C 可以强制退出。

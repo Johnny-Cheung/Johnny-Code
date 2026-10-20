@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,18 @@ func TestInputPasteNewlineAndClear(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.busy {
 		t.Fatal("空输入不能发送")
+	}
+}
+
+func TestPasteNormalizesNewlinesAndRejectsWholeOversizeInput(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("first\r\nsecond\rthird")})
+	if m.input.Value() != "first\nsecond\nthird" {
+		t.Fatalf("粘贴换行转换错误：%q", m.input.Value())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune(strings.Repeat("line\n", 10000))})
+	if m.input.Value() != "first\nsecond\nthird" || !strings.Contains(m.status, "未插入") {
+		t.Fatal("超限粘贴必须整体拒绝，不能静默截断")
 	}
 }
 
@@ -251,4 +264,103 @@ func TestToolStartMustBeWrittenBeforeExecution(t *testing.T) {
 		t.Fatal("写入成功后未继续")
 	}
 	<-m.events
+}
+
+func TestToolStartWriteFailurePreventsExecution(t *testing.T) {
+	m := testModel(t)
+	m.output.Writer = shortOutput{}
+	executed := make(chan struct{}, 1)
+	m.options.RunTurn = func(ctx context.Context, prompt string, emit func(Event) error, notice func(string)) (agent.Result, error) {
+		if err := emit(Event{Kind: agent.EventToolStart, Name: "write", Key: "never.txt"}); err != nil {
+			return agent.Result{}, err
+		}
+		executed <- struct{}{}
+		return agent.Result{}, nil
+	}
+	m.start("run")
+	item := <-m.events
+	_, _ = m.output.Write([]byte("tool" + item.marker))
+	m.workers.Wait()
+	select {
+	case <-executed:
+		t.Fatal("终端短写后工具仍被执行")
+	default:
+	}
+}
+
+func TestWatchedInputOnlyPreservesRealFileInterface(t *testing.T) {
+	nonFile := watchInput(strings.NewReader(""), func(error) {})
+	if _, ok := nonFile.(interface{ Fd() uintptr }); ok {
+		t.Fatal("普通 Reader 不应宣称自己是终端文件")
+	}
+	file, err := os.CreateTemp(t.TempDir(), "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	watched := watchInput(file, func(error) {})
+	terminalFile, ok := watched.(interface {
+		io.ReadWriteCloser
+		Fd() uintptr
+		Name() string
+	})
+	if !ok || terminalFile.Fd() != file.Fd() {
+		t.Fatal("文件接口必须完整保留")
+	}
+}
+
+func TestInputEOFFinishesUI(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := Run(ctx, Options{Input: strings.NewReader(""), Output: io.Discard,
+		RunTurn: func(context.Context, string, func(Event) error, func(string)) (agent.Result, error) {
+			t.Error("EOF 不应启动任务")
+			return agent.Result{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("EOF 应正常退出而不是等待取消：%v", err)
+	}
+}
+
+func TestInputFailureWaitsForCanceledWorker(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	started, stopped := make(chan struct{}), make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		finished <- Run(ctx, Options{Input: reader, Output: io.Discard,
+			RunTurn: func(ctx context.Context, prompt string, emit func(Event) error, notice func(string)) (agent.Result, error) {
+				close(started)
+				<-ctx.Done()
+				close(stopped)
+				return agent.Result{}, ctx.Err()
+			},
+		})
+	}()
+	if _, err := io.WriteString(writer, "task\r"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("未启动任务")
+	}
+	_ = writer.CloseWithError(io.ErrUnexpectedEOF)
+	select {
+	case err := <-finished:
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("输入错误未传播：%v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("输入失败后未停止")
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("界面退出后仍有运行任务")
+	}
 }
