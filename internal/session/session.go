@@ -107,7 +107,10 @@ func (r *Recorder) Path() string {
 // Record writes one event as a JSON line. Streaming model deltas are skipped;
 // the complete Response event is recorded instead. A malformed raw tool
 // argument or replay payload is logged losslessly as a string rather than
-// making the whole record fail.
+// making the whole record fail. UserTurn identifies the user input in a
+// multi-turn conversation; Turn still counts model requests inside that input.
+// A skipped tool call is recorded like a tool_end so the diagnostic log keeps
+// the complete call/result history.
 func (r *Recorder) Record(event agent.Event) error {
 	if event.Type == agent.EventModel {
 		return nil
@@ -120,10 +123,11 @@ func (r *Recorder) Record(event agent.Event) error {
 	}
 
 	record := eventRecord{
-		Type:  string(event.Type),
-		Time:  r.timestamp(),
-		Turn:  event.Turn,
-		Error: event.Error,
+		Type:     string(event.Type),
+		Time:     r.timestamp(),
+		UserTurn: event.UserTurn,
+		Turn:     event.Turn,
+		Error:    event.Error,
 	}
 
 	if event.Type == agent.EventResponse && event.Response != nil {
@@ -135,7 +139,7 @@ func (r *Recorder) Record(event agent.Event) error {
 	switch event.Type {
 	case agent.EventToolStart:
 		record.Call = newToolCall(event.Call)
-	case agent.EventToolEnd:
+	case agent.EventToolEnd, agent.EventToolSkipped:
 		record.Call = newToolCall(event.Call)
 		record.Result = event.ToolResult
 	case agent.EventEnd:
@@ -200,6 +204,7 @@ type metaEvent struct {
 type eventRecord struct {
 	Type     string            `json:"type"`
 	Time     time.Time         `json:"time"`
+	UserTurn int               `json:"user_turn"`
 	Turn     int               `json:"turn"`
 	Message  *messageRecord    `json:"message,omitempty"`
 	Response *responseRecord   `json:"response,omitempty"`

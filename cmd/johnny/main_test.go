@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -61,6 +62,59 @@ func writeToolUseResponse(w http.ResponseWriter, text, callID, name, arguments s
 	fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
+// newCLITestServer 创建使用临时 HOME 和工作目录的 CLI 测试服务。
+func newCLITestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	path := filepath.Join(t.TempDir(), "existing config.env")
+	data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=" + server.URL + "\nJOHNNY_MODEL=test-model\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	useConfigPath(t, path)
+	t.Chdir(t.TempDir())
+	return server
+}
+
+type trackingReader struct {
+	reader io.Reader
+	reads  atomic.Int32
+}
+
+func (r *trackingReader) Read(p []byte) (int, error) {
+	r.reads.Add(1)
+	return r.reader.Read(p)
+}
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func readSessionObjects(t *testing.T, home string) []map[string]json.RawMessage {
+	t.Helper()
+	logs, err := filepath.Glob(filepath.Join(home, ".johnny", "sessions", "*.jsonl"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("应生成且只生成一个会话日志：%v %v", logs, err)
+	}
+	data, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	objects := make([]map[string]json.RawMessage, len(lines))
+	for i, line := range lines {
+		if err := json.Unmarshal([]byte(line), &objects[i]); err != nil {
+			t.Fatalf("解析会话记录第 %d 行失败：%v", i+1, err)
+		}
+	}
+	return objects
+}
+
 func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.env")
 	useConfigPath(t, path)
@@ -73,8 +127,8 @@ func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 			if !strings.Contains(output.String(), "v"+version) || !strings.Contains(output.String(), commit) {
 				t.Fatal("版本输出缺少构建信息")
 			}
-		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") {
-			t.Fatal("帮助输出缺少用法、次数上限或现有配置位置")
+		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "不读取标准输入") {
+			t.Fatal("帮助输出缺少双模式、退出方式或现有配置位置")
 		}
 		if stderr.Len() != 0 {
 			t.Fatalf("本地查询不应尝试加载配置：%s", stderr.String())
@@ -117,64 +171,234 @@ func TestInvalidFlagsDoNotRequestOrCreateLogs(t *testing.T) {
 	assertNoSessionLog(t)
 }
 
-func TestRunSingleQuestionFromAnotherDirectory(t *testing.T) {
+func TestArgumentModeExecutesOnceWithoutReadingStdin(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeTextResponse(w, "答复")
+	})
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := &trackingReader{reader: strings.NewReader("不应读取的下一行\n")}
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"你好"}, input, &output, &stderr)
+	if code != 0 || requests.Load() != 1 || input.reads.Load() != 0 {
+		t.Fatalf("参数模式应只执行一次且不读 stdin：code=%d requests=%d reads=%d stderr=%s", code, requests.Load(), input.reads.Load(), stderr.String())
+	}
+	if output.String() != "答复\n" {
+		t.Fatalf("正文输出错误：%q", output.String())
+	}
+	if after, err := os.Getwd(); err != nil || after != before {
+		t.Fatal("问答过程不应切换工作目录")
+	}
+}
+
+func TestInteractiveMultiTurnKeepsContextAndSingleSessionLog(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		count := requests.Add(1)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		switch count {
+		case 1:
+			writeToolUseResponse(w, "creating", "toolu_1", "write", `{"path":"created.txt","content":"hello"}`)
+		case 2:
+			if !strings.Contains(string(body), "created.txt") || !strings.Contains(string(body), "tool_result") {
+				t.Errorf("第一轮后续请求缺少工具历史：%s", body)
+			}
+			writeTextResponse(w, "first answer")
+		case 3:
+			for _, want := range []string{"first prompt", "second prompt", "first answer", "tool_result"} {
+				if !strings.Contains(string(body), want) {
+					t.Errorf("第二轮请求缺少历史 %q：%s", want, body)
+				}
+			}
+			writeTextResponse(w, "second answer")
+		default:
+			t.Errorf("不应发出第 %d 次请求", count)
+		}
+	})
+	home := os.Getenv("HOME")
+
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), nil, strings.NewReader("first prompt\nsecond prompt\n/exit\n"), &output, &stderr)
+	if code != 0 || requests.Load() != 3 {
+		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
+	}
+	if output.String() != "creating\nfirst answer\nsecond answer\n" {
+		t.Fatalf("正文输出错误：%q", output.String())
+	}
+	if content, err := os.ReadFile("created.txt"); err != nil || string(content) != "hello" {
+		t.Fatalf("工具未在工作目录执行：%q %v", content, err)
+	}
+
+	objects := readSessionObjects(t, home)
+	metaCount := 0
+	requestTurns := make(map[int][]int)
+	for _, object := range objects {
+		var record struct {
+			Type     string `json:"type"`
+			UserTurn int    `json:"user_turn"`
+			Turn     int    `json:"turn"`
+		}
+		raw, err := json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &record); err != nil {
+			t.Fatal(err)
+		}
+		switch record.Type {
+		case "meta":
+			metaCount++
+			if _, ok := object["user_turn"]; ok {
+				t.Fatal("metadata 不应包含 user_turn")
+			}
+		case "request_start":
+			if record.UserTurn < 1 {
+				t.Fatalf("事件缺少 user_turn：%v", record)
+			}
+			requestTurns[record.UserTurn] = append(requestTurns[record.UserTurn], record.Turn)
+		}
+	}
+	if metaCount != 1 {
+		t.Fatalf("metadata 应只记录一次，实际 %d 次", metaCount)
+	}
+	if len(requestTurns[1]) != 2 || requestTurns[1][0] != 1 || requestTurns[1][1] != 2 {
+		t.Fatalf("第一个用户轮次的模型请求编号错误：%v", requestTurns)
+	}
+	if len(requestTurns[2]) != 1 || requestTurns[2][0] != 1 {
+		t.Fatalf("第二个用户轮次应重新从 1 计数：%v", requestTurns)
+	}
+}
+
+func TestInteractiveExitBlankAndEOFDoNotRequestOrLog(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		args     []string
-		input    string
-		requests int32
-		code     int
+		name  string
+		input string
 	}{
-		{"参数输入", []string{"你好"}, "", 1, 0},
-		{"无参数只读取一个问题", nil, "你好\n不应发送的第二个问题\n", 1, 0},
-		{"没有换行的输入", nil, "你好", 1, 0},
-		{"输入结束", nil, "", 0, 0},
-		{"空白问题", nil, " \n", 0, 1},
+		{"exit", "/exit\n"},
+		{"padded exit", "  /exit  \n"},
+		{"immediate EOF", ""},
+		{"blank lines then EOF", "\n \n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var requests atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
-				var body struct {
-					Messages []struct {
-						Content []struct{ Text string } `json:"content"`
-					} `json:"messages"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Error(err)
-				}
-				if len(body.Messages) != 1 || len(body.Messages[0].Content) != 1 || body.Messages[0].Content[0].Text != "你好" {
-					t.Error("应只发送本次的第一个问题")
-				}
-				writeTextResponse(w, "答复")
-			}))
-			defer server.Close()
-			path := filepath.Join(t.TempDir(), "existing config.env")
-			data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=" + server.URL + "\nJOHNNY_MODEL=test-model\n"
-			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-				t.Fatal(err)
-			}
-			useConfigPath(t, path)
-			t.Chdir(t.TempDir())
-			before, err := os.Getwd()
-			if err != nil {
-				t.Fatal(err)
-			}
+				writeTextResponse(w, "不应出现")
+			})
 			var output, stderr bytes.Buffer
-			code := run(context.Background(), tc.args, strings.NewReader(tc.input), &output, &stderr)
-			if code != tc.code || requests.Load() != tc.requests {
-				t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
+			code := run(context.Background(), nil, strings.NewReader(tc.input), &output, &stderr)
+			if code != 0 || requests.Load() != 0 || output.Len() != 0 {
+				t.Fatalf("应正常退出且不请求模型：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
 			}
-			if tc.requests == 1 && output.String() != "答复\n" {
-				t.Fatalf("正文输出错误：%q", output.String())
-			}
-			if tc.requests == 0 && output.Len() != 0 {
-				t.Fatal("没有请求时不应输出模型正文")
-			}
-			if after, err := os.Getwd(); err != nil || after != before {
-				t.Fatal("问答过程不应切换工作目录")
-			}
+			assertNoSessionLog(t)
 		})
+	}
+}
+
+func TestInteractiveProcessesFinalLineWithoutNewline(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeTextResponse(w, "answer")
+	})
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), nil, strings.NewReader("first\nsecond"), &output, &stderr)
+	if code != 0 || requests.Load() != 2 || output.String() != "answer\nanswer\n" {
+		t.Fatalf("EOF 末行未处理：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
+	}
+}
+
+func TestInteractiveResetsMaxTurnsForEachUserInput(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch requests.Add(1) {
+		case 1:
+			writeToolUseResponse(w, "", "toolu_1", "write", `{"path":"turn.txt","content":"x"}`)
+		case 2:
+			writeTextResponse(w, "first answer")
+		case 3:
+			writeTextResponse(w, "second answer")
+		default:
+			t.Error("不应发出多余请求")
+			writeTextResponse(w, "多余")
+		}
+	})
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--max-turns", "2"}, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
+	if code != 0 || requests.Load() != 3 || output.String() != "first answer\nsecond answer\n" {
+		t.Fatalf("每轮请求预算未重置：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
+	}
+}
+
+func TestInteractiveContinuesAfterFailedTurn(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		writeTextResponse(w, "recovered")
+	})
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), nil, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
+	if code != 0 || requests.Load() != 2 || output.String() != "recovered\n" {
+		t.Fatalf("失败后应继续下一轮：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "任务失败") {
+		t.Fatalf("应报告本轮失败：%s", stderr.String())
+	}
+}
+
+func TestInteractiveStopsWhenOutputFails(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeTextResponse(w, "answer")
+	})
+	var stderr bytes.Buffer
+	code := run(context.Background(), nil, strings.NewReader("first\nsecond\n/exit\n"), failingWriter{err: errors.New("输出坏了")}, &stderr)
+	if code != 1 || requests.Load() != 1 {
+		t.Fatalf("输出失败应停止会话：code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "输出坏了") {
+		t.Fatalf("应报告输出错误：%s", stderr.String())
+	}
+}
+
+func TestInteractiveReadFailureStops(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeTextResponse(w, "不应出现")
+	})
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), nil, failingReader{err: errors.New("读取坏了")}, &output, &stderr)
+	if code != 1 || requests.Load() != 0 || output.Len() != 0 {
+		t.Fatalf("读取失败应退出：code=%d requests=%d output=%q", code, requests.Load(), output.String())
+	}
+	if !strings.Contains(stderr.String(), "读取输入失败") {
+		t.Fatalf("应报告读取错误：%s", stderr.String())
+	}
+	assertNoSessionLog(t)
+}
+
+func TestReadPromptReusesBufferedLines(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("first\nsecond\nthird"))
+	for _, want := range []string{"first", "second", "third"} {
+		got, err := readPrompt(context.Background(), reader)
+		if err != nil || got != want {
+			t.Fatalf("readPrompt() = %q, %v; want %q", got, err, want)
+		}
+	}
+	if _, err := readPrompt(context.Background(), reader); !errors.Is(err, io.EOF) {
+		t.Fatalf("输入结束后应返回 EOF，实际 %v", err)
 	}
 }
 
@@ -234,7 +458,7 @@ func TestCLIToolLoopAndSessionRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"created.txt", "tool_use", "tool_call_id"} {
+	for _, want := range []string{"created.txt", "tool_use", "tool_call_id", `"user_turn":1`} {
 		if !strings.Contains(string(record), want) {
 			t.Fatalf("会话记录缺少 %q：%s", want, record)
 		}
@@ -378,6 +602,40 @@ func TestCancellationReturns130(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("取消后任务未及时结束")
+	}
+}
+
+func TestInteractiveCancellationReturns130(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+	})
+	defer unblock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan int, 1)
+	var output, stderr bytes.Buffer
+	go func() {
+		finished <- run(ctx, nil, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("模型请求未启动")
+	}
+	cancel()
+	select {
+	case code := <-finished:
+		if code != 130 {
+			t.Fatalf("取消应返回 130，实际 %d：%s", code, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("取消后会话未及时结束")
 	}
 }
 

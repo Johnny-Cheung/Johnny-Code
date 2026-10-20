@@ -468,6 +468,7 @@ func TestProtocolToolRoundTrip(t *testing.T) {
 
 			var requestCount atomic.Int32
 			secondRequest := make(chan []byte, 1)
+			thirdRequest := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requestNumber := requestCount.Add(1)
 				if r.Method != http.MethodPost || r.URL.Path != testCase.path {
@@ -489,6 +490,9 @@ func TestProtocolToolRoundTrip(t *testing.T) {
 				case 2:
 					secondRequest <- body
 					testCase.final(w)
+				case 3:
+					thirdRequest <- body
+					testCase.final(w)
 				default:
 					t.Errorf("unexpected request %d", requestNumber)
 				}
@@ -509,12 +513,13 @@ func TestProtocolToolRoundTrip(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			result, err := agent.Run(ctx, agent.Options{
+			conversation := agent.NewConversation(agent.Options{
 				Client:   client,
 				Tools:    registry,
 				Model:    "protocol-test",
 				MaxTurns: 2,
-			}, "请把 note.txt 从 hello 改成 world，再读取并确认", nil)
+			})
+			result, err := conversation.Run(ctx, "请把 note.txt 从 hello 改成 world，再读取并确认", nil)
 			if err != nil {
 				t.Fatalf("agent.Run() error = %v", err)
 			}
@@ -554,6 +559,22 @@ func TestProtocolToolRoundTrip(t *testing.T) {
 			}
 			if finalText.String() != "完成" {
 				t.Fatalf("final text = %q, want 完成", finalText.String())
+			}
+
+			result, err = conversation.Run(ctx, "请解释刚才的修改", nil)
+			if err != nil || result.Status != agent.StatusCompleted || result.UserTurn != 2 || result.Turns != 1 || requestCount.Load() != 3 {
+				t.Fatalf("第二轮未能继续：%+v err=%v requests=%d", result, err, requestCount.Load())
+			}
+			select {
+			case body = <-thirdRequest:
+			default:
+				t.Fatal("未收到第二轮用户输入的模型请求")
+			}
+			if err := testCase.verify(body, calls); err != nil {
+				t.Fatalf("跨用户轮次的工具历史丢失：%v", err)
+			}
+			if !strings.Contains(string(body), "请解释刚才的修改") {
+				t.Fatal("新用户输入未携带")
 			}
 		})
 	}

@@ -56,6 +56,7 @@ const (
 	EventResponse     EventType = "response"
 	EventToolStart    EventType = "tool_start"
 	EventToolEnd      EventType = "tool_end"
+	EventToolSkipped  EventType = "tool_skipped"
 	EventEnd          EventType = "end"
 )
 
@@ -63,6 +64,7 @@ const (
 // ModelEvent 仅用于流式显示；持久化应使用完整 Response。
 type Event struct {
 	Type       EventType
+	UserTurn   int
 	Turn       int
 	Message    *model.Message
 	ModelEvent *model.Event
@@ -74,7 +76,8 @@ type Event struct {
 }
 
 type Result struct {
-	Message model.Message
-	Turns   int
-	Status  Status
+	Message  model.Message
+	UserTurn int
+	Turns    int
+	Status   Status
 }

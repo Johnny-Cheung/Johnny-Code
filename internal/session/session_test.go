@@ -115,6 +115,80 @@ func assertRecordTime(t *testing.T, object map[string]json.RawMessage) {
 	}
 }
 
+func TestRecordUserTurnsAndSkippedTool(t *testing.T) {
+	recorder := newTestRecorder(t)
+	call := &model.ToolCall{
+		ID:        "call_skipped",
+		Name:      "read",
+		Arguments: json.RawMessage(`{"path":"missing.txt"}`),
+	}
+	result := &model.ToolResult{ToolCallID: "call_skipped", Content: "未执行", IsError: true}
+	userMessage := &model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.BlockText, Text: "继续"}},
+	}
+	events := []agent.Event{
+		{Type: agent.EventStart, UserTurn: 1, Message: userMessage},
+		{Type: agent.EventToolStart, UserTurn: 2, Turn: 3, Call: call},
+		{Type: agent.EventToolSkipped, UserTurn: 2, Turn: 3, Call: call, ToolResult: result, Error: "用户取消"},
+		{Type: agent.EventEnd, UserTurn: 2, Turn: 3, Status: agent.StatusCanceled, Error: "canceled"},
+	}
+	for i, event := range events {
+		if err := recorder.Record(event); err != nil {
+			t.Fatalf("Record(event %d) error = %v", i, err)
+		}
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	lines := readJSONLines(t, recorder.Path())
+	wantTypes := []string{"meta", "start", "tool_start", "tool_skipped", "end"}
+	if len(lines) != len(wantTypes) {
+		t.Fatalf("got %d records, want %d: %q", len(lines), len(wantTypes), lines)
+	}
+	for i, want := range wantTypes {
+		if got := stringField(t, parseObject(t, lines[i]), "type"); got != want {
+			t.Fatalf("record %d type = %q, want %q", i, got, want)
+		}
+	}
+	meta := parseObject(t, lines[0])
+	if _, ok := meta["user_turn"]; ok {
+		t.Fatal("metadata must not contain user_turn")
+	}
+	for i, wantUserTurn := range []int{1, 2, 2} {
+		event := parseObject(t, lines[i+1])
+		if got := intField(t, event, "user_turn"); got != wantUserTurn {
+			t.Fatalf("record %d user_turn = %d, want %d", i+2, got, wantUserTurn)
+		}
+	}
+	if got := intField(t, parseObject(t, lines[3]), "turn"); got != 3 {
+		t.Fatalf("tool_skipped turn = %d, want 3", got)
+	}
+	skipped := parseObject(t, lines[3])
+	if got := stringField(t, skipped, "error"); got != "用户取消" {
+		t.Fatalf("tool_skipped error = %q", got)
+	}
+	var recordedCall struct {
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		ArgumentsRaw string `json:"arguments_raw"`
+	}
+	if err := json.Unmarshal(field(t, skipped, "call"), &recordedCall); err != nil {
+		t.Fatalf("decode tool_skipped call: %v", err)
+	}
+	if recordedCall.ID != "call_skipped" || recordedCall.Name != "read" || recordedCall.ArgumentsRaw != `{"path":"missing.txt"}` {
+		t.Fatalf("tool_skipped call = %+v", recordedCall)
+	}
+	var recordedResult model.ToolResult
+	if err := json.Unmarshal(field(t, skipped, "result"), &recordedResult); err != nil {
+		t.Fatalf("decode tool_skipped result: %v", err)
+	}
+	if recordedResult.ToolCallID != "call_skipped" || recordedResult.Content != "未执行" || !recordedResult.IsError {
+		t.Fatalf("tool_skipped result = %+v", recordedResult)
+	}
+}
+
 func TestRecorderWritesCompleteOrderedLog(t *testing.T) {
 	recorder := newTestRecorder(t)
 

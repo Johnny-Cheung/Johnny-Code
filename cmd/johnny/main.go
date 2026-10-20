@@ -57,7 +57,7 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	flags.BoolVar(&showVersion, "version", false, "显示版本")
 	api := flags.String("api", "", "临时选择 API 协议")
 	modelName := flags.String("model", "", "临时选择模型")
-	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "单次任务最多模型请求次数")
+	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "每轮任务最多模型请求次数")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -72,6 +72,13 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	}
 	if *maxTurns < 1 {
 		fmt.Fprintln(stderr, "--max-turns 必须是正整数。")
+		return 1
+	}
+
+	interactive := len(flags.Args()) == 0
+	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
+	if !interactive && prompt == "" {
+		fmt.Fprintln(stderr, "任务不能为空。")
 		return 1
 	}
 
@@ -93,23 +100,6 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		return reportError(stderr, "配置错误：", err)
 	}
 
-	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
-	if len(flags.Args()) == 0 {
-		fmt.Fprint(stderr, "请输入任务：")
-		prompt, err = readPrompt(ctx, input)
-		if errors.Is(err, io.EOF) {
-			fmt.Fprintln(stderr)
-			return 0
-		}
-		if err != nil {
-			return reportError(stderr, "读取输入失败：", err)
-		}
-	}
-	if prompt == "" {
-		fmt.Fprintln(stderr, "任务不能为空。")
-		return 1
-	}
-
 	workDir, err := os.Getwd()
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", fmt.Errorf("无法获取当前工作目录：%w", err))
@@ -127,16 +117,12 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		return reportError(stderr, "配置错误：", err)
 	}
 
+	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
 	logs := openSessionLogger(session.Metadata{WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model}, stderr)
 	defer logs.close()
 
 	display := newRenderer(output, stderr)
-	emit := func(event agent.Event) error {
-		// 记录失败只降级日志功能，不阻塞任务，也不掩盖输出错误。
-		logs.record(event)
-		return display.Handle(event)
-	}
-	result, runErr := agent.Run(ctx, agent.Options{
+	conversation := agent.NewConversation(agent.Options{
 		Client:          client,
 		Tools:           registry,
 		Model:           cfg.Model,
@@ -144,11 +130,83 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		MaxTurns:        *maxTurns,
 		RequestTimeout:  agent.DefaultRequestTimeout,
 		MaxOutputTokens: 4096,
-	}, prompt, emit)
-	if err := display.finish(); runErr == nil && err != nil {
-		runErr = err
+	})
+
+	if !interactive {
+		return runTask(ctx, conversation, prompt, logs, display, stderr)
+	}
+	return runInteractive(ctx, conversation, input, logs, display, stderr)
+}
+
+// runTask 执行参数模式下的唯一任务；无论成功失败都直接结束进程。
+func runTask(ctx context.Context, conversation *agent.Conversation, prompt string, logs *sessionLogger, display *renderer, stderr io.Writer) int {
+	result, runErr, displayErr := executeTurn(ctx, conversation, prompt, logs, display)
+	if displayErr != nil {
+		return reportError(stderr, "任务失败：", displayErr)
 	}
 	return reportResult(stderr, result, runErr)
+}
+
+// runInteractive 反复读取用户输入并在同一会话历史上执行。
+// 输入 /exit、EOF 或父 context 取消时结束；单轮模型失败只报告并继续等待。
+func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer) int {
+	reader := bufio.NewReader(input)
+	for {
+		if _, err := fmt.Fprint(stderr, "请输入任务："); err != nil {
+			return reportError(stderr, "输出输入提示失败：", err)
+		}
+		line, err := readPrompt(ctx, reader)
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(stderr)
+			return 0
+		}
+		if err != nil {
+			return reportError(stderr, "读取输入失败：", err)
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "/exit" {
+			return 0
+		}
+
+		result, runErr, displayErr := executeTurn(ctx, conversation, line, logs, display)
+		if displayErr != nil {
+			return reportError(stderr, "任务失败：", displayErr)
+		}
+		if errors.Is(runErr, context.Canceled) || ctx.Err() != nil {
+			if runErr == nil {
+				runErr = ctx.Err()
+			}
+			return reportResult(stderr, result, runErr)
+		}
+		if runErr != nil {
+			// 本轮失败不终止会话；历史由 Conversation 保留，继续等待输入。
+			reportResult(stderr, result, runErr)
+		}
+	}
+}
+
+// executeTurn 运行一轮用户输入，并把终端输出错误与模型/工具错误分开返回。
+// 日志写入失败只降级日志功能，不影响本轮。
+func executeTurn(ctx context.Context, conversation *agent.Conversation, prompt string, logs *sessionLogger, display *renderer) (agent.Result, error, error) {
+	var displayErr error
+	emit := func(event agent.Event) error {
+		logs.record(event)
+		if err := display.Handle(event); err != nil {
+			if displayErr == nil {
+				displayErr = err
+			}
+			return err
+		}
+		return nil
+	}
+	result, runErr := conversation.Run(ctx, prompt, emit)
+	if err := display.finish(); err != nil && displayErr == nil {
+		displayErr = err
+	}
+	return result, runErr, displayErr
 }
 
 func systemPrompt(workDir string) string {
@@ -381,17 +439,14 @@ type eventRecorder interface {
 type sessionLogger struct {
 	recorder eventRecorder
 	stderr   io.Writer
+	metadata *session.Metadata
 	warned   bool
+	disabled bool
 }
 
+// openSessionLogger 延迟到第一条事件时才创建文件，单纯 /exit 或 EOF 不落盘。
 func openSessionLogger(metadata session.Metadata, stderr io.Writer) *sessionLogger {
-	recorder, err := session.New(metadata)
-	if err != nil {
-		logger := &sessionLogger{stderr: stderr}
-		logger.warn("创建", err)
-		return logger
-	}
-	return newSessionLogger(recorder, stderr)
+	return &sessionLogger{stderr: stderr, metadata: &metadata}
 }
 
 func newSessionLogger(recorder eventRecorder, stderr io.Writer) *sessionLogger {
@@ -402,8 +457,29 @@ func newSessionLogger(recorder eventRecorder, stderr io.Writer) *sessionLogger {
 	return logger
 }
 
+func (l *sessionLogger) ensure() {
+	if l == nil || l.recorder != nil || l.metadata == nil || l.disabled {
+		return
+	}
+	recorder, err := session.New(*l.metadata)
+	if err != nil {
+		// 创建失败也只降级日志功能；禁用以避免每次事件重复失败。
+		l.disabled = true
+		l.warn("创建", err)
+		return
+	}
+	l.recorder = recorder
+	if path := recorder.Path(); path != "" {
+		fmt.Fprintf(l.stderr, "会话记录：%s\n", escapeTerminal(path))
+	}
+}
+
 func (l *sessionLogger) record(event agent.Event) {
-	if l == nil || l.recorder == nil {
+	if l == nil {
+		return
+	}
+	l.ensure()
+	if l.recorder == nil {
 		return
 	}
 	if err := l.recorder.Record(event); err != nil {
@@ -412,6 +488,7 @@ func (l *sessionLogger) record(event agent.Event) {
 		// 后续事件直接跳过，避免每个事件重复失败、拖慢任务。
 		_ = l.recorder.Close()
 		l.recorder = nil
+		l.disabled = true
 	}
 }
 
@@ -476,18 +553,21 @@ func printHelp(output io.Writer) {
 	fmt.Fprintf(output, `Johnny-Code
 
 用法：
-  johnny "任务"     自动执行工具并完成任务后退出
-  johnny            输入一个任务，自动执行工具并完成任务后退出
+  johnny "任务"     执行一个任务，完成后退出，不读取标准输入
+  johnny            进入多轮交互，保留本进程历史，直到 /exit 或 EOF
 
 选项：
   -h, --help        显示帮助
   --version         显示版本和提交号
   --model 名称      临时覆盖模型名（选项放在任务之前）
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
-  --max-turns 次数  单次任务最多模型请求次数（默认 %d，必须是正整数）
+  --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
 
+交互模式：
+  每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
+  每轮独立计算模型请求次数；单轮失败会说明原因并继续等待输入。
 配置文件：%s
-Ctrl+C 取消当前任务，等待输入时 Ctrl+D 退出。
+Ctrl+C 取消当前请求并退出（退出码 130）。
 `, agent.DefaultMaxTurns, path)
 }
 
@@ -495,13 +575,18 @@ func readPrompt(ctx context.Context, input io.Reader) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// 交互模式传入同一个 *bufio.Reader，避免每次新建 Reader 预读后丢弃后续行。
+	reader, ok := input.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(input)
+	}
 	type result struct {
 		text string
 		err  error
 	}
 	ready := make(chan result, 1)
 	go func() {
-		text, err := bufio.NewReader(input).ReadString('\n')
+		text, err := reader.ReadString('\n')
 		ready <- result{text, err}
 	}()
 	select {
