@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	version          = "0.5.0"
+	version          = "0.6.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -134,6 +134,9 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 
 	if !interactive {
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
+	}
+	if useTUI(input, output) {
+		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir)
 	}
 	return runInteractive(ctx, conversation, input, logs, display, stderr)
 }
@@ -565,9 +568,11 @@ func printHelp(output io.Writer) {
 
 交互模式：
   每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
+  终端中启用 TUI：Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
+  TUI 中 Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
   每轮独立计算模型请求次数；单轮失败会说明原因并继续等待输入。
+  管道或重定向使用普通文本；参数任务和普通文本模式中 Ctrl+C 取消并退出（退出码 130）。
 配置文件：%s
-Ctrl+C 取消当前请求并退出（退出码 130）。
 `, agent.DefaultMaxTurns, path)
 }
 
