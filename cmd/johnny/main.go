@@ -152,7 +152,7 @@ func runTask(ctx context.Context, conversation *agent.Conversation, prompt strin
 func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer) int {
 	reader := bufio.NewReader(input)
 	for {
-		if _, err := fmt.Fprint(stderr, "请输入任务："); err != nil {
+		if err := writeProgress(stderr, "请输入任务："); err != nil {
 			return reportError(stderr, "输出输入提示失败：", err)
 		}
 		line, err := readPrompt(ctx, reader)

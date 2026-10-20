@@ -372,6 +372,20 @@ func TestInteractiveStopsWhenOutputFails(t *testing.T) {
 	}
 }
 
+func TestInteractivePromptShortWriteStopsBeforeRequest(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeTextResponse(w, "不应请求")
+	})
+	var output bytes.Buffer
+	code := run(context.Background(), nil, strings.NewReader("first\n/exit\n"), &output, shortWriter{})
+	if code != 1 || requests.Load() != 0 || output.Len() != 0 {
+		t.Fatalf("输入提示短写后不应请求模型：code=%d requests=%d", code, requests.Load())
+	}
+	assertNoSessionLog(t)
+}
+
 func TestInteractiveReadFailureStops(t *testing.T) {
 	var requests atomic.Int32
 	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
