@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.5 接通统一模型接口与 `bash`、`read`、`edit`、`write` 四个工具，并支持同进程多轮对话：每轮执行模型请求的工具、回传结果并继续请求模型，正常结束后可继续输入。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已实现，待用户联合验收。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.5 接通统一模型接口与 `bash`、`read`、`edit`、`write` 四个工具，并支持同进程多轮对话：每轮执行模型请求的工具、回传结果并继续请求模型，正常结束后可继续输入。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已实现并通过用户联合验收。
 
 ## 安装和更新
 
