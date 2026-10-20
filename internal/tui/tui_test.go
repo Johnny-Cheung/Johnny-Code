@@ -11,10 +11,16 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func keyPress(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
+
+func ctrlPress(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code, Mod: tea.ModCtrl}
+}
 
 func testModel(t *testing.T) *terminalModel {
 	t.Helper()
@@ -28,19 +34,19 @@ func testModel(t *testing.T) *terminalModel {
 
 func TestInputPasteNewlineAndClear(t *testing.T) {
 	m := testModel(t)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("分析下面代码：\nfunc main() {}"), Paste: true})
+	m.Update(tea.PasteMsg{Content: "分析下面代码：\nfunc main() {}"})
 	if m.busy || m.input.Value() != "分析下面代码：\nfunc main() {}" {
 		t.Fatalf("粘贴不得发送或丢失换行：%q", m.input.Value())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
 	if m.input.Value() != "分析下面代码：\nfunc main() {}\n" {
 		t.Fatalf("Alt+Enter 应换行：%q", m.input.Value())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m.Update(ctrlPress('c'))
 	if m.input.Value() != "" || m.quitting || m.busy {
 		t.Fatal("空闲 Ctrl+C 只能清空输入")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(keyPress(tea.KeyEnter))
 	if m.busy {
 		t.Fatal("空输入不能发送")
 	}
@@ -48,11 +54,11 @@ func TestInputPasteNewlineAndClear(t *testing.T) {
 
 func TestPasteNormalizesNewlinesAndRejectsWholeOversizeInput(t *testing.T) {
 	m := testModel(t)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("first\r\nsecond\rthird")})
+	m.Update(tea.PasteMsg{Content: "first\r\nsecond\rthird"})
 	if m.input.Value() != "first\nsecond\nthird" {
 		t.Fatalf("粘贴换行转换错误：%q", m.input.Value())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune(strings.Repeat("line\n", 10000))})
+	m.Update(tea.PasteMsg{Content: strings.Repeat("line\n", 10000)})
 	if m.input.Value() != "first\nsecond\nthird" || !strings.Contains(m.status, "未插入") {
 		t.Fatal("超限粘贴必须整体拒绝，不能静默截断")
 	}
@@ -63,21 +69,21 @@ func TestInputHistoryRestoresDraftAndNavigatesMultiline(t *testing.T) {
 	m.history = []string{"first", "second\nline"}
 	m.historyIndex = len(m.history)
 	m.input.SetValue("draft")
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(keyPress(tea.KeyUp))
 	if m.input.Value() != "second\nline" {
 		t.Fatal(m.input.Value())
 	}
 	// 多行历史先移动到首行，再按上键才切换到更早任务。
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(keyPress(tea.KeyUp))
 	if m.input.Value() != "second\nline" {
 		t.Fatal("多行光标移动不应切换历史")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(keyPress(tea.KeyUp))
 	if m.input.Value() != "first" {
 		t.Fatal(m.input.Value())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(keyPress(tea.KeyDown))
+	m.Update(keyPress(tea.KeyDown))
 	if m.input.Value() != "draft" {
 		t.Fatalf("应恢复未发送草稿：%q", m.input.Value())
 	}
@@ -87,9 +93,9 @@ func TestExitKeys(t *testing.T) {
 	for _, value := range []string{"", " /exit "} {
 		m := testModel(t)
 		m.input.SetValue(value)
-		key := tea.KeyMsg{Type: tea.KeyCtrlD}
+		key := ctrlPress('d')
 		if value != "" {
-			key.Type = tea.KeyEnter
+			key = keyPress(tea.KeyEnter)
 		}
 		_, cmd := m.Update(key)
 		if !m.quitting || cmd == nil {
@@ -101,7 +107,7 @@ func TestExitKeys(t *testing.T) {
 	}
 	m := testModel(t)
 	m.input.SetValue("keep")
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m.Update(ctrlPress('d'))
 	if m.quitting {
 		t.Fatal("非空 Ctrl+D 不应退出")
 	}
@@ -120,11 +126,11 @@ func TestCancellationWaitsForWorkerAndAllowsNextTurn(t *testing.T) {
 		return agent.Result{Status: agent.StatusCompleted}, nil
 	}
 	m.input.SetValue("first")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(keyPress(tea.KeyEnter))
 	<-started
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("discard"), Paste: true})
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(ctrlPress('c'))
+	m.Update(tea.PasteMsg{Content: "discard"})
+	m.Update(keyPress(tea.KeyEnter))
 	if !m.busy || !m.stopping || m.input.Value() != "" {
 		t.Fatal("清理完成前不能恢复输入或排队任务")
 	}
@@ -139,7 +145,7 @@ func TestCancellationWaitsForWorkerAndAllowsNextTurn(t *testing.T) {
 		t.Fatalf("应恢复输入：%s", m.status)
 	}
 	m.input.SetValue("second")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(keyPress(tea.KeyEnter))
 	if prompt := <-started; prompt != "second" {
 		t.Fatal(prompt)
 	}
@@ -201,7 +207,7 @@ func TestMarkdownPreviewIsBoundedDuringStreaming(t *testing.T) {
 	m.markdown.Write(strings.Repeat("很长的流式预览内容 ", 200))
 	for _, size := range []tea.WindowSizeMsg{{Width: 40, Height: 12}, {Width: 18, Height: 5}, {Width: 4, Height: 2}} {
 		m.Update(size)
-		view := m.View()
+		view := m.View().Content
 		if lines := strings.Split(view, "\n"); len(lines) > size.Height {
 			t.Fatalf("动态区域高于窗口：%q", view)
 		}
@@ -219,7 +225,8 @@ func TestMarkdownPreviewIsBoundedDuringStreaming(t *testing.T) {
 func TestIdleViewHasTopAndBottomInputBorders(t *testing.T) {
 	m := testModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
-	lines := strings.Split(m.View(), "\n")
+	view := m.View()
+	lines := strings.Split(view.Content, "\n")
 	var borders []int
 	for i, line := range lines {
 		plain := strings.TrimSpace(ansi.Strip(line))
@@ -228,10 +235,27 @@ func TestIdleViewHasTopAndBottomInputBorders(t *testing.T) {
 		}
 	}
 	if len(borders) != 2 || borders[0] >= borders[1] {
-		t.Fatalf("输入框需要上下两条横线：%q", m.View())
+		t.Fatalf("输入框需要上下两条横线：%q", view.Content)
 	}
 	if !strings.Contains(ansi.Strip(lines[len(lines)-1]), "Enter 发送") {
 		t.Fatal("状态提示应在下横线之后")
+	}
+}
+
+func TestRealCursorFollowsInputForIME(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	m.Update(tea.PasteMsg{Content: "你好"})
+	view := m.View()
+	if view.Cursor == nil {
+		t.Fatal("空闲输入必须提供真实光标，输入法才能定位组合文本")
+	}
+	if view.Cursor.X != 6 || view.Cursor.Y != 1 {
+		t.Fatalf("光标应在上边框之后的输入位置：X=%d Y=%d", view.Cursor.X, view.Cursor.Y)
+	}
+	m.busy = true
+	if m.View().Cursor != nil {
+		t.Fatal("任务执行时不应显示输入光标")
 	}
 }
 
@@ -245,7 +269,7 @@ func TestResizeAndControlCharacters(t *testing.T) {
 		m.Update(size)
 		m.input.SetValue("中文输入\nnext")
 		m.resizeInput()
-		view := m.View()
+		view := m.View().Content
 		if len(strings.Split(view, "\n")) > size.Height {
 			t.Fatalf("界面高于窗口：%q", view)
 		}

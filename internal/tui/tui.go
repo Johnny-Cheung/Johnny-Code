@@ -9,13 +9,11 @@ import (
 	"strings"
 	"sync"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
-	_ "github.com/Johnny-Cheung/Johnny-Code/internal/tui/theme"
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -118,17 +116,19 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 	input.SetWidth(78)
 	input.SetHeight(1)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
-	input.KeyMap.Paste.SetEnabled(false) // 终端括号粘贴由 KeyRunes 接收，不访问系统剪贴板。
-	// 输入继承终端自身的前景/背景，使用无需动态探测的基础样式。
-	style := textarea.Style{
-		Base: lipgloss.NewStyle(), Text: lipgloss.NewStyle(),
-		CursorLine: lipgloss.NewStyle(), EndOfBuffer: lipgloss.NewStyle(),
-		Prompt:      lipgloss.NewStyle().Bold(true),
-		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-	}
-	input.FocusedStyle, input.BlurredStyle = style, style
-	// 静态光标避免组件的异步 blink 闭包访问随后被替换的输入状态。
-	input.Cursor.SetMode(cursor.CursorStatic)
+	input.KeyMap.Paste.SetEnabled(false) // 终端括号粘贴由 PasteMsg 接收，不访问系统剪贴板。
+	styles := input.Styles()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	styles.Blurred.CursorLine = lipgloss.NewStyle()
+	styles.Focused.Prompt = lipgloss.NewStyle().Bold(true)
+	styles.Blurred.Prompt = styles.Focused.Prompt
+	styles.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	styles.Blurred.Placeholder = styles.Focused.Placeholder
+	styles.Cursor.Blink = false
+	input.SetStyles(styles)
+	// 使用真实终端光标而不是字符反转的虚拟光标，输入法组合文本才会出现在
+	// 输入位置；View.Cursor 每次按输入框光标计算位置。
+	input.SetVirtualCursor(false)
 	input.Focus()
 	return &terminalModel{options: options, ctx: ctx, output: output, events: make(chan delivery),
 		workers: workers, input: input, width: 80, height: 24, status: "空闲",
@@ -164,55 +164,61 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case delivery:
 		return m, m.receive(msg)
-	case tea.KeyMsg:
+	case tea.PasteMsg:
 		if m.busy {
-			if msg.Type == tea.KeyCtrlC && !m.stopping {
+			return m, nil
+		}
+		text := normalizeNewlines(msg.Content)
+		// textarea 库有 10000 行硬上限；整批拒绝，避免静默截掉任务尾部。
+		if m.input.LineCount()+strings.Count(text, "\n") > 10000 {
+			m.status = "输入最多 10000 行，本次粘贴未插入"
+			return m, nil
+		}
+		message = tea.PasteMsg{Content: text}
+	case tea.KeyPressMsg:
+		keys := msg.String()
+		if m.busy {
+			if keys == "ctrl+c" && !m.stopping {
 				m.stopping = true
 				m.status = "正在取消，等待当前操作停止…"
 				m.cancel()
 			}
 			return m, nil
 		}
-		if msg.Type == tea.KeyRunes && msg.Paste {
-			text := strings.ReplaceAll(string(msg.Runes), "\r\n", "\n")
-			text = strings.ReplaceAll(text, "\r", "\n")
-			// textarea 库有 10000 行硬上限；整批拒绝，避免静默截掉任务尾部。
-			if m.input.LineCount()+strings.Count(text, "\n") > 10000 {
-				m.status = "输入最多 10000 行，本次粘贴未插入"
+		switch keys {
+		case "ctrl+c":
+			m.input.Reset()
+			m.historyIndex = len(m.history)
+			m.draft = ""
+			m.resizeInput()
+			return m, nil
+		case "ctrl+d":
+			if m.input.Value() == "" {
+				m.quitting = true
+				return m, tea.Quit
+			}
+		case "enter":
+			prompt := strings.TrimSpace(m.input.Value())
+			if prompt == "" {
 				return m, nil
 			}
-			msg.Runes = []rune(text)
-			message = msg
-		}
-		if !msg.Paste {
-			if ((msg.Type == tea.KeyEnter && msg.Alt) || msg.Type == tea.KeyCtrlJ) && m.input.LineCount() >= 10000 {
+			if prompt == "/exit" {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, m.start(prompt)
+		case "alt+enter", "ctrl+j":
+			if m.input.LineCount() >= 10000 {
 				m.status = "输入最多 10000 行"
 				return m, nil
 			}
-			switch {
-			case msg.Type == tea.KeyCtrlC:
-				m.input.Reset()
-				m.historyIndex = len(m.history)
-				m.draft = ""
-				m.resizeInput()
-				return m, nil
-			case msg.Type == tea.KeyCtrlD && m.input.Value() == "":
-				m.quitting = true
-				return m, tea.Quit
-			case msg.Type == tea.KeyEnter && !msg.Alt:
-				prompt := strings.TrimSpace(m.input.Value())
-				if prompt == "" {
-					return m, nil
-				}
-				if prompt == "/exit" {
-					m.quitting = true
-					return m, tea.Quit
-				}
-				return m, m.start(prompt)
-			case msg.Type == tea.KeyUp && m.input.Line() == 0:
+		case "up":
+			if m.input.Line() == 0 {
 				m.navigateHistory(-1)
 				return m, nil
-			case msg.Type == tea.KeyDown && m.input.Line() == m.input.LineCount()-1:
+			}
+		case "down":
+			if m.input.Line() == m.input.LineCount()-1 {
 				m.navigateHistory(1)
 				return m, nil
 			}
@@ -222,6 +228,11 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(message)
 	m.resizeInput()
 	return m, cmd
+}
+
+func normalizeNewlines(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
 }
 
 func (m *terminalModel) resizeInput() {
@@ -403,9 +414,9 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 	return m.waitEvent()
 }
 
-func (m *terminalModel) View() string {
+func (m *terminalModel) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
 	width := m.contentWidth()
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
@@ -431,7 +442,7 @@ func (m *terminalModel) View() string {
 		if len(parts) < m.height {
 			parts = append(parts, muted.Render(ansi.Truncate("Ctrl+C 取消本轮", width, "…")))
 		}
-		return strings.Join(parts, "\n")
+		return tea.NewView(strings.Join(parts, "\n"))
 	}
 	view := m.input.View()
 	// textarea 本身最小宽度高于极窄终端，最后按显示宽度裁剪可见行。
@@ -453,5 +464,17 @@ func (m *terminalModel) View() string {
 		footer := m.status + " · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /exit 退出"
 		parts = append(parts, muted.Render(ansi.Truncate(footer, width, "…")))
 	}
-	return strings.Join(parts, "\n")
+	content := strings.Join(parts, "\n")
+	result := tea.NewView(content)
+	// 真实光标必须落在输入框中的文字位置：输入法组合文本、候选窗口会跟随
+	// 这个位置。上边框占用一行，需要加到输入框内的相对坐标上。
+	if cursor := m.input.Cursor(); cursor != nil {
+		if hasBorder {
+			cursor.Position.Y++
+		}
+		cursor.Position.X = min(cursor.Position.X, width-1)
+		cursor.Position.Y = min(cursor.Position.Y, max(0, len(parts)-1))
+		result.Cursor = cursor
+	}
+	return result
 }
