@@ -135,9 +135,80 @@ func TestParseTreeRowColumns(t *testing.T) {
 	if row.head != "│   ├── API 参考文档.md" || row.count != "708" {
 		t.Fatalf("含空格名称拆分错误：%+v", row)
 	}
+	// 长文件名后只隔一个空格的 "(5 行)" 是元数据，不能撑大条目名列。
+	row = parseTreeRow("│       ├── 010_moment_comments_auto_increment_guard.sql (5 行)")
+	if row.head != "│       ├── 010_moment_comments_auto_increment_guard.sql" || row.tail != "(5 行)" {
+		t.Fatalf("单空格元数据拆分错误：%+v", row)
+	}
+	// 只有树形竖线和注释的续行不能当成新条目。
+	row = parseTreeRow("│                                      # goim-watchdog 服务与定时器")
+	if row.head != "│                                      " || row.tail != "# goim-watchdog 服务与定时器" {
+		t.Fatalf("注释续行拆分错误：%+v", row)
+	}
 	row = parseTreeRow("│")
 	if row.parsed {
 		t.Fatalf("纯树形连接线不应按条目解析：%+v", row)
+	}
+}
+
+func TestTreeSessionLayoutStaysReadableAtCommonWidths(t *testing.T) {
+	source := "```text\n" +
+		"backend/\n" +
+		"├── benchmark/                                  # 压测与调试工具\n" +
+		"│   ├── .gitignore                              (87 B)\n" +
+		"│   └── msg_bench.go                            (296 行)\n" +
+		"├── deploy/                                     # 生产编排：docker-compose.prod.yaml、\n" +
+		"│                                               # goim-watchdog 服务与定时器\n" +
+		"├── internal/\n" +
+		"│   ├── api/                                    # HTTP Handler（auth/avatar/friend/group/moment）\n" +
+		"│   └── service/                                # 业务层（auth/friend/group/moment）\n" +
+		"└── 010_moment_comments_auto_increment_guard.sql (5 行)\n" +
+		"```\n"
+	for _, width := range []int{80, 90, 100} {
+		plain := ansi.Strip(renderMarkdown(t, width, source))
+		for _, line := range strings.Split(plain, "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("宽度 %d 下目录树行超宽：%q", width, line)
+			}
+			if strings.Contains(line, "…") {
+				t.Fatalf("目录树说明不应被窗口截断：%q\n%s", line, plain)
+			}
+		}
+		for _, want := range []string{"(87 B)", "(296 行)", "(5 行)", "goim-watchdog"} {
+			if !strings.Contains(strings.Join(strings.Fields(plain), ""), strings.Join(strings.Fields(want), "")) {
+				t.Fatalf("宽度 %d 下目录树丢失 %q：\n%s", width, want, plain)
+			}
+		}
+	}
+}
+
+func TestFreeformTreeDiagramWrapsWithoutTruncation(t *testing.T) {
+	source := "```text\n" +
+		"main.tsx\n" +
+		" └─ RootApp.tsx\n" +
+		"      ErrorBoundary → QueryClientProvider → BrowserRouter → Suspense(lazy)\n" +
+		"      ├─ GuestRoute  → /login, /register      → AuthPage\n" +
+		"      └─ ProtectedRoute → AppShell (/app)\n" +
+		"数据层：\n" +
+		"  realtime/socket.ts（GoIMSocket，指数退避重连，连接态 idle/connecting/connected/reconnecting/offline）\n" +
+		"    └─ RealtimeBootstrap.tsx → 分发到 chatStore / notifications\n" +
+		"```\n"
+	for _, width := range []int{60, 80, 90} {
+		plain := ansi.Strip(renderMarkdown(t, width, source))
+		if strings.Contains(plain, "…") {
+			t.Fatalf("自由排版树不应截断内容：\n%s", plain)
+		}
+		for _, line := range strings.Split(plain, "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("宽度 %d 下自由排版行超宽：%q", width, line)
+			}
+		}
+		flat := strings.Join(strings.Fields(plain), "")
+		for _, want := range []string{"ErrorBoundary→QueryClientProvider", "reconnecting/offline", "RealtimeBootstrap.tsx→分发到chatStore/notifications"} {
+			if !strings.Contains(flat, want) {
+				t.Fatalf("宽度 %d 下自由排版内容丢失 %q：\n%s", width, want, plain)
+			}
+		}
 	}
 }
 

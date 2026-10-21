@@ -74,6 +74,15 @@ func parseTreeRow(line string) treeRow {
 	}
 	prefix := line[:entryStart]
 	entry := line[entryStart:]
+	// 目录树的长说明可能续写到下一行，行首只有树形竖线和一个 # 注释，
+	// 没有条目名。把它当作注释续行，不能把整段说明算进条目名列。
+	if strings.HasPrefix(entry, "#") {
+		row.head = prefix
+		row.indent = ansi.StringWidth(prefix)
+		row.tail = strings.TrimSpace(entry)
+		row.parsed = true
+		return row
+	}
 	commentAt := commentStart(entry)
 	meta := entry
 	comment := ""
@@ -90,6 +99,11 @@ func parseTreeRow(line string) treeRow {
 		fields[0] = head
 		row.count = count
 	}
+	parenTail := ""
+	if head, tail, ok := splitTrailingParen(fields[0]); ok {
+		fields[0] = head
+		parenTail = tail
+	}
 	row.head = prefix + fields[0]
 	row.indent = ansi.StringWidth(prefix)
 	row.parsed = true
@@ -100,14 +114,17 @@ func parseTreeRow(line string) treeRow {
 		rest = rest[1:]
 	}
 	description = strings.Join(rest, "  ")
-	switch {
-	case description != "" && comment != "":
-		row.tail = description + "  " + comment
-	case comment != "":
-		row.tail = comment
-	default:
-		row.tail = description
+	var tailParts []string
+	if description != "" {
+		tailParts = append(tailParts, description)
 	}
+	if parenTail != "" {
+		tailParts = append(tailParts, parenTail)
+	}
+	if comment != "" {
+		tailParts = append(tailParts, comment)
+	}
+	row.tail = strings.Join(tailParts, "  ")
 	return row
 }
 
@@ -205,6 +222,24 @@ func splitTrailingCount(text string) (string, string, bool) {
 	return head, text[i:end], true
 }
 
+// splitTrailingParen 拆出长文件名后只隔一个空格的 "(5 行)"、"(87 B)"
+// 等元数据，避免它们被算进条目名列导致整棵树重新排版。
+func splitTrailingParen(text string) (string, string, bool) {
+	trimmed := strings.TrimRight(text, " \t")
+	if !strings.HasSuffix(trimmed, ")") {
+		return text, "", false
+	}
+	index := strings.LastIndex(trimmed, " (")
+	if index <= 0 {
+		return text, "", false
+	}
+	head := strings.TrimRight(trimmed[:index], " \t")
+	if head == "" {
+		return text, "", false
+	}
+	return head, trimmed[index+1:], true
+}
+
 type treeSegment struct {
 	text string
 	tree bool
@@ -256,6 +291,43 @@ func splitTreeSegments(source string) []treeSegment {
 	return segments
 }
 
+// renderFreeform 用于关系图、调用链等没有稳定元数据列的内容：保留每行
+// 原有缩进和树形前缀，只对超宽行换行，续行对齐到条目内容起始列。
+func (s *markdownStream) renderFreeform(lines []string, contentWidth int) string {
+	var out []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			out = append(out, "")
+			continue
+		}
+		if ansi.StringWidth(line) <= contentWidth {
+			out = append(out, "  "+line)
+			continue
+		}
+		entryStart := treeEntryStart(line)
+		if entryStart < 0 {
+			entryStart = 0
+		}
+		gutter := line[:entryStart]
+		content := line[entryStart:]
+		indent := ansi.StringWidth(gutter)
+		if indent == 0 {
+			indent = 4
+		}
+		indent = min(indent, max(4, contentWidth-8))
+		chunks := wrapChunks(content, max(1, contentWidth-indent))
+		if len(chunks) == 0 {
+			out = append(out, "  "+line)
+			continue
+		}
+		out = append(out, "  "+gutter+chunks[0])
+		for _, chunk := range chunks[1:] {
+			out = append(out, "  "+strings.Repeat(" ", indent)+chunk)
+		}
+	}
+	return clampLines(out, s.width)
+}
+
 // renderTree 按目录树语义输出代码块：窄终端下压缩数字列、把注释换行到
 // 说明列下方，而不是在树形分支中间断开。宽度足够时保持模型的原始布局。
 func (s *markdownStream) renderTree(code string) string {
@@ -287,11 +359,15 @@ func (s *markdownStream) renderTree(code string) string {
 	rows := make([]treeRow, len(lines))
 	baseWidth, countWidth := 0, 0
 	hasCount, hasTail := false, false
+	structured := 0
 	for i, line := range lines {
 		row := parseTreeRow(line)
 		rows[i] = row
 		if !row.parsed {
 			continue
+		}
+		if row.count != "" || strings.HasPrefix(row.tail, "#") || strings.HasPrefix(row.tail, "(") {
+			structured++
 		}
 		baseWidth = max(baseWidth, ansi.StringWidth(row.head))
 		if row.count != "" {
@@ -302,6 +378,11 @@ func (s *markdownStream) renderTree(code string) string {
 			hasTail = true
 		}
 	}
+	// 关系图、调用链等自由排版的树通常只有个别括号说明，没有成列的
+	// 数字或注释；这类内容按原有缩进逐行换行，不能套用表格列对齐。
+	if structured < 3 {
+		return s.renderFreeform(lines, contentWidth)
+	}
 	leftWidth := baseWidth
 	if hasCount {
 		leftWidth += 2 + countWidth
@@ -309,7 +390,7 @@ func (s *markdownStream) renderTree(code string) string {
 	tailColumn := leftWidth + 2
 	// 说明列至少保留一段可读空间；否则改为把说明放到条目下方。太窄时
 	// 仅 "#" 就会占一行，反而更难读。
-	alignedTail := hasTail && contentWidth-tailColumn >= 24
+	alignedTail := hasTail && contentWidth-tailColumn >= 16
 
 	var out []string
 	for _, row := range rows {
@@ -394,12 +475,24 @@ func wrapChunks(text string, width int) []string {
 		prefix = "# "
 		text = strings.TrimSpace(text[2:])
 	}
-	wrapped := ansi.Wrap(text, max(1, width-ansi.StringWidth(prefix)), "")
+	limit := max(1, width-ansi.StringWidth(prefix))
+	wrapped := ansi.Wrap(text, limit, "/.,;:")
 	var chunks []string
 	for _, line := range strings.Split(wrapped, "\n") {
 		line = strings.TrimRight(line, " ")
-		if line != "" {
+		if line == "" {
+			continue
+		}
+		if ansi.StringWidth(line) <= limit {
 			chunks = append(chunks, line)
+			continue
+		}
+		// 长路径或中文串没有可用断点时，按显示宽度硬换行，宁可断开
+		// 单词也不能让上层按窗口截断，导致说明内容丢失。
+		for _, hard := range strings.Split(ansi.Hardwrap(line, limit, false), "\n") {
+			if hard = strings.TrimRight(hard, " "); hard != "" {
+				chunks = append(chunks, hard)
+			}
 		}
 	}
 	if prefix != "" && len(chunks) > 0 {
