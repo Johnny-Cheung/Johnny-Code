@@ -31,7 +31,9 @@ func safeText(text string) string {
 }
 
 func wrap(text string, width int) string {
-	return ansi.Hardwrap(text, max(1, width), true)
+	// 优先按空格换行，只有单个词本身超过宽度时才硬断，避免把 settings、
+	// Manager 之类的词从中间切开。
+	return ansi.Wrap(text, max(1, width), "")
 }
 
 // Bubble Tea 的 renderer 不返回写错误；包装输出以捕获首次失败并取消会话。
