@@ -138,7 +138,7 @@ bash -n scripts/install.sh
 
 测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；调试记录与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
-统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树、表格等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。四个工具沿用当前直接执行方式，权限确认与隔离留到 v0.7。
+统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。四个工具沿用当前直接执行方式，权限确认与隔离留到 v0.7。
 
 手动验证工具：
 
