@@ -225,6 +225,31 @@ func TestBusyViewShowsProgressWithoutStreamingAnswer(t *testing.T) {
 	}
 }
 
+func TestUnlabeledCodeBlockIsPlainAndWordWrapped(t *testing.T) {
+	m := testModel(t)
+	m.width = 61
+	m.markdown.SetWidth(m.contentWidth())
+	source := "```\nbackend/\n├── internal/\n│   └── api/  HTTP Handler: auth、friend、group、moment、msg_op、avatar、upload、settings\n```\n"
+	out := m.markdown.Write(source) + m.markdown.Flush()
+	if strings.Contains(out, "\x1b[48;") {
+		t.Fatalf("未标注代码块不应带错误背景：%q", out)
+	}
+	plain := ansi.Strip(out)
+	for _, want := range []string{"backend/", "settings", "HTTP Handler"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("纯文本代码块缺少 %q：%q", want, plain)
+		}
+	}
+	if strings.Contains(plain, "setti\nngs") {
+		t.Fatalf("代码块不应从单词中间断开：%q", plain)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if ansi.StringWidth(line) > m.contentWidth() {
+			t.Fatalf("代码行超过终端宽度：%q", ansi.Strip(line))
+		}
+	}
+}
+
 func TestIdleViewHasTopAndBottomInputBorders(t *testing.T) {
 	m := testModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})

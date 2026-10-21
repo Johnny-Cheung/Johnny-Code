@@ -14,9 +14,11 @@ import (
 type markdownStream struct {
 	block       strings.Builder
 	line        strings.Builder
+	code        strings.Builder
 	inFence     bool
 	fenceChar   byte
 	fenceLen    int
+	fenceLang   string
 	width       int
 	renderer    *glamour.TermRenderer
 	renderWidth int
@@ -29,9 +31,11 @@ func (s *markdownStream) SetWidth(width int) {
 func (s *markdownStream) Reset() {
 	s.block.Reset()
 	s.line.Reset()
+	s.code.Reset()
 	s.inFence = false
 	s.fenceChar = 0
 	s.fenceLen = 0
+	s.fenceLang = ""
 }
 
 // Write 接收一段正文，返回已经完成的 Markdown 块（终端样式文本）。
@@ -64,38 +68,121 @@ func (s *markdownStream) Preview() string {
 
 // Flush 提交最后一行和当前块。即使响应被取消，已经收到的文字仍会保留。
 func (s *markdownStream) Flush() string {
-	if s.line.Len() > 0 {
-		line := s.line.String()
-		s.line.Reset()
-		if s.inFence && isFenceClose(line, s.fenceChar, s.fenceLen) {
-			s.inFence = false
+	var parts []string
+	if s.inFence {
+		if s.line.Len() > 0 {
+			s.code.WriteString(s.line.String())
+			s.line.Reset()
 		}
-		s.block.WriteString(line)
+		if rendered := s.renderCode(s.code.String(), s.fenceLang); rendered != "" {
+			parts = append(parts, rendered)
+		}
+		s.code.Reset()
+		s.inFence = false
+		s.fenceLang = ""
+	} else if s.line.Len() > 0 {
+		s.block.WriteString(s.line.String())
+		s.line.Reset()
 	}
-	return s.renderBlock()
+	if rendered := s.renderBlock(); rendered != "" {
+		parts = append(parts, rendered)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func (s *markdownStream) consume(line string) string {
 	trimmed := strings.TrimLeft(line, " \t")
 	char, length, isFence, isClose := fenceInfo(trimmed)
 	if s.inFence {
-		s.block.WriteString(line)
 		if isFence && char == s.fenceChar && length >= s.fenceLen && isClose {
+			code, lang := s.code.String(), s.fenceLang
+			s.code.Reset()
 			s.inFence = false
-			return s.renderBlock()
+			s.fenceLang = ""
+			return s.renderCode(code, lang)
 		}
+		s.code.WriteString(line)
 		return ""
 	}
 	if isFence {
+		// 代码块独立渲染；先提交它前面的普通 Markdown 文本。
+		previous := s.renderBlock()
 		s.inFence, s.fenceChar, s.fenceLen = true, char, length
-		s.block.WriteString(line)
-		return ""
+		s.fenceLang = fenceLanguage(trimmed, length)
+		s.code.Reset()
+		return previous
 	}
 	if strings.TrimSpace(line) == "" {
 		return s.renderBlock()
 	}
 	s.block.WriteString(line)
 	return ""
+}
+
+func fenceLanguage(trimmed string, markerLength int) string {
+	rest := strings.TrimSpace(trimmed[markerLength:])
+	if rest == "" {
+		return ""
+	}
+	field := strings.Fields(rest)[0]
+	return strings.ToLower(strings.Trim(field, "{}"))
+}
+
+func plainCodeLanguage(lang string) bool {
+	switch lang {
+	case "", "text", "plain", "plaintext", "txt", "tree":
+		return true
+	default:
+		return false
+	}
+}
+
+// renderCode 对未标注或纯文本代码块使用无高亮的等宽输出，避免词法分析器把
+// 目录树、中文说明等标记为错误；其余语言继续使用 Markdown 语法高亮。
+func (s *markdownStream) renderCode(code, lang string) string {
+	code = strings.TrimRight(code, "\n")
+	if strings.TrimSpace(code) == "" {
+		return ""
+	}
+	if plainCodeLanguage(lang) {
+		return s.renderPlainCode(code)
+	}
+	source := "```" + lang + "\n" + code + "\n```\n"
+	rendered, err := s.render(source)
+	if err != nil {
+		return s.renderPlainCode(code)
+	}
+	return rendered
+}
+
+func (s *markdownStream) renderPlainCode(code string) string {
+	var lines []string
+	for _, raw := range strings.Split(code, "\n") {
+		raw = strings.TrimRight(raw, "\r")
+		if raw == "" {
+			lines = append(lines, "")
+			continue
+		}
+		// 为续行预留 4 个缩进列，确保每一行都不超过终端宽度。
+		available := max(1, s.width-4)
+		if ansi.StringWidth(raw) > available {
+			// 中文顿号/逗号等不是 ANSI 换行器认可的断点；只在需要换行时
+			// 在标点后补充空格，避免把 settings 这类英文词从中间切断。
+			raw = strings.NewReplacer("、", "、 ", "，", "， ", "；", "； ", "：", "： ").Replace(raw)
+		}
+		wrapped := strings.Split(ansi.Wrap(raw, available, ""), "\n")
+		for i, line := range wrapped {
+			if i == 0 {
+				lines = append(lines, "  "+line)
+			} else {
+				lines = append(lines, "    "+line)
+			}
+		}
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fenceInfo(trimmed string) (char byte, length int, ok, closing bool) {
@@ -133,7 +220,7 @@ func (s *markdownStream) renderBlock() string {
 
 func (s *markdownStream) render(source string) (string, error) {
 	if s.renderer == nil || s.renderWidth != s.width {
-		style := headingStyle(styles.DarkStyleConfig)
+		style := markdownStyle(styles.DarkStyleConfig)
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithStyles(style),
 			glamour.WithWordWrap(max(10, s.width-4)),
@@ -154,10 +241,16 @@ func (s *markdownStream) render(source string) (string, error) {
 	return wrap(rendered, s.width), nil
 }
 
-func headingStyle(style glamouransi.StyleConfig) glamouransi.StyleConfig {
+func markdownStyle(style glamouransi.StyleConfig) glamouransi.StyleConfig {
 	// 标题已有颜色和加粗样式，去掉 Markdown 的 # 前缀。
 	style.H2.Prefix, style.H3.Prefix = "", ""
 	style.H4.Prefix, style.H5.Prefix, style.H6.Prefix = "", "", ""
+	// 未标注语言的代码块会被词法分析器归为错误 token；默认样式会给它们
+	// 加红色背景。保留错误分类但改为普通前景色，避免整块目录树变红。
+	if style.CodeBlock.Chroma != nil {
+		neutral := "#C4C4C4"
+		style.CodeBlock.Chroma.Error = glamouransi.StylePrimitive{Color: &neutral}
+	}
 	return style
 }
 
