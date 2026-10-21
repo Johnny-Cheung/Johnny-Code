@@ -503,7 +503,7 @@ func (f *failingRecorder) Close() error {
 
 func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 	prompt := systemPrompt("/tmp/johnny work")
-	for _, want := range []string{"/tmp/johnny work", "当前工作目录", "使用可用工具实际", "工具成功返回"} {
+	for _, want := range []string{"/tmp/johnny work", "当前工作目录", "使用可用工具实际", "工具成功返回", "围栏代码块"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("系统提示缺少 %q：%s", want, prompt)
 		}

@@ -226,6 +226,7 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 			for i := 0; i < 100; i++ {
 				fmt.Fprintf(&text, "- history-line-%03d\n", i)
 			}
+			text.WriteString("\n```text\nbackend/\n├── main.go    10    # 入口\n└── docs/\n```\n")
 			text.WriteString("\n```go\nfmt.Println(\"ok\")\n```\n\nFIRST_DONE")
 			terminalAnswer(w, text.String())
 		case 3:
@@ -258,6 +259,9 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 	p.expect(t, summaryEnd, "Ctrl+O 展开")
 	firstEnd := p.expect(t, summaryEnd, "FIRST_DONE")
 	p.expect(t, firstEnd, "Enter 发送")
+	if text := p.text(); !strings.Contains(text, "├── main.go") || !strings.Contains(text, "└── docs/") {
+		t.Fatalf("目录树未按结构提交到终端：\n%s", text)
+	}
 	if text := p.text(); strings.Count(text, "FIRST_DONE") != 1 {
 		var contexts []string
 		for start := 0; ; {

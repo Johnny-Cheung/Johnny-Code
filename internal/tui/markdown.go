@@ -144,6 +144,11 @@ func (s *markdownStream) renderCode(code, lang string) string {
 	if strings.TrimSpace(code) == "" {
 		return ""
 	}
+	// 目录树即使被标注成别的语言也不做语法高亮：词法着色、代码块内边距
+	// 和整行换行都会破坏树形缩进，改为按列排版。
+	if looksLikeTree(code) {
+		return s.renderTree(code)
+	}
 	if plainCodeLanguage(lang) {
 		return s.renderPlainCode(code)
 	}
@@ -210,6 +215,22 @@ func (s *markdownStream) renderBlock() string {
 	if strings.TrimSpace(source) == "" {
 		return ""
 	}
+	var parts []string
+	for _, segment := range splitTreeSegments(source) {
+		var rendered string
+		if segment.tree {
+			rendered = s.renderTree(segment.text)
+		} else {
+			rendered = s.renderText(segment.text)
+		}
+		if rendered != "" {
+			parts = append(parts, rendered)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (s *markdownStream) renderText(source string) string {
 	rendered, err := s.render(source)
 	if err != nil {
 		// 渲染失败时退化为安全原文，正文不能因此丢失。
