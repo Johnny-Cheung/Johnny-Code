@@ -158,3 +158,4 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.4：工具系统](docs/versions/v0.4.md)
 - [v0.5：Agent Loop](docs/versions/v0.5.md)
 - [v0.6：TUI](docs/versions/v0.6.md)
+- [v0.7：安全与权限（讨论中）](docs/versions/v0.7.md)
