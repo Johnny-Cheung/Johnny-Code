@@ -258,6 +258,48 @@ func TestRealCursorFollowsInputForIME(t *testing.T) {
 	}
 }
 
+func TestLiveToolProgressCollapsesAndExpands(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 18})
+	m.busy = true
+	m.receive(delivery{event: Event{Kind: agent.EventToolStart, ID: "1", Name: "write", Key: "main.go"}})
+	m.receive(delivery{event: Event{Kind: agent.EventToolEnd, ID: "1", Name: "write", Text: "已创建 main.go"}})
+	m.receive(delivery{event: Event{Kind: agent.EventToolStart, ID: "2", Name: "bash", Key: "go test ./..."}})
+	m.receive(delivery{event: Event{Kind: agent.EventToolEnd, ID: "2", Name: "bash", Failed: true, Text: "退出码 1"}})
+	view := m.View().Content
+	for _, want := range []string{"✓ write", "✗ bash", "main.go", "go test ./..."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("执行中的进展缺少 %q：%q", want, view)
+		}
+	}
+	summary := m.toolSummaryText()
+	for _, want := range []string{"已折叠 2 次工具调用", "write", "bash", "1 次未成功", "Ctrl+O 展开"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("摘要缺少 %q：%q", want, summary)
+		}
+	}
+	m.receive(delivery{done: true})
+	if len(m.liveTools) != 0 || len(m.lastTools) != 2 || m.expanded {
+		t.Fatalf("完成后应清空实时进展并保留可展开记录：live=%d last=%d expanded=%v", len(m.liveTools), len(m.lastTools), m.expanded)
+	}
+	if !strings.Contains(m.View().Content, "Ctrl+O 展开工具过程") {
+		t.Fatal("折叠后应提示 Ctrl+O 展开")
+	}
+	expanded := m.expansionText()
+	for _, want := range []string{"最近一次工具过程", "✓ write", "已创建 main.go", "✗ bash", "退出码 1"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("展开内容缺少 %q：%q", want, expanded)
+		}
+	}
+	m.Update(ctrlPress('o'))
+	if !m.expanded {
+		t.Fatal("Ctrl+O 后应标记已展开")
+	}
+	if strings.Contains(m.View().Content, "Ctrl+O 展开工具过程") {
+		t.Fatal("已展开后不应继续提示 Ctrl+O")
+	}
+}
+
 func TestResizeAndControlCharacters(t *testing.T) {
 	m := testModel(t)
 	text := safeText("code\n\t中文\x1b[2J\x07\r")

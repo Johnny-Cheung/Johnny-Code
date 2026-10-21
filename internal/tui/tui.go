@@ -21,10 +21,20 @@ import (
 // Event 只携带有界展示数据；完整响应和续接数据仍由 Agent 和诊断记录持有。
 type Event struct {
 	Kind   agent.EventType
+	ID     string
 	Text   string
 	Name   string
 	Key    string
 	Failed bool
+	Final  bool
+}
+
+type toolRecord struct {
+	ID     string
+	Name   string
+	Key    string
+	State  string
+	Detail string
 }
 
 type Options struct {
@@ -67,6 +77,11 @@ type terminalModel struct {
 	status       string
 	markdown     markdownStream
 	pendingReady chan error
+	liveTools    []toolRecord
+	lastTools    []toolRecord
+	expanded     bool
+	responseText strings.Builder
+	responseOut  []string
 	history      []string
 	historyIndex int
 	draft        string
@@ -216,6 +231,12 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitting = true
 				return m, tea.Quit
 			}
+		case "ctrl+o":
+			if !m.expanded && len(m.lastTools) > 0 {
+				m.expanded = true
+				return m, tea.Println(m.expansionText())
+			}
+			return m, nil
 		case "enter":
 			prompt := strings.TrimSpace(m.input.Value())
 			if prompt == "" {
@@ -280,7 +301,8 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 	m.busy, m.stopping = true, false
 	m.status = "正在等待模型回复…"
 	m.pendingReady = nil
-	m.markdown.Reset()
+	m.liveTools = nil
+	m.resetResponse()
 	m.input.Reset()
 	m.input.Blur()
 	m.history = append(m.history, prompt)
@@ -331,111 +353,318 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(prompt)+"\n", m.contentWidth())), m.waitEvent())
 }
 
-func (m *terminalModel) receive(item delivery) tea.Cmd {
-	var body strings.Builder
-	var afterStatus tea.Cmd
-	last := ""
-	appendText := func(text, kind string) {
-		text = strings.TrimRight(text, "\n")
-		if text == "" || (kind == "markdown" && strings.TrimSpace(ansi.Strip(text)) == "") {
-			return
-		}
-		if body.Len() > 0 {
-			if kind == "tool_result" && last == "tool_start" {
-				body.WriteString("\n")
-			} else {
-				body.WriteString("\n\n")
-			}
-		}
-		body.WriteString(text)
-		last = kind
-	}
-	appendMarkdown := func(rendered string) { appendText(rendered, "markdown") }
-	appendPlain := func(text, kind string) {
-		appendText(wrap(safeText(text), m.contentWidth()), kind)
-	}
+func (m *terminalModel) resetResponse() {
+	m.responseText.Reset()
+	m.responseOut = nil
+	m.markdown.Reset()
+}
 
+func (m *terminalModel) receive(item delivery) tea.Cmd {
 	if item.done {
-		appendMarkdown(m.markdown.Flush())
-		m.busy, m.stopping = false, false
-		m.cancel = nil
-		m.pendingReady = nil
-		switch {
-		case errors.Is(item.err, context.Canceled):
-			m.status = "已取消，可继续输入"
-			appendPlain("已取消本轮；已完成的操作和上下文已保留。", "status")
-		case item.err != nil:
-			m.status = "本轮停止，可继续输入"
-			appendPlain("本轮停止："+item.err.Error(), "status")
-		default:
-			m.status = "空闲"
-		}
-		focus := m.input.Focus()
-		m.resizeInput()
-		if body.Len() > 0 {
-			return tea.Sequence(tea.Println(body.String()), focus)
-		}
-		return focus
+		return m.finishTurn(item)
 	}
 	if item.notice != "" {
-		appendMarkdown(m.markdown.Flush())
-		appendPlain(strings.TrimRight(item.notice, "\n"), "notice")
-	} else {
-		event := item.event
-		switch event.Kind {
-		case agent.EventRequestStart:
-			appendMarkdown(m.markdown.Flush())
+		notice := wrap(safeText(strings.TrimRight(item.notice, "\n")), m.contentWidth())
+		return tea.Sequence(tea.Println(notice), m.waitEvent())
+	}
+	event := item.event
+	switch event.Kind {
+	case agent.EventRequestStart:
+		// 每次模型响应独立缓冲；最终回答之前先把工具过程折叠成摘要。
+		m.resetResponse()
+		if !m.stopping {
+			m.status = "正在等待模型回复…"
+		}
+	case agent.EventModel:
+		if event.Text != "" {
 			if !m.stopping {
-				m.status = "正在等待模型回复…"
+				m.status = "正在接收回复…"
 			}
-		case agent.EventModel:
-			if event.Text != "" {
-				if !m.stopping {
-					m.status = "正在接收回复…"
-				}
-				appendMarkdown(m.markdown.Write(event.Text))
+			m.responseText.WriteString(safeText(event.Text))
+			rendered := m.markdown.Write(event.Text)
+			if rendered != "" {
+				m.responseOut = append(m.responseOut, rendered)
 			}
-		case agent.EventResponse, agent.EventEnd:
-			appendMarkdown(m.markdown.Flush())
-		case agent.EventToolStart:
-			// 简洁模式不把工具开始、结果和预览写入滚动历史；状态区显示
-			// 当前工具。先给状态区一个渲染周期并检查输出错误，再放行工具，
-			// 避免终端不可用时仍然产生副作用。
-			if !m.stopping {
-				m.status = "正在执行 " + safeText(event.Name) + "…"
+		}
+	case agent.EventResponse:
+		return m.finishResponse(event)
+	case agent.EventEnd:
+		// 正常响应已在 EventResponse 提交；done 处理异常时残留的内容。
+	case agent.EventToolStart:
+		m.beginTool(event)
+		if !m.stopping {
+			m.status = "正在执行 " + safeText(event.Name) + "…"
+		}
+		if item.ready != nil {
+			m.pendingReady = item.ready
+			return tea.Sequence(
+				tea.Tick(toolStatusGrace, func(time.Time) tea.Msg { return toolStatusShownMsg{} }),
+				m.waitEvent(),
+			)
+		}
+	case agent.EventToolEnd, agent.EventToolSkipped:
+		m.finishTool(event)
+		if event.Failed {
+			m.status = safeText(event.Name) + " 执行失败，等待模型继续…"
+		} else if !m.stopping {
+			m.status = "工具执行完成，等待模型继续…"
+		}
+	}
+	return m.waitEvent()
+}
+
+// finishResponse 在完整响应结束后一次性提交正文。最终响应会先打印折叠摘要，
+// 再打印最终回答，保证最终文本连续且位于摘要之后。
+func (m *terminalModel) finishResponse(event Event) tea.Cmd {
+	if flushed := m.markdown.Flush(); flushed != "" {
+		m.responseOut = append(m.responseOut, flushed)
+	}
+	answer := strings.Join(m.responseOut, "\n\n")
+	summary := ""
+	if event.Final && len(m.liveTools) > 0 {
+		for i := range m.liveTools {
+			if m.liveTools[i].State == "running" {
+				m.liveTools[i].State = "skipped"
 			}
-			if item.ready != nil {
-				m.pendingReady = item.ready
-				afterStatus = tea.Tick(toolStatusGrace, func(time.Time) tea.Msg {
-					return toolStatusShownMsg{}
-				})
-			}
-		case agent.EventToolEnd, agent.EventToolSkipped:
-			if event.Failed {
-				m.status = safeText(event.Name) + " 执行失败，等待模型继续…"
-			} else if !m.stopping {
-				m.status = "工具执行完成，等待模型继续…"
-			}
+		}
+		summary = m.toolSummaryText()
+		m.lastTools = append([]toolRecord(nil), m.liveTools...)
+		m.liveTools = nil
+		m.expanded = false
+	}
+	m.resetResponse()
+	if summary == "" && answer == "" {
+		return m.waitEvent()
+	}
+	return m.printResponse(summary, answer)
+}
+
+// printResponse 先打印折叠摘要，再按行分批提交最终回答。长回答一次性渲染会给
+// 终端带来明显停顿，分批可以更快显示摘要和开头内容。
+func (m *terminalModel) printResponse(summary, answer string) tea.Cmd {
+	prefix := ""
+	if summary != "" {
+		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		prefix = muted.Render(wrap(summary, m.contentWidth()))
+		if answer != "" {
+			prefix += "\n\n"
 		}
 	}
 	var cmds []tea.Cmd
-	if body.Len() > 0 {
-		output := body.String()
-		// 单独提交的 Markdown 块末尾留一空行；后续正文或状态可能在下一次
-		// 有序交付中打印，空行需要在本次打印时补上。
-		if last == "markdown" {
-			output += "\n"
+	if answer == "" {
+		if prefix != "" {
+			cmds = append(cmds, tea.Println(strings.TrimRight(prefix, "\n")))
 		}
-		cmds = append(cmds, tea.Println(output))
-	}
-	if afterStatus != nil {
-		cmds = append(cmds, afterStatus)
+	} else {
+		const chunkLines = 30
+		lines := strings.Split(answer, "\n")
+		first := true
+		for start := 0; start < len(lines); start += chunkLines {
+			end := min(len(lines), start+chunkLines)
+			chunk := strings.Join(lines[start:end], "\n")
+			if first {
+				chunk = prefix + chunk
+				first = false
+			}
+			cmds = append(cmds, tea.Println(chunk))
+		}
 	}
 	if len(cmds) == 0 {
 		return m.waitEvent()
 	}
 	cmds = append(cmds, m.waitEvent())
 	return tea.Sequence(cmds...)
+}
+
+func (m *terminalModel) finishTurn(item delivery) tea.Cmd {
+	// 异常中断可能没有经过正常响应提交；保留已经收到的正文。
+	if flushed := m.markdown.Flush(); flushed != "" {
+		m.responseOut = append(m.responseOut, flushed)
+	}
+	answer := strings.Join(m.responseOut, "\n\n")
+	m.resetResponse()
+	var body strings.Builder
+	if answer != "" {
+		body.WriteString(answer)
+		body.WriteString("\n\n")
+	}
+	summary := ""
+	if len(m.liveTools) > 0 {
+		for i := range m.liveTools {
+			if m.liveTools[i].State == "running" {
+				m.liveTools[i].State = "skipped"
+			}
+		}
+		summary = m.toolSummaryText()
+		m.lastTools = append([]toolRecord(nil), m.liveTools...)
+		m.liveTools = nil
+		m.expanded = false
+	}
+	m.busy, m.stopping = false, false
+	m.cancel = nil
+	m.pendingReady = nil
+	switch {
+	case errors.Is(item.err, context.Canceled):
+		m.status = "已取消，可继续输入"
+		appendBodyLine(&body, "已取消本轮；已完成的操作和上下文已保留。", m.contentWidth())
+	case item.err != nil:
+		m.status = "本轮停止，可继续输入"
+		appendBodyLine(&body, "本轮停止："+item.err.Error(), m.contentWidth())
+	default:
+		m.status = "空闲"
+	}
+	if summary != "" {
+		if body.Len() > 0 {
+			body.WriteString("\n\n")
+		} else {
+			body.WriteString("\n")
+		}
+		body.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(wrap(summary, m.contentWidth())))
+	}
+	focus := m.input.Focus()
+	m.resizeInput()
+	if body.Len() > 0 {
+		return tea.Sequence(tea.Println(body.String()), focus)
+	}
+	return focus
+}
+
+func appendBodyLine(body *strings.Builder, text string, width int) {
+	if body.Len() > 0 {
+		body.WriteString("\n\n")
+	}
+	body.WriteString(wrap(safeText(text), width))
+}
+
+func toolIcon(state string) string {
+	switch state {
+	case "success":
+		return "✓"
+	case "failed":
+		return "✗"
+	case "skipped":
+		return "○"
+	default:
+		return "…"
+	}
+}
+
+func (m *terminalModel) beginTool(event Event) {
+	m.liveTools = append(m.liveTools, toolRecord{
+		ID: event.ID, Name: event.Name, Key: event.Key, State: "running",
+	})
+}
+
+func (m *terminalModel) finishTool(event Event) {
+	state := "success"
+	if event.Failed {
+		state = "failed"
+	}
+	if event.Kind == agent.EventToolSkipped {
+		state = "skipped"
+	}
+	for i := len(m.liveTools) - 1; i >= 0; i-- {
+		record := &m.liveTools[i]
+		if (event.ID != "" && record.ID == event.ID) || (event.ID == "" && i == len(m.liveTools)-1) {
+			if event.Name != "" {
+				record.Name = event.Name
+			}
+			record.State = state
+			record.Detail = event.Text
+			return
+		}
+	}
+	// 防御性处理：没有对应开始事件时也保留结果，避免丢失进度。
+	m.liveTools = append(m.liveTools, toolRecord{
+		ID: event.ID, Name: event.Name, Key: event.Key, State: state, Detail: event.Text,
+	})
+}
+
+func (m *terminalModel) progressLines(width int) []string {
+	if len(m.liveTools) == 0 {
+		return nil
+	}
+	maxName := 0
+	for _, record := range m.liveTools {
+		maxName = max(maxName, ansi.StringWidth(safeText(record.Name)))
+	}
+	maxName = min(maxName, 10)
+	lines := make([]string, 0, len(m.liveTools))
+	for _, record := range m.liveTools {
+		name := safeText(record.Name)
+		if name == "" {
+			name = "工具"
+		}
+		line := toolIcon(record.State) + " " + name +
+			strings.Repeat(" ", max(0, maxName-ansi.StringWidth(name)))
+		if record.Key != "" {
+			line += "  " + safeText(record.Key)
+		}
+		lines = append(lines, ansi.Truncate(line, width, "…"))
+	}
+	return lines
+}
+
+func (m *terminalModel) toolSummaryText() string {
+	if len(m.liveTools) == 0 {
+		return ""
+	}
+	counts := make(map[string]int)
+	var order []string
+	problems := 0
+	for _, record := range m.liveTools {
+		name := safeText(record.Name)
+		if name == "" {
+			name = "工具"
+		}
+		if counts[name] == 0 {
+			order = append(order, name)
+		}
+		counts[name]++
+		if record.State == "failed" || record.State == "skipped" {
+			problems++
+		}
+	}
+	names := make([]string, 0, len(order))
+	for _, name := range order {
+		if counts[name] == 1 {
+			names = append(names, name)
+		} else {
+			names = append(names, fmt.Sprintf("%s×%d", name, counts[name]))
+		}
+	}
+	summary := fmt.Sprintf("▸ 已折叠 %d 次工具调用（%s）", len(m.liveTools), strings.Join(names, "、"))
+	if problems > 0 {
+		summary += fmt.Sprintf("，%d 次未成功", problems)
+	}
+	return summary + " · Ctrl+O 展开"
+}
+
+// expansionText 只在用户主动按 Ctrl+O 时用于写入 scrollback；默认折叠。
+func (m *terminalModel) expansionText() string {
+	if len(m.lastTools) == 0 {
+		return ""
+	}
+	lines := []string{"", "── 最近一次工具过程 ──"}
+	for _, record := range m.lastTools {
+		name := safeText(record.Name)
+		if name == "" {
+			name = "工具"
+		}
+		line := toolIcon(record.State) + " " + name
+		if record.Key != "" {
+			line += "  " + safeText(record.Key)
+		}
+		lines = append(lines, line)
+		detail := strings.TrimRight(safeText(record.Detail), "\n")
+		if detail == "" {
+			continue
+		}
+		for _, detailLine := range strings.Split(detail, "\n") {
+			lines = append(lines, "  "+detailLine)
+		}
+	}
+	return wrap(strings.Join(lines, "\n"), m.contentWidth())
 }
 
 func (m *terminalModel) View() tea.View {
@@ -449,17 +678,26 @@ func (m *terminalModel) View() tea.View {
 		if m.height >= 3 {
 			reserve = 2
 		}
-		maxPreview := max(0, m.height-reserve)
+		available := max(0, m.height-reserve)
+		panel := m.progressLines(width)
+		if len(panel) > 6 {
+			panel = panel[len(panel)-6:]
+		}
+		if len(panel) > available {
+			panel = panel[len(panel)-available:]
+		}
+		previewBudget := max(0, available-len(panel))
 		var parts []string
-		if preview := strings.TrimRight(m.markdown.Preview(), "\n"); preview != "" && maxPreview > 0 {
+		if preview := strings.TrimRight(m.responseText.String(), "\n"); preview != "" && previewBudget > 0 {
 			parts = strings.Split(wrap(preview, width), "\n")
-			if len(parts) > maxPreview {
-				parts = parts[len(parts)-maxPreview:]
+			if len(parts) > previewBudget {
+				parts = parts[len(parts)-previewBudget:]
 			}
 			for i, line := range parts {
 				parts[i] = ansi.Truncate(line, width, "…")
 			}
 		}
+		parts = append(parts, panel...)
 		if len(parts) < m.height {
 			parts = append(parts, ansi.Truncate(m.status, width, "…"))
 		}
@@ -485,7 +723,11 @@ func (m *terminalModel) View() tea.View {
 		parts = append(parts, border)
 	}
 	if m.height >= len(parts)+1 {
-		footer := m.status + " · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /exit 退出"
+		hint := m.status
+		if len(m.lastTools) > 0 && !m.expanded {
+			hint += " · Ctrl+O 展开工具过程"
+		}
+		footer := hint + " · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /exit 退出"
 		parts = append(parts, muted.Render(ansi.Truncate(footer, width, "…")))
 	}
 	content := strings.Join(parts, "\n")

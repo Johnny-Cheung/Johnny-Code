@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
@@ -50,7 +51,10 @@ func (w noticeWriter) Write(data []byte) (int, error) {
 func terminalEvent(event agent.Event) (tui.Event, bool) {
 	converted := tui.Event{Kind: event.Type}
 	switch event.Type {
-	case agent.EventRequestStart, agent.EventResponse, agent.EventEnd:
+	case agent.EventResponse:
+		converted.Final = event.Response != nil && event.Response.StopReason == model.StopEndTurn
+		return converted, true
+	case agent.EventRequestStart, agent.EventEnd:
 		return converted, true
 	case agent.EventModel:
 		if event.ModelEvent == nil || event.ModelEvent.Type != model.EventBlockDelta || event.ModelEvent.Block.Type != model.BlockText || event.ModelEvent.Delta == "" {
@@ -59,14 +63,36 @@ func terminalEvent(event agent.Event) (tui.Event, bool) {
 		converted.Text = event.ModelEvent.Delta
 	case agent.EventToolStart:
 		if event.Call != nil {
+			converted.ID = event.Call.ID
 			converted.Name = event.Call.Name
+			key, truncated := limitBytes(toolKey(event.Call), previewMaxKeyBytes)
+			if truncated {
+				key += "…（参数已截断）"
+			}
+			converted.Key = key
 		}
 	case agent.EventToolEnd, agent.EventToolSkipped:
 		if event.Call != nil {
+			converted.ID = event.Call.ID
 			converted.Name = event.Call.Name
 		}
 		if event.ToolResult != nil {
 			converted.Failed = event.ToolResult.IsError
+			detail, truncated := limitPreview(event.ToolResult.Content)
+			if !converted.Failed && event.Call != nil {
+				switch event.Call.Name {
+				case "read":
+					detail = "已读取文件内容"
+					truncated = false
+				case "write", "edit":
+					detail, _, _ = strings.Cut(detail, "\n")
+					truncated = false
+				}
+			}
+			if truncated {
+				detail += "\n…（预览已截断）"
+			}
+			converted.Text = detail
 		}
 	default:
 		return converted, false

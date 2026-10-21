@@ -216,18 +216,17 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 		switch count.Add(1) {
 		case 1:
 			terminalTools(w, []map[string]any{
-				{"type": "tool_use", "id": "write-1", "name": "write", "input": map[string]any{"path": "note.txt", "content": "hello"}},
+				{"type": "tool_use", "id": "write-1", "name": "write", "input": map[string]any{"path": "note.txt", "content": "secret-one"}},
 				{"type": "tool_use", "id": "read-1", "name": "read", "input": map[string]any{"path": "note.txt"}},
-				{"type": "tool_use", "id": "edit-1", "name": "edit", "input": map[string]any{"path": "note.txt", "old_string": "hello", "new_string": "world"}},
-				{"type": "tool_use", "id": "bash-1", "name": "bash", "input": map[string]any{"command": "printf bash-ok"}},
+				{"type": "tool_use", "id": "edit-1", "name": "edit", "input": map[string]any{"path": "note.txt", "old_string": "secret-one", "new_string": "secret-two"}},
+				{"type": "tool_use", "id": "bash-1", "name": "bash", "input": map[string]any{"command": "cat note.txt"}},
 			})
 		case 2:
 			var text strings.Builder
-			text.WriteString("```text\n")
 			for i := 0; i < 100; i++ {
-				fmt.Fprintf(&text, "history-line-%03d\n", i)
+				fmt.Fprintf(&text, "- history-line-%03d\n", i)
 			}
-			text.WriteString("```\n\n```go\nfmt.Println(\"world\")\n```\n\nFIRST_DONE")
+			text.WriteString("\n```go\nfmt.Println(\"ok\")\n```\n\nFIRST_DONE")
 			terminalAnswer(w, text.String())
 		case 3:
 			close(slow)
@@ -255,20 +254,22 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 		t.Fatal("Alt+Enter 自动发送了请求")
 	}
 	p.write(t, "\r")
-	firstEnd := p.expect(t, start, "FIRST_DONE")
+	summaryEnd := p.expect(t, start, "已折叠 4 次工具调用")
+	p.expect(t, summaryEnd, "Ctrl+O 展开")
+	firstEnd := p.expect(t, summaryEnd, "FIRST_DONE")
 	p.expect(t, firstEnd, "Enter 发送")
 	firstBody := <-requests
 	if !strings.Contains(firstBody, `请处理代码\nfunc main() {}\n再运行检查`) {
 		t.Fatalf("多行内容不完整：%s", firstBody)
 	}
 	secondBody := <-requests
-	for _, want := range []string{"write-1", "read-1", "edit-1", "bash-1", "bash-ok"} {
+	for _, want := range []string{"write-1", "read-1", "edit-1", "bash-1", "secret-two", "cat note.txt"} {
 		if !strings.Contains(secondBody, want) {
 			t.Fatalf("缺少工具结果 %q", want)
 		}
 	}
 	data, err := os.ReadFile(filepath.Join(p.dir, "note.txt"))
-	if err != nil || string(data) != "world" {
+	if err != nil || string(data) != "secret-two" {
 		t.Fatalf("文件未修改：%s %v", data, err)
 	}
 	for _, want := range []string{"history-line-000", "history-line-099", "FIRST_DONE"} {
@@ -276,11 +277,21 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 			t.Fatalf("scrollback 缺少 %q", want)
 		}
 	}
-	for _, unwanted := range []string{"→ write", "✓ 成功", "bash-ok", "printf bash-ok"} {
-		if strings.Contains(p.text(), unwanted) {
-			t.Fatalf("简洁模式不应在滚动历史显示工具明细 %q", unwanted)
+	for _, want := range []string{"write", "read", "edit", "bash", "cat note.txt"} {
+		if !strings.Contains(p.text(), want) {
+			t.Fatalf("实时进展缺少工具 %q", want)
 		}
 	}
+	for _, unwanted := range []string{"→ write", "✓ 成功", "secret-two"} {
+		if strings.Contains(p.text(), unwanted) {
+			t.Fatalf("折叠前不应在滚动历史显示工具结果 %q", unwanted)
+		}
+	}
+	expandOffset := len(p.text())
+	p.write(t, "\x0f")
+	p.expect(t, expandOffset, "最近一次工具过程")
+	p.expect(t, expandOffset, "secret-two")
+	p.expect(t, expandOffset, "Enter 发送")
 	p.write(t, "slow\r")
 	select {
 	case <-slow:
@@ -308,7 +319,7 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 		t.Fatalf("每会话应一份记录：%v", files)
 	}
 	log, _ := os.ReadFile(files[0])
-	for _, want := range []string{`"user_turn":1`, `"user_turn":2`, `"user_turn":3`, `"status":"canceled"`, "bash-ok", "write-1"} {
+	for _, want := range []string{`"user_turn":1`, `"user_turn":2`, `"user_turn":3`, `"status":"canceled"`, "secret-two", "write-1", "cat note.txt"} {
 		if !bytes.Contains(log, []byte(want)) {
 			t.Fatalf("日志缺少 %s", want)
 		}
