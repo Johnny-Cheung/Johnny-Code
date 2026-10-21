@@ -699,23 +699,31 @@ func (m *terminalModel) View() tea.View {
 	width := m.contentWidth()
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	if m.busy {
+		// 留一行给终端光标/滚动，避免动态区域刚好占满屏幕时把旧内容滚入历史。
+		maxDynamic := max(1, m.height-1)
 		reserve := 1
-		if m.height >= 3 {
+		if maxDynamic >= 2 {
 			reserve = 2
 		}
-		available := max(0, m.height-reserve)
+		available := max(0, maxDynamic-reserve)
 		panel := m.progressLines(width)
-		if len(panel) > 6 {
-			panel = panel[len(panel)-6:]
-		}
+		var parts []string
 		if len(panel) > available {
-			panel = panel[len(panel)-available:]
+			if available > 1 {
+				keep := available - 1
+				omitted := len(panel) - keep
+				panel = panel[len(panel)-keep:]
+				notice := fmt.Sprintf("… 更早 %d 条工具记录，结束后 Ctrl+O 查看", omitted)
+				parts = append(parts, muted.Render(ansi.Truncate(notice, width, "…")))
+			} else {
+				panel = panel[len(panel)-available:]
+			}
 		}
-		parts := append([]string(nil), panel...)
-		if len(parts) < m.height {
+		parts = append(parts, panel...)
+		if len(parts) < maxDynamic {
 			parts = append(parts, ansi.Truncate(m.status, width, "…"))
 		}
-		if len(parts) < m.height {
+		if len(parts) < maxDynamic {
 			parts = append(parts, muted.Render(ansi.Truncate("Ctrl+C 取消本轮", width, "…")))
 		}
 		return tea.NewView(strings.Join(parts, "\n"))

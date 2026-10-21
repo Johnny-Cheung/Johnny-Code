@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -246,6 +247,33 @@ func TestUnlabeledCodeBlockIsPlainAndWordWrapped(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if ansi.StringWidth(line) > m.contentWidth() {
 			t.Fatalf("代码行超过终端宽度：%q", ansi.Strip(line))
+		}
+	}
+}
+
+func TestLiveToolProgressUsesAvailableHeight(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	m.busy = true
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("call-%02d", i)
+		name := fmt.Sprintf("tool%02d", i)
+		m.receive(delivery{event: Event{Kind: agent.EventToolStart, ID: id, Name: name, Key: "argument"}})
+		m.receive(delivery{event: Event{Kind: agent.EventToolEnd, ID: id, Name: name}})
+	}
+	view := m.View().Content
+	if strings.Count(view, "✓") < 7 {
+		t.Fatalf("应使用可用高度显示超过 6 条工具记录：%q", view)
+	}
+	if !strings.Contains(view, "tool09") || !strings.Contains(view, "更早 2 条工具记录") {
+		t.Fatalf("应显示最新记录和更早条数提示：%q", view)
+	}
+	if lines := strings.Split(view, "\n"); len(lines) > 11 {
+		t.Fatalf("动态区域应留出滚动余量：%q", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if ansi.StringWidth(line) > 60 {
+			t.Fatalf("动态区域超出宽度：%q", line)
 		}
 	}
 }
