@@ -258,6 +258,23 @@ func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 	p.expect(t, summaryEnd, "Ctrl+O 展开")
 	firstEnd := p.expect(t, summaryEnd, "FIRST_DONE")
 	p.expect(t, firstEnd, "Enter 发送")
+	if text := p.text(); strings.Count(text, "FIRST_DONE") != 1 {
+		var contexts []string
+		for start := 0; ; {
+			index := strings.Index(text[start:], "FIRST_DONE")
+			if index < 0 {
+				break
+			}
+			index += start
+			lo, hi := max(0, index-300), min(len(text), index+100)
+			contexts = append(contexts, text[lo:hi])
+			start = index + len("FIRST_DONE")
+		}
+		t.Fatalf("最终回答不应重复输出，实际出现 %d 次：\n---\n%s", len(contexts), strings.Join(contexts, "\n---\n"))
+	}
+	if count := strings.Count(p.text(), "已折叠 4 次工具调用"); count != 1 {
+		t.Fatalf("折叠摘要应只出现一次，实际出现 %d 次", count)
+	}
 	firstBody := <-requests
 	if !strings.Contains(firstBody, `请处理代码\nfunc main() {}\n再运行检查`) {
 		t.Fatalf("多行内容不完整：%s", firstBody)

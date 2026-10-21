@@ -200,13 +200,20 @@ func TestMarkdownStreamRendersCompletedBlocks(t *testing.T) {
 	}
 }
 
-func TestMarkdownPreviewIsBoundedDuringStreaming(t *testing.T) {
+func TestBusyViewShowsProgressWithoutStreamingAnswer(t *testing.T) {
 	m := testModel(t)
 	m.busy = true
-	m.markdown.Write(strings.Repeat("很长的流式预览内容 ", 200))
+	m.receive(delivery{event: Event{Kind: agent.EventToolStart, ID: "1", Name: "bash", Key: "go test ./..."}})
+	m.receive(delivery{event: Event{Kind: agent.EventModel, Text: "不应该提前出现在滚动历史里的最终回答内容"}})
 	for _, size := range []tea.WindowSizeMsg{{Width: 40, Height: 12}, {Width: 18, Height: 5}, {Width: 4, Height: 2}} {
 		m.Update(size)
 		view := m.View().Content
+		if strings.Contains(view, "不应该提前出现") {
+			t.Fatalf("执行期间不应把最终回答作为原文预览：%q", view)
+		}
+		if size.Width >= 10 && !strings.Contains(view, "bash") {
+			t.Fatalf("执行中应显示工具进展：%q", view)
+		}
 		if lines := strings.Split(view, "\n"); len(lines) > size.Height {
 			t.Fatalf("动态区域高于窗口：%q", view)
 		}
@@ -215,9 +222,6 @@ func TestMarkdownPreviewIsBoundedDuringStreaming(t *testing.T) {
 				t.Fatalf("动态区域宽于窗口：%q", line)
 			}
 		}
-	}
-	if m.markdown.Preview() == "" {
-		t.Fatal("预览内容被错误清空")
 	}
 }
 

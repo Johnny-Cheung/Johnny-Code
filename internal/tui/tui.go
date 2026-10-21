@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -59,32 +60,45 @@ type delivery struct {
 // 放行工具执行。
 type toolStatusShownMsg struct{}
 
-const toolStatusGrace = 20 * time.Millisecond
+// printResponseMsg 在清空动态预览后延迟一个渲染周期再写入完整回答，避免
+// 旧预览随着大量 scrollback 输出滚入终端历史，造成正文重复。
+type printResponseMsg struct{}
+
+type responsePrint struct {
+	summary string
+	answer  string
+}
+
+const (
+	toolStatusGrace    = 20 * time.Millisecond
+	responseFlushDelay = 30 * time.Millisecond
+)
 
 type terminalModel struct {
-	options      Options
-	ctx          context.Context
-	output       *checkedOutput
-	events       chan delivery
-	workers      *sync.WaitGroup
-	input        textarea.Model
-	width        int
-	height       int
-	busy         bool
-	stopping     bool
-	quitting     bool
-	cancel       context.CancelFunc
-	status       string
-	markdown     markdownStream
-	pendingReady chan error
-	liveTools    []toolRecord
-	lastTools    []toolRecord
-	expanded     bool
-	responseText strings.Builder
-	responseOut  []string
-	history      []string
-	historyIndex int
-	draft        string
+	options       Options
+	ctx           context.Context
+	output        *checkedOutput
+	events        chan delivery
+	workers       *sync.WaitGroup
+	input         textarea.Model
+	width         int
+	height        int
+	busy          bool
+	stopping      bool
+	quitting      bool
+	cancel        context.CancelFunc
+	status        string
+	markdown      markdownStream
+	pendingReady  chan error
+	liveTools     []toolRecord
+	lastTools     []toolRecord
+	expanded      bool
+	responseRunes int
+	responseOut   []string
+	pendingPrint  *responsePrint
+	history       []string
+	historyIndex  int
+	draft         string
 }
 
 // Run 在退出前取消并等待所有任务。即使库因终端错误提前恢复终端，也不会留下
@@ -198,6 +212,13 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case printResponseMsg:
+		if m.pendingPrint == nil {
+			return m, m.waitEvent()
+		}
+		pending := m.pendingPrint
+		m.pendingPrint = nil
+		return m, m.printResponse(pending.summary, pending.answer)
 	case tea.PasteMsg:
 		if m.busy {
 			return m, nil
@@ -302,6 +323,7 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 	m.status = "正在等待模型回复…"
 	m.pendingReady = nil
 	m.liveTools = nil
+	m.pendingPrint = nil
 	m.resetResponse()
 	m.input.Reset()
 	m.input.Blur()
@@ -354,7 +376,7 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 }
 
 func (m *terminalModel) resetResponse() {
-	m.responseText.Reset()
+	m.responseRunes = 0
 	m.responseOut = nil
 	m.markdown.Reset()
 }
@@ -377,10 +399,10 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 		}
 	case agent.EventModel:
 		if event.Text != "" {
+			m.responseRunes += utf8.RuneCountInString(event.Text)
 			if !m.stopping {
-				m.status = "正在接收回复…"
+				m.status = fmt.Sprintf("正在接收回复…（%d 字）", m.responseRunes)
 			}
-			m.responseText.WriteString(safeText(event.Text))
 			rendered := m.markdown.Write(event.Text)
 			if rendered != "" {
 				m.responseOut = append(m.responseOut, rendered)
@@ -436,7 +458,10 @@ func (m *terminalModel) finishResponse(event Event) tea.Cmd {
 	if summary == "" && answer == "" {
 		return m.waitEvent()
 	}
-	return m.printResponse(summary, answer)
+	m.pendingPrint = &responsePrint{summary: summary, answer: answer}
+	return tea.Tick(responseFlushDelay, func(time.Time) tea.Msg {
+		return printResponseMsg{}
+	})
 }
 
 // printResponse 先打印折叠摘要，再按行分批提交最终回答。长回答一次性渲染会给
@@ -686,18 +711,7 @@ func (m *terminalModel) View() tea.View {
 		if len(panel) > available {
 			panel = panel[len(panel)-available:]
 		}
-		previewBudget := max(0, available-len(panel))
-		var parts []string
-		if preview := strings.TrimRight(m.responseText.String(), "\n"); preview != "" && previewBudget > 0 {
-			parts = strings.Split(wrap(preview, width), "\n")
-			if len(parts) > previewBudget {
-				parts = parts[len(parts)-previewBudget:]
-			}
-			for i, line := range parts {
-				parts[i] = ansi.Truncate(line, width, "…")
-			}
-		}
-		parts = append(parts, panel...)
+		parts := append([]string(nil), panel...)
 		if len(parts) < m.height {
 			parts = append(parts, ansi.Truncate(m.status, width, "…"))
 		}
