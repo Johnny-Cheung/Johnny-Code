@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.6 在统一模型接口、四个基础工具和同进程多轮对话之上，增加随终端滚动的 TUI：流式查看回复和工具进展，编辑或粘贴多行任务，取消当前轮后继续对话。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已实现，待用户验收。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.6 在统一模型接口、四个基础工具和同进程多轮对话之上，增加随终端滚动的 TUI：流式查看回复和工具进展，编辑或粘贴多行任务，取消当前轮后继续对话。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收。
 
 ## 安装和更新
 
