@@ -157,6 +157,24 @@ func TestCancellationWaitsForWorkerAndAllowsNextTurn(t *testing.T) {
 	}
 }
 
+func TestHeaderShowsPermissionMode(t *testing.T) {
+	m := testModel(t)
+	m.options.Model = "test-model"
+	m.options.WorkDir = "/tmp/work"
+	m.options.Version = "0.7.0"
+	m.options.Mode = "只读"
+	header := m.headerText()
+	for _, want := range []string{"Johnny-Code · v0.7.0", "权限：只读", "模型：test-model", "目录：/tmp/work"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("TUI header 缺少 %q：%q", want, header)
+		}
+	}
+	m.options.Mode = ""
+	if strings.Contains(m.headerText(), "权限：") {
+		t.Fatal("未设置权限模式时不应显示空权限行")
+	}
+}
+
 func TestMarkdownStreamRendersCompletedBlocks(t *testing.T) {
 	m := testModel(t)
 	m.width = 44

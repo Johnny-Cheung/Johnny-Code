@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	version          = "0.6.0"
+	version          = "0.7.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -132,7 +132,7 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	}
 
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
-	logs := openSessionLogger(session.Metadata{WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model}, stderr)
+	logs := openSessionLogger(session.Metadata{WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
 	defer logs.close()
 
 	display := newRenderer(output, stderr)
@@ -151,7 +151,7 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
 	if useTUI(input, output) {
-		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir)
+		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label())
 	}
 	printPermissionNotice(stderr, mode)
 	return runInteractive(ctx, conversation, input, logs, display, stderr)

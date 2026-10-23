@@ -44,6 +44,7 @@ type Options struct {
 	Model   string
 	WorkDir string
 	Version string
+	Mode    string
 	RunTurn func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
 }
 
@@ -173,8 +174,15 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 }
 
 func (m *terminalModel) Init() tea.Cmd {
-	header := fmt.Sprintf("Johnny-Code · v%s\n模型：%s\n目录：%s\n", safeText(m.options.Version), safeText(m.options.Model), safeText(m.options.WorkDir))
-	return tea.Println(wrap(header, m.contentWidth()))
+	return tea.Println(wrap(m.headerText(), m.contentWidth()))
+}
+
+func (m *terminalModel) headerText() string {
+	mode := ""
+	if m.options.Mode != "" {
+		mode = fmt.Sprintf("权限：%s\n", safeText(m.options.Mode))
+	}
+	return fmt.Sprintf("Johnny-Code · v%s\n%s模型：%s\n目录：%s\n", safeText(m.options.Version), mode, safeText(m.options.Model), safeText(m.options.WorkDir))
 }
 
 func (m *terminalModel) contentWidth() int { return max(1, m.width-1) }

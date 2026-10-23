@@ -31,9 +31,10 @@ var errRecorderClosed = errors.New("session recorder is closed")
 // Metadata identifies the task that produced a session log. It deliberately
 // contains no credentials or environment snapshot.
 type Metadata struct {
-	WorkDir string
-	API     string
-	Model   string
+	WorkDir        string
+	API            string
+	Model          string
+	PermissionMode string
 }
 
 // Recorder writes JSONL records synchronously. Record and Close return I/O
@@ -74,12 +75,13 @@ func New(meta Metadata) (*Recorder, error) {
 
 	recorder := newRecorder(file, path)
 	metaRecord := metaEvent{
-		Type:  metaRecordType,
-		ID:    id,
-		Time:  recorder.timestamp(),
-		CWD:   meta.WorkDir,
-		API:   meta.API,
-		Model: meta.Model,
+		Type:           metaRecordType,
+		ID:             id,
+		Time:           recorder.timestamp(),
+		CWD:            meta.WorkDir,
+		API:            meta.API,
+		Model:          meta.Model,
+		PermissionMode: meta.PermissionMode,
 	}
 	if err := recorder.write(metaRecord); err != nil {
 		_ = recorder.Close()
@@ -193,12 +195,13 @@ func newSessionID() (string, error) {
 }
 
 type metaEvent struct {
-	Type  string    `json:"type"`
-	ID    string    `json:"id"`
-	Time  time.Time `json:"time"`
-	CWD   string    `json:"cwd"`
-	API   string    `json:"api"`
-	Model string    `json:"model"`
+	Type           string    `json:"type"`
+	ID             string    `json:"id"`
+	Time           time.Time `json:"time"`
+	CWD            string    `json:"cwd"`
+	API            string    `json:"api"`
+	Model          string    `json:"model"`
+	PermissionMode string    `json:"permission_mode,omitempty"`
 }
 
 type eventRecord struct {

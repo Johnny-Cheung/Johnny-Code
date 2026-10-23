@@ -32,9 +32,10 @@ func newTestRecorder(t *testing.T) *Recorder {
 	t.Helper()
 	testHome(t)
 	recorder, err := New(Metadata{
-		WorkDir: "/workspace/project",
-		API:     "anthropic-messages",
-		Model:   "claude-test",
+		WorkDir:        "/workspace/project",
+		API:            "anthropic-messages",
+		Model:          "claude-test",
+		PermissionMode: "read-only",
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -290,10 +291,13 @@ func TestRecorderWritesCompleteOrderedLog(t *testing.T) {
 	if got := stringField(t, meta, "model"); got != "claude-test" {
 		t.Fatalf("meta model = %q", got)
 	}
+	if got := stringField(t, meta, "permission_mode"); got != "read-only" {
+		t.Fatalf("meta permission_mode = %q", got)
+	}
 	assertRecordTime(t, meta)
 	for key := range meta {
 		switch key {
-		case "type", "id", "time", "cwd", "api", "model":
+		case "type", "id", "time", "cwd", "api", "model", "permission_mode":
 		default:
 			t.Fatalf("unexpected metadata field %q", key)
 		}
@@ -677,7 +681,7 @@ func TestMetadataDoesNotIncludeCredentialsOrEnvironment(t *testing.T) {
 	meta := parseObject(t, readJSONLines(t, recorder.Path())[0])
 	for key := range meta {
 		switch key {
-		case "type", "id", "time", "cwd", "api", "model":
+		case "type", "id", "time", "cwd", "api", "model", "permission_mode":
 		default:
 			t.Fatalf("session metadata contains unexpected field %q", key)
 		}

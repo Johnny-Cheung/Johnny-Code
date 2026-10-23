@@ -546,6 +546,9 @@ func TestCLIReadOnlyModeRejectsWritesAndAllowsQueries(t *testing.T) {
 	if !strings.Contains(string(record), "只读模式不允许使用 write") || !strings.Contains(string(record), "SECRET=1") {
 		t.Fatalf("会话记录缺少拒绝或读取结果：%s", record)
 	}
+	if !strings.Contains(string(record), `"permission_mode":"read-only"`) {
+		t.Fatalf("会话元数据缺少权限模式：%s", record)
+	}
 	_ = server
 }
 
