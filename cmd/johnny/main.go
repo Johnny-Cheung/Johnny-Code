@@ -58,6 +58,7 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	api := flags.String("api", "", "临时选择 API 协议")
 	modelName := flags.String("model", "", "临时选择模型")
 	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "每轮任务最多模型请求次数")
+	permissionFlag := flags.String("permission-mode", string(permissionAllow), "权限模式：read-only 或 allow")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -72,6 +73,11 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	}
 	if *maxTurns < 1 {
 		fmt.Fprintln(stderr, "--max-turns 必须是正整数。")
+		return 1
+	}
+	mode, err := parsePermissionMode(*permissionFlag)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
@@ -112,6 +118,14 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
+	var tools agent.Tools = registry
+	if mode == permissionReadOnly {
+		readOnly, err := tool.NewReadOnly(registry, runtime)
+		if err != nil {
+			return reportError(stderr, "只读模式初始化失败：", err)
+		}
+		tools = readOnly
+	}
 	client, err := model.NewClient(model.Options{API: model.API(cfg.API), APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
@@ -124,20 +138,22 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	display := newRenderer(output, stderr)
 	conversation := agent.NewConversation(agent.Options{
 		Client:          client,
-		Tools:           registry,
+		Tools:           tools,
 		Model:           cfg.Model,
-		System:          systemPrompt(runtime.WorkDir),
+		System:          systemPrompt(runtime.WorkDir, mode),
 		MaxTurns:        *maxTurns,
 		RequestTimeout:  agent.DefaultRequestTimeout,
 		MaxOutputTokens: 4096,
 	})
 
 	if !interactive {
+		printPermissionNotice(stderr, mode)
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
 	if useTUI(input, output) {
 		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir)
 	}
+	printPermissionNotice(stderr, mode)
 	return runInteractive(ctx, conversation, input, logs, display, stderr)
 }
 
@@ -212,7 +228,26 @@ func executeTurn(ctx context.Context, conversation *agent.Conversation, prompt s
 	return result, runErr, displayErr
 }
 
-func systemPrompt(workDir string) string {
+func printPermissionNotice(output io.Writer, mode permissionMode) {
+	if mode != permissionReadOnly {
+		return
+	}
+	fmt.Fprintln(output, "权限模式：只读（仅允许 read 和受限查询；不是系统沙箱）。")
+}
+
+func systemPrompt(workDir string, mode permissionMode) string {
+	if mode == permissionReadOnly {
+		return fmt.Sprintf(`你是 Johnny-Code，一个在用户本地工作目录中执行任务的编程助手。
+当前工作目录：%s
+当前权限模式：只读。
+
+你只能读取当前工作目录内的文件，并使用受限查询命令 pwd、ls、find、grep 了解项目。
+请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、管道、重定向、构建或测试命令。
+如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户使用 --permission-mode allow 重启后再操作。
+只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
+展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
+完成任务后，用简洁的中文总结结果。`, workDir)
+	}
 	return fmt.Sprintf(`你是 Johnny-Code，一个在用户本地工作目录中执行任务的编程助手。
 当前工作目录：%s
 
@@ -565,6 +600,7 @@ func printHelp(output io.Writer) {
   --version         显示版本和提交号
   --model 名称      临时覆盖模型名（选项放在任务之前）
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
+  --permission-mode 模式  read-only 或 allow；只读模式仅允许 read 和受限查询（默认 allow）
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
 
 交互模式：

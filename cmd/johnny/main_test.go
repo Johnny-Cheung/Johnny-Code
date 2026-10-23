@@ -127,7 +127,7 @@ func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 			if !strings.Contains(output.String(), "v"+version) || !strings.Contains(output.String(), commit) {
 				t.Fatal("版本输出缺少构建信息")
 			}
-		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "不读取标准输入") {
+		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "不读取标准输入") {
 			t.Fatal("帮助输出缺少双模式、退出方式或现有配置位置")
 		}
 		if stderr.Len() != 0 {
@@ -156,6 +156,7 @@ func TestInvalidFlagsDoNotRequestOrCreateLogs(t *testing.T) {
 		{"--max-turns", "0", "你好"},
 		{"--max-turns", "-1", "你好"},
 		{"--max-turns", "abc", "你好"},
+		{"--permission-mode", "bad", "你好"},
 	} {
 		var output, stderr bytes.Buffer
 		if code := run(context.Background(), args, strings.NewReader(""), &output, &stderr); code == 0 {
@@ -482,6 +483,81 @@ func TestCLIToolLoopAndSessionRecord(t *testing.T) {
 	}
 }
 
+func TestCLIReadOnlyModeRejectsWritesAndAllowsQueries(t *testing.T) {
+	var requests atomic.Int32
+	server := newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		count := requests.Add(1)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		switch count {
+		case 1:
+			writeToolUseResponse(w, "尝试写入。", "toolu_ro_1", "write", `{"path":"created.txt","content":"hello"}`)
+		case 2:
+			if !strings.Contains(string(body), "只读模式不允许使用 write") {
+				t.Errorf("第二次请求缺少权限拒绝结果：%s", body)
+			}
+			writeToolUseResponse(w, "读取环境文件。", "toolu_ro_2", "read", `{"path":".env"}`)
+		case 3:
+			if !strings.Contains(string(body), "SECRET=1") {
+				t.Errorf("第三次请求缺少 allow 的 .env 内容：%s", body)
+			}
+			writeToolUseResponse(w, "查询目录。", "toolu_ro_3", "bash", `{"command":"ls -a"}`)
+		case 4:
+			if !strings.Contains(string(body), `.env`) {
+				t.Errorf("只读查询结果缺少 .env：%s", body)
+			}
+			writeTextResponse(w, "只读完成")
+		default:
+			t.Errorf("不应发出第 %d 次请求", count)
+			writeTextResponse(w, "多余")
+		}
+	})
+	work, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("SECRET=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--permission-mode", "read-only", "检查项目"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || requests.Load() != 4 {
+		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
+	}
+	if !strings.Contains(output.String(), "只读完成") {
+		t.Fatalf("最终回答缺失：%q", output.String())
+	}
+	if !strings.Contains(stderr.String(), "权限模式：只读") || !strings.Contains(stderr.String(), "[失败]") {
+		t.Fatalf("普通模式应显示只读提示和拒绝状态：%s", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(work, "created.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("只读模式不应创建文件：%v", err)
+	}
+	logs, err := filepath.Glob(filepath.Join(os.Getenv("HOME"), ".johnny", "sessions", "*.jsonl"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("应生成一条会话记录：%v %v", logs, err)
+	}
+	record, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(record), "只读模式不允许使用 write") || !strings.Contains(string(record), "SECRET=1") {
+		t.Fatalf("会话记录缺少拒绝或读取结果：%s", record)
+	}
+	_ = server
+}
+
+func TestCLIReadOnlyModeNegative(t *testing.T) {
+	// 旧测试环境的 HOME 可能复用；这里只验证非法模式在读取配置前失败。
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--permission-mode", "unknown", "任务"}, strings.NewReader(""), &output, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "permission-mode") {
+		t.Fatalf("非法权限模式应失败：code=%d stderr=%s", code, stderr.String())
+	}
+}
+
 type failingRecorder struct {
 	recordErr  error
 	closeErr   error
@@ -502,11 +578,20 @@ func (f *failingRecorder) Close() error {
 }
 
 func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
-	prompt := systemPrompt("/tmp/johnny work")
+	prompt := systemPrompt("/tmp/johnny work", permissionAllow)
 	for _, want := range []string{"/tmp/johnny work", "当前工作目录", "使用可用工具实际", "工具成功返回", "围栏代码块"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("系统提示缺少 %q：%s", want, prompt)
 		}
+	}
+	readOnly := systemPrompt("/tmp/johnny work", permissionReadOnly)
+	for _, want := range []string{"/tmp/johnny work", "只读", "pwd", "ls", "find", "grep", "--permission-mode allow", "不要尝试 write、edit"} {
+		if !strings.Contains(readOnly, want) {
+			t.Fatalf("只读系统提示缺少 %q：%s", want, readOnly)
+		}
+	}
+	if strings.Contains(readOnly, "修改代码或执行命令") {
+		t.Fatalf("只读系统提示仍在鼓励修改：%s", readOnly)
 	}
 }
 
