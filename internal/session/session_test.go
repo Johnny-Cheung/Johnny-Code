@@ -190,6 +190,45 @@ func TestRecordUserTurnsAndSkippedTool(t *testing.T) {
 	}
 }
 
+func TestRecordPermission(t *testing.T) {
+	recorder := newTestRecorder(t)
+	record := PermissionRecord{
+		ToolCallID: "call-1",
+		Tool:       "bash",
+		Target:     "git log --output=x",
+		Decision:   "record",
+		Source:     "tui",
+		Reason:     "批准并记录",
+		Prefix:     []string{"git", "log"},
+		Paths:      []PermissionPath{{Path: "/tmp/out", Kind: "file"}},
+	}
+	if err := recorder.RecordPermission(record); err != nil {
+		t.Fatal(err)
+	}
+	lines := readJSONLines(t, recorder.Path())
+	if len(lines) != 2 {
+		t.Fatalf("权限记录数量错误：%d", len(lines))
+	}
+	object := parseObject(t, lines[1])
+	for key, want := range map[string]string{
+		"type": "permission", "tool_call_id": "call-1", "tool": "bash",
+		"target": "git log --output=x", "decision": "record", "source": "tui",
+	} {
+		var got string
+		if err := json.Unmarshal(object[key], &got); err != nil || got != want {
+			t.Fatalf("%s = %q (%v)，want %q", key, got, err, want)
+		}
+	}
+	var prefix []string
+	if err := json.Unmarshal(object["recorded_prefix"], &prefix); err != nil || len(prefix) != 2 || prefix[0] != "git" {
+		t.Fatalf("recorded_prefix 异常：%v %v", prefix, err)
+	}
+	var paths []PermissionPath
+	if err := json.Unmarshal(object["recorded_paths"], &paths); err != nil || len(paths) != 1 || paths[0].Kind != "file" {
+		t.Fatalf("recorded_paths 异常：%#v %v", paths, err)
+	}
+}
+
 func TestRecorderWritesCompleteOrderedLog(t *testing.T) {
 	recorder := newTestRecorder(t)
 

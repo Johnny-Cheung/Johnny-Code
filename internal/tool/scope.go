@@ -16,6 +16,58 @@ type workspaceScope struct {
 	root string
 }
 
+// multiPathScope 用于默认模式：相对路径仍以启动工作目录为基准，但判断
+// 访问范围时同时检查工作目录和项目路径白名单。resolve 不因路径在范围外
+// 而失败，由调用方决定审批还是拒绝。
+type multiPathScope struct {
+	workDir string
+	rules   *ProjectRules
+}
+
+func newMultiPathScope(workDir string, rules *ProjectRules) (*multiPathScope, error) {
+	resolved, err := canonicalDirectory(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("解析工作目录失败: %w", err)
+	}
+	return &multiPathScope{workDir: resolved, rules: rules}, nil
+}
+
+func (s *multiPathScope) resolve(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("路径不能为空")
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return "", errors.New("路径包含无效字符")
+	}
+	target := path
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(s.workDir, target)
+	}
+	return resolveExistingAncestors(filepath.Clean(target))
+}
+
+func (s *multiPathScope) resolveExisting(path string) (string, error) {
+	resolved, err := s.resolve(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func (s *multiPathScope) contains(path string) bool {
+	if s == nil {
+		return false
+	}
+	if pathWithin(s.workDir, path) {
+		return true
+	}
+	return s.rules != nil && s.rules.ContainsPath(path)
+}
+
 func newWorkspaceScope(workDir string) (workspaceScope, error) {
 	if strings.TrimSpace(workDir) == "" {
 		return workspaceScope{}, errors.New("工作目录不能为空")

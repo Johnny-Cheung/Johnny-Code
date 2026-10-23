@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -13,10 +12,17 @@ import (
 )
 
 // restrictedCommand 是只读模式允许执行的简单查询命令。它不携带 shell，
-// 只保留已经校验过的程序和参数。
+// 只保留已经校验过的程序和参数。paths 保存已经解析的路径操作数，供默认
+// 模式判断是否需要路径审批。
 type restrictedCommand struct {
 	program string
 	args    []string
+	paths   []string
+}
+
+type queryPathResolver interface {
+	resolve(path string) (string, error)
+	resolveExisting(path string) (string, error)
 }
 
 var errRestrictedSyntax = errors.New("只读命令格式无效")
@@ -117,34 +123,27 @@ func tokenizeRestricted(command string) ([]string, error) {
 }
 
 // buildRestrictedCommand 校验只读白名单并返回实际执行的 argv。它只允许
-// pwd、ls、find、grep 的受限形式；任何未知程序或参数都在启动进程前拒绝。
-func buildRestrictedCommand(command string, scope workspaceScope) (restrictedCommand, error) {
+// 固定查询命令的受限形式；任何未知程序或参数都在启动进程前拒绝。
+func buildRestrictedCommand(command string, scope queryPathResolver) (restrictedCommand, error) {
 	tokens, err := tokenizeRestricted(command)
 	if err != nil {
 		return restrictedCommand{}, permissionDenied("只读模式不支持该 shell 命令", err)
 	}
-	switch tokens[0] {
-	case "pwd":
-		return parsePwd(tokens)
-	case "ls":
-		return parseLs(tokens, scope)
-	case "find":
-		return parseFind(tokens, scope)
-	case "grep":
-		return parseGrep(tokens, scope)
-	default:
+	spec, ok := fixedQueryCommandByName[tokens[0]]
+	if !ok {
 		return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式不允许执行 %q", tokens[0]), nil)
 	}
+	return spec.parse(tokens, scope)
 }
 
-func parsePwd(tokens []string) (restrictedCommand, error) {
+func parsePwd(tokens []string, _ queryPathResolver) (restrictedCommand, error) {
 	if len(tokens) != 1 {
 		return restrictedCommand{}, permissionDenied("只读模式的 pwd 不接受参数", nil)
 	}
 	return restrictedCommand{program: "pwd"}, nil
 }
 
-func parseLs(tokens []string, scope workspaceScope) (restrictedCommand, error) {
+func parseLs(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
 	var flags []string
 	var paths []string
 	optionsEnded := false
@@ -179,10 +178,10 @@ func parseLs(tokens []string, scope workspaceScope) (restrictedCommand, error) {
 	args := append([]string{}, flags...)
 	args = append(args, "--")
 	args = append(args, resolved...)
-	return restrictedCommand{program: "ls", args: args}, nil
+	return restrictedCommand{program: "ls", args: args, paths: resolved}, nil
 }
 
-func parseFind(tokens []string, scope workspaceScope) (restrictedCommand, error) {
+func parseFind(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
 	rest := tokens[1:]
 	path := "."
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
@@ -238,10 +237,10 @@ func parseFind(tokens []string, scope workspaceScope) (restrictedCommand, error)
 			return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 find 不支持参数 %q", expression), nil)
 		}
 	}
-	return restrictedCommand{program: "find", args: args}, nil
+	return restrictedCommand{program: "find", args: args, paths: []string{resolvedPath}}, nil
 }
 
-func parseGrep(tokens []string, scope workspaceScope) (restrictedCommand, error) {
+func parseGrep(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
 	var flags []string
 	optionsEnded := false
 	index := 1
@@ -284,10 +283,10 @@ func parseGrep(tokens []string, scope workspaceScope) (restrictedCommand, error)
 	args := append([]string{}, flags...)
 	args = append(args, "--", pattern)
 	args = append(args, resolved...)
-	return restrictedCommand{program: "grep", args: args}, nil
+	return restrictedCommand{program: "grep", args: args, paths: resolved}, nil
 }
 
-func resolveQueryPaths(scope workspaceScope, paths []string) ([]string, error) {
+func resolveQueryPaths(scope queryPathResolver, paths []string) ([]string, error) {
 	resolved := make([]string, 0, len(paths))
 	for _, path := range paths {
 		target, err := scope.resolveExisting(path)
@@ -310,7 +309,7 @@ func queryPathError(path string, err error) error {
 // 不启动 shell，只直接执行白名单程序。
 type restrictedBash struct {
 	runtime Runtime
-	scope   workspaceScope
+	scope   queryPathResolver
 }
 
 func newRestrictedBash(runtime Runtime) (*restrictedBash, error) {
@@ -332,65 +331,27 @@ func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSec
 	if strings.TrimSpace(command) == "" {
 		return Result{}, invalidArguments("bash 的 command 不能为空", nil)
 	}
-	timeout := b.runtime.CommandTimeout
-	if timeoutSeconds != nil {
-		if *timeoutSeconds < 1 || *timeoutSeconds > 600 {
-			return Result{}, invalidArguments("bash 的 timeout_seconds 必须在 1 到 600 之间", nil)
-		}
-		timeout = time.Duration(*timeoutSeconds) * time.Second
+	timeout, err := commandTimeout(b.runtime, timeoutSeconds)
+	if err != nil {
+		return Result{}, err
 	}
 	spec, err := buildRestrictedCommand(command, b.scope)
 	if err != nil {
 		return Result{}, err
 	}
-	if _, err := exec.LookPath(spec.program); err != nil {
-		return Result{}, executionError(fmt.Sprintf("只读查询命令不可用：%s", spec.program), err)
-	}
+	return executeRestrictedSpec(ctx, b.runtime, spec, timeout)
+}
 
-	commandCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(commandCtx, spec.program, spec.args...)
-	cmd.Dir = b.runtime.WorkDir
-	cmd.Env = restrictedEnvironment(b.runtime.Env)
-	cmd.WaitDelay = time.Second
-	configureProcess(cmd)
-	cmd.Cancel = func() error { return killProcess(cmd) }
-	stdout := &limitedWriter{limit: b.runtime.MaxOutputBytes}
-	stderr := &limitedWriter{limit: b.runtime.MaxOutputBytes}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	runErr := cmd.Run()
-	_ = killProcess(cmd)
-	if runErr != nil {
-		if parentErr := ctx.Err(); parentErr != nil {
-			return Result{}, parentErr
-		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Success() {
-			return Result{Content: formatBashOutput(stdout.String(), stderr.String(), "")}, nil
-		}
-		if errors.Is(commandCtx.Err(), context.DeadlineExceeded) {
-			content := formatBashOutput(stdout.String(), stderr.String(), "\n[命令执行超时]")
-			return Result{Content: content, IsError: true}, executionError(fmt.Sprintf("命令执行超时（%s）", timeout), context.DeadlineExceeded)
-		}
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			code := exitErr.ExitCode()
-			if spec.program == "grep" && code == 1 {
-				content := formatBashOutput(stdout.String(), stderr.String(), "")
-				if strings.TrimSpace(content) == "" {
-					content = "（无匹配）"
-				}
-				return Result{Content: content}, nil
-			}
-			content := formatBashOutput(stdout.String(), stderr.String(), fmt.Sprintf("\n[exit code %d]", code))
-			return Result{Content: content, IsError: true}, executionError(fmt.Sprintf("命令退出码 %d", code), exitErr)
-		}
-		return Result{Content: formatBashOutput(stdout.String(), stderr.String(), ""), IsError: true}, executionError("bash 启动或执行失败", runErr)
+func executeRestrictedSpec(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) (Result, error) {
+	successExitCodes := map[int]bool{}
+	if spec.program == "grep" || spec.program == "diff" {
+		successExitCodes[1] = true
 	}
-	if parentErr := ctx.Err(); parentErr != nil {
-		return Result{}, parentErr
+	result, err := executeArgv(ctx, runtime, spec, timeout, restrictedEnvironment(runtime.Env), successExitCodes)
+	if err == nil && spec.program == "grep" && strings.TrimSpace(result.Content) == "" {
+		result.Content = "（无匹配）"
 	}
-	return Result{Content: formatBashOutput(stdout.String(), stderr.String(), "")}, nil
+	return result, err
 }
 
 // restrictedEnvironment 只保留查询命令运行所需的最小环境，避免把 Johnny、

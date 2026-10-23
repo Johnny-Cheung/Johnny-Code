@@ -35,7 +35,7 @@ func TestTerminalHelperProcess(t *testing.T) {
 	}
 	configFileBase64 = base64.StdEncoding.EncodeToString([]byte(os.Getenv("JOHNNY_TUI_TEST_CONFIG")))
 	if os.Getenv("JOHNNY_TUI_TEST_PIPE") == "1" {
-		os.Exit(run(context.Background(), nil, strings.NewReader("hello\n/exit\n"), os.Stdout, os.Stderr))
+		os.Exit(run(context.Background(), []string{"--permission-mode", "allow"}, strings.NewReader("hello\n/exit\n"), os.Stdout, os.Stderr))
 	}
 	before, err := term.GetState(os.Stdin.Fd())
 	if err != nil {
@@ -43,7 +43,11 @@ func TestTerminalHelperProcess(t *testing.T) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() { <-ctx.Done(); stop() }()
-	code := run(ctx, nil, os.Stdin, os.Stdout, os.Stderr)
+	var args []string
+	if mode := os.Getenv("JOHNNY_TUI_TEST_MODE"); mode != "" {
+		args = []string{"--permission-mode", mode}
+	}
+	code := run(ctx, args, os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	// macOS 在会话首进程退出后撤销 slave，必须在退出前检查恢复结果。
 	after, err := term.GetState(os.Stdin.Fd())
@@ -66,6 +70,10 @@ type terminalProcess struct {
 }
 
 func startTerminal(t *testing.T, serverURL string) *terminalProcess {
+	return startTerminalMode(t, serverURL, "allow")
+}
+
+func startTerminalMode(t *testing.T, serverURL, mode string) *terminalProcess {
 	t.Helper()
 	dir, home := t.TempDir(), t.TempDir()
 	path := filepath.Join(dir, "test.env")
@@ -91,7 +99,8 @@ func startTerminal(t *testing.T, serverURL string) *terminalProcess {
 			cmd.Env = append(cmd.Env, entry)
 		}
 	}
-	cmd.Env = append(cmd.Env, "JOHNNY_TUI_TEST_HELPER=1", "JOHNNY_TUI_TEST_CONFIG="+path, "HOME="+home, "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, "JOHNNY_TUI_TEST_HELPER=1", "JOHNNY_TUI_TEST_CONFIG="+path,
+		"JOHNNY_TUI_TEST_MODE="+mode, "HOME="+home, "TERM=xterm-256color")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	p := &terminalProcess{cmd: cmd, master: master, slave: slave, changed: make(chan struct{}, 1), done: make(chan struct{}), dir: dir, home: home}
@@ -203,6 +212,44 @@ func terminalTools(w http.ResponseWriter, tools []map[string]any) {
 		fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":%d}\n\n", data, index)
 	}
 	fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+}
+
+func TestTerminalPTYDefaultModeApproval(t *testing.T) {
+	var count atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if count.Add(1) == 1 {
+			terminalTools(w, []map[string]any{{
+				"type": "tool_use", "id": "approval-bash", "name": "bash",
+				"input": map[string]any{"command": "touch approved.txt"},
+			}})
+			return
+		}
+		terminalAnswer(w, "APPROVED")
+	}))
+	defer server.Close()
+	p := startTerminalMode(t, server.URL, "default")
+	p.write(t, "run\r")
+	end := p.expect(t, 0, "权限确认")
+	p.expect(t, end, "touch approved.txt")
+	p.expect(t, end, "拒绝本次")
+	if strings.Contains(p.text(), "批准并记录") {
+		t.Fatal("不可记录命令不应显示记录选项")
+	}
+	p.write(t, "k\r")
+	end = p.expect(t, end, "APPROVED")
+	if _, err := os.Stat(filepath.Join(p.dir, "approved.txt")); err != nil {
+		t.Fatalf("批准后命令未执行：%v", err)
+	}
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+	logs, _ := filepath.Glob(filepath.Join(p.home, ".johnny", "sessions", "*.jsonl"))
+	if len(logs) != 1 {
+		t.Fatalf("应生成一份会话记录：%v", logs)
+	}
+	log, _ := os.ReadFile(logs[0])
+	if !bytes.Contains(log, []byte(`"type":"permission"`)) || !bytes.Contains(log, []byte(`"decision":"allow"`)) || !bytes.Contains(log, []byte(`"source":"tui"`)) {
+		t.Fatalf("缺少 TUI 审批记录：%s", log)
+	}
 }
 
 func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {

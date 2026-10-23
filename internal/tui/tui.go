@@ -16,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -39,22 +40,43 @@ type toolRecord struct {
 }
 
 type Options struct {
-	Input   io.Reader
-	Output  io.Writer
-	Model   string
-	WorkDir string
-	Version string
-	Mode    string
-	RunTurn func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
+	Input        io.Reader
+	Output       io.Writer
+	Model        string
+	WorkDir      string
+	Version      string
+	Mode         string
+	Gate         *tool.ApprovalGate
+	LocalCommand func(string) (string, bool)
+	RunTurn      func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
+}
+
+type approvalDelivery struct {
+	request  tool.ApprovalRequest
+	response chan tool.ApprovalDecision
+}
+
+type approvalOption struct {
+	label  string
+	allow  bool
+	record bool
+}
+
+type approvalState struct {
+	request  tool.ApprovalRequest
+	response chan tool.ApprovalDecision
+	options  []approvalOption
+	selected int
 }
 
 type delivery struct {
-	event  Event
-	notice string
-	ready  chan error
-	done   bool
-	result agent.Result
-	err    error
+	event    Event
+	approval *approvalDelivery
+	notice   string
+	ready    chan error
+	done     bool
+	result   agent.Result
+	err      error
 }
 
 // toolStatusShownMsg 标记状态区已经获得一次渲染机会，可以检查输出错误并
@@ -100,6 +122,7 @@ type terminalModel struct {
 	history       []string
 	historyIndex  int
 	draft         string
+	approval      *approvalState
 }
 
 // Run 在退出前取消并等待所有任务。即使库因终端错误提前恢复终端，也不会留下
@@ -121,6 +144,10 @@ func Run(ctx context.Context, options Options) error {
 	})
 	var workers sync.WaitGroup
 	m := newModel(runCtx, options, output, &workers)
+	if options.Gate != nil {
+		options.Gate.Set(m.requestApproval)
+		defer options.Gate.Set(nil)
+	}
 	program := tea.NewProgram(m, tea.WithInput(input), tea.WithOutput(output),
 		tea.WithContext(runCtx), tea.WithoutSignalHandler())
 	_, err := program.Run()
@@ -241,6 +268,9 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		keys := msg.String()
 		if m.busy {
+			if m.approval != nil {
+				return m, m.handleApprovalKey(keys)
+			}
 			if keys == "ctrl+c" && !m.stopping {
 				m.stopping = true
 				m.status = "正在取消，等待当前操作停止…"
@@ -274,6 +304,11 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if prompt == "/exit" {
 				m.quitting = true
 				return m, tea.Quit
+			}
+			if m.options.LocalCommand != nil {
+				if text, handled := m.options.LocalCommand(prompt); handled {
+					return m, m.showLocalResult(prompt, text)
+				}
 			}
 			return m, m.start(prompt)
 		case "alt+enter", "ctrl+j":
@@ -383,6 +418,103 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(prompt)+"\n", m.contentWidth())), m.waitEvent())
 }
 
+func (m *terminalModel) requestApproval(ctx context.Context, request tool.ApprovalRequest) (tool.ApprovalDecision, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	response := make(chan tool.ApprovalDecision, 1)
+	item := delivery{approval: &approvalDelivery{request: request, response: response}}
+	select {
+	case m.events <- item:
+	case <-ctx.Done():
+		return tool.ApprovalDecision{}, ctx.Err()
+	case <-m.ctx.Done():
+		return tool.ApprovalDecision{}, m.ctx.Err()
+	}
+	select {
+	case decision := <-response:
+		return decision, nil
+	case <-ctx.Done():
+		return tool.ApprovalDecision{}, ctx.Err()
+	case <-m.ctx.Done():
+		return tool.ApprovalDecision{}, m.ctx.Err()
+	}
+}
+
+func (m *terminalModel) beginApproval(item *approvalDelivery) {
+	if item == nil {
+		return
+	}
+	options := []approvalOption{
+		{label: "允许本次", allow: true},
+		{label: "拒绝本次"},
+	}
+	if item.request.CanRecord() {
+		options = append(options, approvalOption{label: "批准并记录", allow: true, record: true})
+	}
+	m.approval = &approvalState{
+		request:  item.request,
+		response: item.response,
+		options:  options,
+		selected: 1,
+	}
+	m.status = "等待权限确认"
+}
+
+func (m *terminalModel) handleApprovalKey(keys string) tea.Cmd {
+	state := m.approval
+	if state == nil {
+		return m.waitEvent()
+	}
+	switch keys {
+	case "ctrl+c":
+		m.approval = nil
+		if !m.stopping {
+			m.stopping = true
+			m.status = "正在取消，等待当前操作停止…"
+			m.cancel()
+		}
+	case "up", "k":
+		state.selected = (state.selected + len(state.options) - 1) % len(state.options)
+	case "down", "j", "tab":
+		state.selected = (state.selected + 1) % len(state.options)
+	case "enter":
+		option := state.options[state.selected]
+		select {
+		case state.response <- tool.ApprovalDecision{
+			Allow:  option.allow,
+			Record: option.record,
+			Source: "tui",
+			Reason: option.label,
+		}:
+		default:
+		}
+		m.approval = nil
+		switch {
+		case !option.allow:
+			m.status = "已拒绝本次，等待模型继续…"
+		case option.record:
+			m.status = "已允许并记录，等待工具执行…"
+		default:
+			m.status = "已允许本次，等待工具执行…"
+		}
+	}
+	return m.waitEvent()
+}
+
+func (m *terminalModel) showLocalResult(prompt, text string) tea.Cmd {
+	m.input.Reset()
+	m.input.Focus()
+	m.history = append(m.history, prompt)
+	m.historyIndex, m.draft = len(m.history), ""
+	m.resizeInput()
+	body := "❯ " + safeText(prompt)
+	if text != "" {
+		body += "\n" + wrap(safeText(text), m.contentWidth())
+	}
+	return tea.Println(body)
+}
+
 func (m *terminalModel) resetResponse() {
 	m.responseRunes = 0
 	m.responseOut = nil
@@ -392,6 +524,10 @@ func (m *terminalModel) resetResponse() {
 func (m *terminalModel) receive(item delivery) tea.Cmd {
 	if item.done {
 		return m.finishTurn(item)
+	}
+	if item.approval != nil {
+		m.beginApproval(item.approval)
+		return m.waitEvent()
 	}
 	if item.notice != "" {
 		notice := wrap(safeText(strings.TrimRight(item.notice, "\n")), m.contentWidth())
@@ -536,6 +672,7 @@ func (m *terminalModel) finishTurn(item delivery) tea.Cmd {
 	m.busy, m.stopping = false, false
 	m.cancel = nil
 	m.pendingReady = nil
+	m.approval = nil
 	switch {
 	case errors.Is(item.err, context.Canceled):
 		m.status = "已取消，可继续输入"
@@ -700,6 +837,50 @@ func (m *terminalModel) expansionText() string {
 	return wrap(strings.Join(lines, "\n"), m.contentWidth())
 }
 
+func (m *terminalModel) approvalLines(width int) []string {
+	state := m.approval
+	if state == nil {
+		return nil
+	}
+	line := func(label, value string) string {
+		return ansi.Truncate(label+oneLine(value), width, "…")
+	}
+	lines := []string{
+		"权限确认",
+		line("工具：", state.request.Tool),
+		line("目录：", state.request.WorkDir),
+		line("原因：", state.request.Reason),
+	}
+	if state.request.Target != "" {
+		lines = append(lines, line("目标：", state.request.Target))
+	}
+	if state.request.Detail != "" {
+		lines = append(lines, line("详情：", state.request.Detail))
+	}
+	if state.request.CanRecord() {
+		lines = append(lines, line("将记录：", state.request.RecordLabel()))
+	}
+	lines = append(lines, "")
+	for index, option := range state.options {
+		prefix := "  "
+		if index == state.selected {
+			prefix = "› "
+		}
+		lines = append(lines, ansi.Truncate(prefix+option.label, width, "…"))
+	}
+	lines = append(lines, "↑↓ 选择 · Enter 确认 · Ctrl+C 取消本轮")
+	for index, value := range lines {
+		lines[index] = ansi.Truncate(value, width, "…")
+	}
+	return lines
+}
+
+func oneLine(text string) string {
+	text = safeText(text)
+	text = strings.ReplaceAll(text, "\n", " ")
+	return strings.ReplaceAll(text, "\r", " ")
+}
+
 func (m *terminalModel) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
@@ -709,6 +890,13 @@ func (m *terminalModel) View() tea.View {
 	if m.busy {
 		// 留一行给终端光标/滚动，避免动态区域刚好占满屏幕时把旧内容滚入历史。
 		maxDynamic := max(1, m.height-1)
+		if m.approval != nil {
+			lines := m.approvalLines(width)
+			if len(lines) > maxDynamic {
+				lines = lines[len(lines)-maxDynamic:]
+			}
+			return tea.NewView(strings.Join(lines, "\n"))
+		}
 		reserve := 1
 		if maxDynamic >= 2 {
 			reserve = 2
@@ -757,7 +945,7 @@ func (m *terminalModel) View() tea.View {
 		if len(m.lastTools) > 0 && !m.expanded {
 			hint += " · Ctrl+O 展开工具过程"
 		}
-		footer := hint + " · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /exit 退出"
+		footer := hint + " · Enter 发送 · Alt+Enter 换行 · ↑↓ 历史 · /permissions 权限 · /exit 退出"
 		parts = append(parts, muted.Render(ansi.Truncate(footer, width, "…")))
 	}
 	content := strings.Join(parts, "\n")

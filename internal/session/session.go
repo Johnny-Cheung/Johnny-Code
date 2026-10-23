@@ -37,6 +37,25 @@ type Metadata struct {
 	PermissionMode string
 }
 
+// PermissionRecord is one approval decision. It is deliberately separate from
+// model tool results: the decision records what the user chose, while the tool
+// result records what the tool eventually returned.
+type PermissionRecord struct {
+	ToolCallID string           `json:"tool_call_id"`
+	Tool       string           `json:"tool"`
+	Target     string           `json:"target"`
+	Decision   string           `json:"decision"`
+	Source     string           `json:"source,omitempty"`
+	Reason     string           `json:"reason,omitempty"`
+	Prefix     []string         `json:"recorded_prefix,omitempty"`
+	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
+}
+
+type PermissionPath struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
 // Recorder writes JSONL records synchronously. Record and Close return I/O
 // errors to the caller; the recorder never logs or panics on its own.
 type Recorder struct {
@@ -151,6 +170,28 @@ func (r *Recorder) Record(event agent.Event) error {
 	return r.write(record)
 }
 
+// RecordPermission writes one approval decision record. It is independent of
+// agent.Event and may be called before the first tool result is recorded.
+func (r *Recorder) RecordPermission(record PermissionRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errRecorderClosed
+	}
+	return r.write(permissionEvent{
+		Type:       "permission",
+		Time:       r.timestamp(),
+		ToolCallID: record.ToolCallID,
+		Tool:       record.Tool,
+		Target:     record.Target,
+		Decision:   record.Decision,
+		Source:     record.Source,
+		Reason:     record.Reason,
+		Prefix:     record.Prefix,
+		Paths:      record.Paths,
+	})
+}
+
 // Close closes the underlying file. It is safe to call more than once.
 func (r *Recorder) Close() error {
 	r.mu.Lock()
@@ -215,6 +256,19 @@ type eventRecord struct {
 	Result   *model.ToolResult `json:"result,omitempty"`
 	Status   agent.Status      `json:"status,omitempty"`
 	Error    string            `json:"error,omitempty"`
+}
+
+type permissionEvent struct {
+	Type       string           `json:"type"`
+	Time       time.Time        `json:"time"`
+	ToolCallID string           `json:"tool_call_id"`
+	Tool       string           `json:"tool"`
+	Target     string           `json:"target"`
+	Decision   string           `json:"decision"`
+	Source     string           `json:"source,omitempty"`
+	Reason     string           `json:"reason,omitempty"`
+	Prefix     []string         `json:"recorded_prefix,omitempty"`
+	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
 }
 
 type responseRecord struct {

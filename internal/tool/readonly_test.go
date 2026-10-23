@@ -149,8 +149,10 @@ func TestReadOnlyBashUsesWhitelist(t *testing.T) {
 	if err != nil || !strings.Contains(result.Content, "1:hello") {
 		t.Fatalf("只读 bash grep 失败：%q %v", result.Content, err)
 	}
-	_, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cat file.txt"})
-	requireToolKind(t, err, KindPermissionDenied)
+	result, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cat file.txt"})
+	if err != nil || !strings.Contains(result.Content, "hello") {
+		t.Fatalf("只读 bash cat 失败：%q %v", result.Content, err)
+	}
 	_, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "find . -delete"})
 	requireToolKind(t, err, KindPermissionDenied)
 	_, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "ls | head"})

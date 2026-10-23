@@ -115,7 +115,6 @@ func TestBuildRestrictedCommandAllowsQueries(t *testing.T) {
 func TestBuildRestrictedCommandRejectsCommandsAndOptions(t *testing.T) {
 	scope, _ := testWorkspace(t)
 	for _, command := range []string{
-		"cat file.txt",
 		"sed -n 1p file.txt",
 		"sh -c id",
 		"echo hello",
@@ -214,6 +213,45 @@ func TestRestrictedBashRunsQueries(t *testing.T) {
 	}
 }
 
+func TestRestrictedBashExpandedQueriesRun(t *testing.T) {
+	runtime := testRuntime(t)
+	for name, content := range map[string]string{
+		"file.txt":   "hello\n",
+		"second.txt": "world\n",
+	} {
+		if err := os.WriteFile(filepath.Join(runtime.WorkDir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		command string
+		want    string
+	}{
+		{"cat file.txt", "hello"},
+		{"cat -n file.txt", "1\thello"},
+		{"head -n 1 file.txt", "hello"},
+		{"tail -n +1 file.txt", "hello"},
+		{"wc -l file.txt", "1"},
+		{"stat file.txt", "file.txt"},
+		{"du -sh .", "."},
+		{"diff -u file.txt second.txt", "---"},
+	}
+	for _, c := range cases {
+		skipWithoutCommand(t, strings.Fields(c.command)[0])
+		result, err := b.execute(context.Background(), c.command, nil)
+		if err != nil {
+			t.Fatalf("命令 %q 执行失败：%v", c.command, err)
+		}
+		if !strings.Contains(result.Content, c.want) {
+			t.Fatalf("命令 %q 输出缺少 %q：%q", c.command, c.want, result.Content)
+		}
+	}
+}
+
 func TestRestrictedBashGrepNoMatches(t *testing.T) {
 	skipWithoutCommand(t, "grep")
 	runtime := testRuntime(t)
@@ -243,7 +281,6 @@ func TestRestrictedBashRejectsBeforeStarting(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, command := range []string{
-		"cat keep.txt",
 		"find . -delete",
 		"grep foo | head",
 		"ls -R",

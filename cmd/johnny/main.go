@@ -58,7 +58,7 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	api := flags.String("api", "", "临时选择 API 协议")
 	modelName := flags.String("model", "", "临时选择模型")
 	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "每轮任务最多模型请求次数")
-	permissionFlag := flags.String("permission-mode", string(permissionAllow), "权限模式：read-only 或 allow")
+	permissionFlag := flags.String("permission-mode", string(permissionDefault), "权限模式：default、read-only 或 allow")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -119,12 +119,26 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		return reportError(stderr, "工具初始化失败：", err)
 	}
 	var tools agent.Tools = registry
-	if mode == permissionReadOnly {
+	var rules *tool.ProjectRules
+	var gate *tool.ApprovalGate
+	switch mode {
+	case permissionReadOnly:
 		readOnly, err := tool.NewReadOnly(registry, runtime)
 		if err != nil {
 			return reportError(stderr, "只读模式初始化失败：", err)
 		}
 		tools = readOnly
+	case permissionDefault:
+		rules, err = loadProjectPermissions(runtime.WorkDir, interactive && interactiveReader(input), input, stderr)
+		if err != nil {
+			return reportError(stderr, "项目权限规则初始化失败：", err)
+		}
+		gate = tool.NewApprovalGate()
+		permissioned, err := tool.NewDefault(registry, runtime, rules, gate)
+		if err != nil {
+			return reportError(stderr, "默认模式初始化失败：", err)
+		}
+		tools = permissioned
 	}
 	client, err := model.NewClient(model.Options{API: model.API(cfg.API), APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
 	if err != nil {
@@ -134,6 +148,12 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
 	logs := openSessionLogger(session.Metadata{WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
 	defer logs.close()
+	if gate != nil {
+		gate.SetAudit(logs.recordPermission)
+	}
+	localCommand := func(line string) (string, bool) {
+		return handleLocalCommand(line, rules)
+	}
 
 	display := newRenderer(output, stderr)
 	conversation := agent.NewConversation(agent.Options{
@@ -151,10 +171,10 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
 	if useTUI(input, output) {
-		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label())
+		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand)
 	}
 	printPermissionNotice(stderr, mode)
-	return runInteractive(ctx, conversation, input, logs, display, stderr)
+	return runInteractive(ctx, conversation, input, logs, display, stderr, localCommand)
 }
 
 // runTask 执行参数模式下的唯一任务；无论成功失败都直接结束进程。
@@ -168,7 +188,7 @@ func runTask(ctx context.Context, conversation *agent.Conversation, prompt strin
 
 // runInteractive 反复读取用户输入并在同一会话历史上执行。
 // 输入 /exit、EOF 或父 context 取消时结束；单轮模型失败只报告并继续等待。
-func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer) int {
+func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer, localCommand func(string) (string, bool)) int {
 	reader := bufio.NewReader(input)
 	for {
 		if err := writeProgress(stderr, "请输入任务："); err != nil {
@@ -188,6 +208,12 @@ func runInteractive(ctx context.Context, conversation *agent.Conversation, input
 		}
 		if line == "/exit" {
 			return 0
+		}
+		if localCommand != nil {
+			if text, handled := localCommand(line); handled {
+				fmt.Fprintln(stderr, text)
+				continue
+			}
 		}
 
 		result, runErr, displayErr := executeTurn(ctx, conversation, line, logs, display)
@@ -229,10 +255,12 @@ func executeTurn(ctx context.Context, conversation *agent.Conversation, prompt s
 }
 
 func printPermissionNotice(output io.Writer, mode permissionMode) {
-	if mode != permissionReadOnly {
-		return
+	switch mode {
+	case permissionReadOnly:
+		fmt.Fprintln(output, "权限模式：只读（仅允许 read 和受限查询；不是系统沙箱）。")
+	case permissionDefault:
+		fmt.Fprintln(output, "权限模式：默认（路径白名单内自动；其他操作需要审批；当前非 TUI 入口的审批会被拒绝）。")
 	}
-	fmt.Fprintln(output, "权限模式：只读（仅允许 read 和受限查询；不是系统沙箱）。")
 }
 
 func systemPrompt(workDir string, mode permissionMode) string {
@@ -241,9 +269,21 @@ func systemPrompt(workDir string, mode permissionMode) string {
 当前工作目录：%s
 当前权限模式：只读。
 
-你只能读取当前工作目录内的文件，并使用受限查询命令 pwd、ls、find、grep 了解项目。
+你只能读取当前工作目录内的文件，并使用受限查询命令（pwd、ls、find、grep、cat、head、tail、wc、stat、du、diff）了解项目。
 请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、管道、重定向、构建或测试命令。
 如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户使用 --permission-mode allow 重启后再操作。
+只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
+展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
+完成任务后，用简洁的中文总结结果。`, workDir)
+	}
+	if mode == permissionDefault {
+		return fmt.Sprintf(`你是 Johnny-Code，一个在用户本地工作目录中执行任务的编程助手。
+当前工作目录：%s
+当前权限模式：默认。
+
+路径白名单内的 read、write、edit 会自动执行；用户级只读查询白名单和已记录的项目命令前缀会自动执行；其他操作会请求用户审批。
+需要审批时，等待工具结果；如果用户拒绝，不要重复同一未授权操作，改用已授权的方案或说明阻塞原因。
+不要尝试绕过权限层，也不要把审批提示当作已授权。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
 展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
 完成任务后，用简洁的中文总结结果。`, workDir)
@@ -472,6 +512,7 @@ func escapeTerminal(text string) string {
 type eventRecorder interface {
 	Path() string
 	Record(agent.Event) error
+	RecordPermission(session.PermissionRecord) error
 	Close() error
 }
 
@@ -525,6 +566,34 @@ func (l *sessionLogger) record(event agent.Event) {
 		l.warn("写入", err)
 		// 首写失败后停止继续写：关闭已写入的文件（不删除已有记录），
 		// 后续事件直接跳过，避免每个事件重复失败、拖慢任务。
+		_ = l.recorder.Close()
+		l.recorder = nil
+		l.disabled = true
+	}
+}
+
+func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
+	if l == nil {
+		return
+	}
+	l.ensure()
+	if l.recorder == nil {
+		return
+	}
+	record := session.PermissionRecord{
+		ToolCallID: audit.ToolCallID,
+		Tool:       audit.Tool,
+		Target:     audit.Target,
+		Decision:   audit.Decision,
+		Source:     audit.Source,
+		Reason:     audit.Reason,
+		Prefix:     append([]string(nil), audit.Prefix...),
+	}
+	for _, path := range audit.Paths {
+		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})
+	}
+	if err := l.recorder.RecordPermission(record); err != nil {
+		l.warn("写入权限记录", err)
 		_ = l.recorder.Close()
 		l.recorder = nil
 		l.disabled = true
@@ -600,13 +669,15 @@ func printHelp(output io.Writer) {
   --version         显示版本和提交号
   --model 名称      临时覆盖模型名（选项放在任务之前）
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
-  --permission-mode 模式  read-only 或 allow；只读模式仅允许 read 和受限查询（默认 allow）
+  --permission-mode 模式  default、read-only 或 allow；默认模式自动执行白名单内操作，其他操作审批（默认 default）
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
 
 交互模式：
   每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
+  /permissions 查看固定权限名单和项目规则；支持 remove-command、remove-path、clear。
   终端中启用 TUI：Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
   TUI 中 Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
+  TUI 审批只有允许本次、拒绝本次、批准并记录；等待审批时 Ctrl+C 取消本轮。
   每轮独立计算模型请求次数；单轮失败会说明原因并继续等待输入。
   管道或重定向使用普通文本；参数任务和普通文本模式中 Ctrl+C 取消并退出（退出码 130）。
 配置文件：%s

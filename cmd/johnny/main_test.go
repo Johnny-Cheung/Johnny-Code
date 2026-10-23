@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 )
 
 func useConfigPath(t *testing.T, path string) {
@@ -561,6 +562,108 @@ func TestCLIReadOnlyModeNegative(t *testing.T) {
 	}
 }
 
+func TestDefaultModeNonInteractiveDeniesApproval(t *testing.T) {
+	var requests atomic.Int32
+	var secondBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if requests.Add(1) == 1 {
+			writeToolUseResponse(w, "", "deny-bash", "bash", `{"command":"touch denied.txt"}`)
+			return
+		}
+		secondBody = string(body)
+		writeTextResponse(w, "DONE")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "existing config.env")
+	data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=" + server.URL + "\nJOHNNY_MODEL=test-model\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	useConfigPath(t, path)
+	t.Chdir(t.TempDir())
+
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || !strings.Contains(output.String(), "DONE") {
+		t.Fatalf("默认模式非交互任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
+	}
+	if _, err := os.Stat("denied.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("非交互审批拒绝后命令仍执行：%v", err)
+	}
+	if !strings.Contains(secondBody, `"is_error":true`) || !strings.Contains(secondBody, "审批") {
+		t.Fatalf("拒绝结果未回传模型：%s", secondBody)
+	}
+	objects := readSessionObjects(t, os.Getenv("HOME"))
+	var permission map[string]json.RawMessage
+	metadataMode := ""
+	for _, object := range objects {
+		var recordType string
+		_ = json.Unmarshal(object["type"], &recordType)
+		if recordType == "meta" {
+			_ = json.Unmarshal(object["permission_mode"], &metadataMode)
+		}
+		if recordType == "permission" {
+			permission = object
+		}
+	}
+	if metadataMode != "default" {
+		t.Fatalf("会话元数据权限模式错误：%q", metadataMode)
+	}
+	if permission == nil {
+		t.Fatal("缺少权限审批记录")
+	}
+	var decision, source, target string
+	_ = json.Unmarshal(permission["decision"], &decision)
+	_ = json.Unmarshal(permission["source"], &source)
+	_ = json.Unmarshal(permission["target"], &target)
+	if decision != "deny" || source != "unavailable" || !strings.Contains(target, "touch denied.txt") {
+		t.Fatalf("权限记录异常：decision=%q source=%q target=%q", decision, source, target)
+	}
+}
+
+func TestDefaultModeAutoAllowsWhitelistQuery(t *testing.T) {
+	var requests atomic.Int32
+	var secondBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if requests.Add(1) == 1 {
+			writeToolUseResponse(w, "", "read-bash", "bash", `{"command":"cat note.txt"}`)
+			return
+		}
+		secondBody = string(body)
+		writeTextResponse(w, "DONE")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "existing config.env")
+	data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=" + server.URL + "\nJOHNNY_MODEL=test-model\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	useConfigPath(t, path)
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("note.txt", []byte("hello-default"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || !strings.Contains(output.String(), "DONE") {
+		t.Fatalf("默认模式自动放行任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
+	}
+	if !strings.Contains(secondBody, "hello-default") || strings.Contains(secondBody, `"is_error":true`) {
+		t.Fatalf("白名单查询结果未正常回传：%s", secondBody)
+	}
+	objects := readSessionObjects(t, os.Getenv("HOME"))
+	for _, object := range objects {
+		var recordType string
+		_ = json.Unmarshal(object["type"], &recordType)
+		if recordType == "permission" {
+			t.Fatal("自动放行的查询不应产生审批记录")
+		}
+	}
+}
+
 type failingRecorder struct {
 	recordErr  error
 	closeErr   error
@@ -571,6 +674,11 @@ type failingRecorder struct {
 func (f *failingRecorder) Path() string { return "/tmp/fake-session.jsonl" }
 
 func (f *failingRecorder) Record(agent.Event) error {
+	f.records++
+	return f.recordErr
+}
+
+func (f *failingRecorder) RecordPermission(session.PermissionRecord) error {
 	f.records++
 	return f.recordErr
 }
@@ -595,6 +703,12 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 	}
 	if strings.Contains(readOnly, "修改代码或执行命令") {
 		t.Fatalf("只读系统提示仍在鼓励修改：%s", readOnly)
+	}
+	defaultPrompt := systemPrompt("/tmp/johnny work", permissionDefault)
+	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "不要尝试绕过权限层"} {
+		if !strings.Contains(defaultPrompt, want) {
+			t.Fatalf("默认模式系统提示缺少 %q：%s", want, defaultPrompt)
+		}
 	}
 }
 

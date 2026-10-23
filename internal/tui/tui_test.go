@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -216,6 +217,128 @@ func TestMarkdownStreamRendersCompletedBlocks(t *testing.T) {
 	}
 	if m.markdown.Preview() != "" {
 		t.Fatal("提交后仍有未完成预览")
+	}
+}
+
+func TestApprovalPanelDefaultsToDenyAndSupportsRecord(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	response := make(chan tool.ApprovalDecision, 1)
+	m.beginApproval(&approvalDelivery{
+		request: tool.ApprovalRequest{
+			ToolCallID: "call-1", Tool: "bash", WorkDir: "/tmp/work",
+			Target: "go test ./...", Command: "go test ./...", Reason: "命令不在白名单",
+			RecordPrefix: []string{"go", "test"},
+		},
+		response: response,
+	})
+	view := m.View().Content
+	for _, want := range []string{"权限确认", "允许本次", "拒绝本次", "批准并记录", "› 拒绝本次", "将记录", "go test"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("审批面板缺少 %q：%q", want, view)
+		}
+	}
+	m.Update(keyPress(tea.KeyDown))
+	m.Update(keyPress(tea.KeyEnter))
+	decision := <-response
+	if !decision.Allow || !decision.Record || decision.Source != "tui" {
+		t.Fatalf("记录决策异常：%#v", decision)
+	}
+	if m.approval != nil || !strings.Contains(m.status, "已允许并记录") {
+		t.Fatalf("审批后状态异常：approval=%v status=%q", m.approval, m.status)
+	}
+}
+
+func TestApprovalPanelHidesRecordWhenUnavailable(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	m.beginApproval(&approvalDelivery{
+		request:  tool.ApprovalRequest{Tool: "bash", Target: "ls; rm x", Reason: "shell 语法"},
+		response: make(chan tool.ApprovalDecision, 1),
+	})
+	view := m.View().Content
+	if strings.Contains(view, "批准并记录") {
+		t.Fatalf("不可记录时不应显示记录选项：%q", view)
+	}
+	if !strings.Contains(view, "› 拒绝本次") {
+		t.Fatalf("默认焦点应在拒绝：%q", view)
+	}
+}
+
+func TestApprovalGateWaitsForTUIChoice(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	gate := tool.NewApprovalGate()
+	gate.Set(m.requestApproval)
+	done := make(chan tool.ApprovalDecision, 1)
+	errs := make(chan error, 1)
+	go func() {
+		decision, err := gate.Ask(context.Background(), tool.ApprovalRequest{
+			ToolCallID: "call-2", Tool: "read", Target: "/outside/file", Reason: "路径不在白名单",
+		})
+		done <- decision
+		errs <- err
+	}()
+	select {
+	case item := <-m.events:
+		m.receive(item)
+	case <-time.After(time.Second):
+		t.Fatal("审批请求未到达 TUI")
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "路径不在白名单") || !strings.Contains(view, "› 拒绝本次") {
+		t.Fatalf("审批面板内容异常：%q", view)
+	}
+	m.Update(keyPress(tea.KeyEnter))
+	select {
+	case decision := <-done:
+		if decision.Allow {
+			t.Fatalf("默认回车不应允许：%#v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TUI 未回传审批决策")
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("审批返回错误：%v", err)
+	}
+}
+
+func TestApprovalCtrlCCancelsTurn(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	m.cancel = cancel
+	m.beginApproval(&approvalDelivery{
+		request:  tool.ApprovalRequest{Tool: "bash", Target: "make test", Reason: "需要审批"},
+		response: make(chan tool.ApprovalDecision, 1),
+	})
+	m.Update(ctrlPress('c'))
+	if m.approval != nil || !m.stopping {
+		t.Fatalf("Ctrl+C 应取消待审批操作：approval=%v stopping=%v", m.approval, m.stopping)
+	}
+	if turnCtx.Err() == nil {
+		t.Fatal("审批期间 Ctrl+C 应取消本轮 context")
+	}
+}
+
+func TestLocalCommandDoesNotStartTurn(t *testing.T) {
+	m := testModel(t)
+	m.options.LocalCommand = func(line string) (string, bool) {
+		if line != "/permissions" {
+			return "", false
+		}
+		return "权限列表", true
+	}
+	m.input.SetValue("/permissions")
+	_, cmd := m.Update(keyPress(tea.KeyEnter))
+	if m.busy {
+		t.Fatal("本地命令不应启动任务")
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("本地命令后输入未清空：%q", m.input.Value())
+	}
+	if cmd == nil {
+		t.Fatal("本地命令应输出结果")
 	}
 }
 
