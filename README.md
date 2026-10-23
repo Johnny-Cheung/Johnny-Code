@@ -56,7 +56,7 @@ johnny --permission-mode read-only "检查项目结构"
 johnny --permission-mode allow "修改文件"
 ```
 
-- `read-only`：拒绝 `write`、`edit`；`read` 只能读取启动工作目录内的文件（允许读取 `.env` 等敏感文件）；`bash` 只允许 `pwd`、`ls`、`find`、`grep` 的受限查询，不经过 shell，拒绝管道、重定向和复合命令。
+- `read-only`：拒绝 `write`、`edit`；`read` 只能读取启动工作目录内的文件（允许读取 `.env` 等敏感文件）；`bash` 只允许 `pwd`、`ls`、`find`、`grep` 的受限查询，不经过 shell，拒绝管道、重定向和复合命令；不做 shell 通配符展开，按名称查找文件请用 `find -name`。
 - `allow`：默认值，保持当前直接执行四个工具的行为，不进行逐次确认。
 - 只读模式是工具策略，不是操作系统沙箱；允许的命令仍以当前用户权限运行，不能保证绝对不产生副作用或防止敏感内容进入模型和日志。
 - 默认模式的逐次审批和 TUI 批准界面尚未实现，不在当前 `read-only` / `allow` 两个取值内。
