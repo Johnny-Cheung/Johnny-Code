@@ -49,6 +49,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, input io.Reader, output, stderr io.Writer) int {
+	return runWithEntryPolicy(ctx, args, input, output, stderr, true)
+}
+
+// runWithEntryPolicy 是 CLI 内部实现。requireTUI 为 true 时只允许终端中的
+// 无参数 TUI 交互；测试用 false 覆盖旧的参数任务和管道路径。
+func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, output, stderr io.Writer, requireTUI bool) int {
 	flags := flag.NewFlagSet("johnny", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var help, showVersion bool
@@ -79,6 +85,16 @@ func run(ctx context.Context, args []string, input io.Reader, output, stderr io.
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if requireTUI {
+		if len(flags.Args()) > 0 {
+			fmt.Fprintln(stderr, "Johnny-Code 只支持在终端直接运行 johnny 进入 TUI 交互模式，不接受参数任务。")
+			return 1
+		}
+		if !useTUI(input, output) {
+			fmt.Fprintln(stderr, "Johnny-Code 只支持在终端直接运行 johnny 进入 TUI 交互模式；管道和重定向不支持。")
+			return 1
+		}
 	}
 
 	interactive := len(flags.Args()) == 0
@@ -661,25 +677,24 @@ func printHelp(output io.Writer) {
 	fmt.Fprintf(output, `Johnny-Code
 
 用法：
-  johnny "任务"     执行一个任务，完成后退出，不读取标准输入
-  johnny            进入多轮交互，保留本进程历史，直到 /exit 或 EOF
+  johnny            在终端进入 TUI 交互模式，保留本进程历史，直到 /exit 或 EOF
 
 选项：
   -h, --help        显示帮助
   --version         显示版本和提交号
-  --model 名称      临时覆盖模型名（选项放在任务之前）
+  --model 名称      临时覆盖模型名（选项放在 johnny 之后）
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
   --permission-mode 模式  default、read-only 或 allow；默认模式自动执行白名单内操作，其他操作审批（默认 default）
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
 
 交互模式：
+  只支持在终端直接运行 johnny 进入 TUI；参数任务、管道和重定向会被拒绝。
   每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
   /permissions 查看固定权限名单和项目规则；支持 remove-command、remove-path、clear。
-  终端中启用 TUI：Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
-  TUI 中 Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
+  Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
+  Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
   TUI 审批只有允许本次、拒绝本次、批准并记录；等待审批时 Ctrl+C 取消本轮。
   每轮独立计算模型请求次数；单轮失败会说明原因并继续等待输入。
-  管道或重定向使用普通文本；参数任务和普通文本模式中 Ctrl+C 取消并退出（退出码 130）。
 配置文件：%s
 `, agent.DefaultMaxTurns, path)
 }

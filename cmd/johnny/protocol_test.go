@@ -63,7 +63,7 @@ func TestCLIModelSwitchingAcrossAPIs(t *testing.T) {
 			useConfigPath(t, path)
 			for _, name := range []string{"model-a", "model-b"} {
 				var stdout, stderr bytes.Buffer
-				code := run(context.Background(), []string{"--api", api, "--model", name, "你好"}, strings.NewReader(""), &stdout, &stderr)
+				code := runLegacy(context.Background(), []string{"--api", api, "--model", name, "你好"}, strings.NewReader(""), &stdout, &stderr)
 				if code != 0 || stdout.String() != name+"\n" {
 					t.Fatalf("模型 %s 切换失败：code=%d stdout=%q stderr=%s", name, code, stdout.String(), stderr.String())
 				}

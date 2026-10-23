@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -191,7 +192,7 @@ func (d *Default) executeBash(ctx context.Context, call model.ToolCall, argument
 	tokens, tokenErr := tokenizeRestricted(args.Command)
 	if tokenErr == nil {
 		if hit, ok := dangerousSuffixHit(tokens[0], tokens); ok {
-			return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, timeout,
+			return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, nil, timeout,
 				fmt.Sprintf("命中固定危险后缀 %s，不能记录", hit))
 		}
 		if spec, parseErr := buildRestrictedCommand(args.Command, d.scope); parseErr == nil {
@@ -202,15 +203,27 @@ func (d *Default) executeBash(ctx context.Context, call model.ToolCall, argument
 			return d.approveWhitelistOutside(ctx, call, args.Command, spec, outside, timeout)
 		}
 		prefix, recordable := recordablePrefix(tokens)
-		if recordable && d.rules.ContainsPrefix(tokens) {
-			return d.executeDirect(ctx, tokens, timeout)
-		}
 		if recordable {
-			return d.approveBashThenExecute(ctx, call, args.Command, tokens, prefix, timeout,
-				"命令不在用户级白名单或项目前缀白名单")
+			outside, pathErr := d.commandOutsidePaths(tokens)
+			if pathErr != nil {
+				return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, nil, timeout,
+					"命令包含无法解析的路径参数，不能自动放行")
+			}
+			if d.rules.ContainsPrefix(tokens) {
+				if len(outside) == 0 {
+					return d.executeDirect(ctx, tokens, timeout)
+				}
+				return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, outside, timeout,
+					"命令路径不在项目路径白名单")
+			}
+			reason := "命令不在用户级白名单或项目前缀白名单"
+			if len(outside) > 0 {
+				reason += "，且路径不在项目路径白名单"
+			}
+			return d.approveBashThenExecute(ctx, call, args.Command, tokens, prefix, outside, timeout, reason)
 		}
 	}
-	return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, timeout,
+	return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, nil, timeout,
 		bashApprovalReason(tokenErr, tokens))
 }
 
@@ -224,11 +237,7 @@ func (d *Default) approveWhitelistOutside(ctx context.Context, call model.ToolCa
 		Reason:     "查询路径不在项目路径白名单",
 	}
 	if d.rules.CanRecord() {
-		for _, path := range outside {
-			if rule, err := canonicalPathRule(path, ""); err == nil {
-				request.RecordPaths = append(request.RecordPaths, rule)
-			}
-		}
+		request.RecordPaths = d.recordPathRules(outside)
 	}
 	decision, err := d.approve(ctx, request)
 	if err != nil {
@@ -240,7 +249,7 @@ func (d *Default) approveWhitelistOutside(ctx context.Context, call model.ToolCa
 	return executeRestrictedSpec(ctx, d.runtime, spec, timeout)
 }
 
-func (d *Default) approveBashThenExecute(ctx context.Context, call model.ToolCall, command string, tokens, prefix []string, timeout time.Duration, reason string) (Result, error) {
+func (d *Default) approveBashThenExecute(ctx context.Context, call model.ToolCall, command string, tokens, prefix, outside []string, timeout time.Duration, reason string) (Result, error) {
 	request := ApprovalRequest{
 		ToolCallID: call.ID,
 		Tool:       "bash",
@@ -249,8 +258,12 @@ func (d *Default) approveBashThenExecute(ctx context.Context, call model.ToolCal
 		Command:    command,
 		Reason:     reason,
 	}
-	if len(prefix) > 0 && d.rules.CanRecord() {
-		request.RecordPrefix = append([]string(nil), prefix...)
+	if d.rules.CanRecord() {
+		if len(prefix) > 0 {
+			request.RecordPrefix = append([]string(nil), prefix...)
+			request.Detail = prefixExecutionWarning(prefix)
+		}
+		request.RecordPaths = d.recordPathRules(outside)
 	}
 	decision, err := d.approve(ctx, request)
 	if err != nil {
@@ -263,6 +276,46 @@ func (d *Default) approveBashThenExecute(ctx context.Context, call model.ToolCal
 		return d.shell.Execute(ctx, call.Arguments)
 	}
 	return d.executeDirect(ctx, tokens, timeout)
+}
+
+func (d *Default) recordPathRules(paths []string) []PathRule {
+	if !d.rules.CanRecord() {
+		return nil
+	}
+	rules := make([]PathRule, 0, len(paths))
+	seen := make(map[string]bool)
+	for _, path := range paths {
+		rule, err := canonicalPathRule(path, "")
+		if err != nil || seen[rule.Path+"\x00"+string(rule.Kind)] {
+			continue
+		}
+		seen[rule.Path+"\x00"+string(rule.Kind)] = true
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+func prefixExecutionWarning(prefix []string) string {
+	if len(prefix) < 2 {
+		return ""
+	}
+	switch prefix[0] {
+	case "make":
+		return "该前缀会执行 Makefile 目标，脚本内部路径访问不受路径白名单约束。"
+	case "go":
+		if prefix[1] == "test" || prefix[1] == "run" || prefix[1] == "build" {
+			return "该前缀会执行 Go 构建或测试代码，内部路径访问不受路径白名单约束。"
+		}
+	case "cargo":
+		if prefix[1] == "test" || prefix[1] == "run" || prefix[1] == "build" || prefix[1] == "bench" || prefix[1] == "clippy" {
+			return "该前缀会执行 Cargo 构建或测试代码，内部路径访问不受路径白名单约束。"
+		}
+	case "npm", "yarn", "pnpm", "bun":
+		if prefix[1] == "run" || prefix[1] == "test" || prefix[1] == "start" || prefix[1] == "build" {
+			return "该前缀会执行项目脚本，脚本内部路径访问不受路径白名单约束。"
+		}
+	}
+	return ""
 }
 
 func (d *Default) executeDirect(ctx context.Context, tokens []string, timeout time.Duration) (Result, error) {
@@ -284,6 +337,62 @@ func (d *Default) outsidePaths(paths []string) []string {
 		outside = append(outside, path)
 	}
 	return outside
+}
+
+// commandOutsidePaths 对项目前缀命令做可识别的路径参数检查。它只检查
+// 命令行中形似路径的 token 和常见选项值，无法约束脚本内部访问；真正的
+// 硬边界仍需要 OS sandbox。
+func (d *Default) commandOutsidePaths(tokens []string) ([]string, error) {
+	seen := make(map[string]bool)
+	outside := make([]string, 0, 2)
+	for _, candidate := range commandPathCandidates(tokens) {
+		resolved, err := d.scope.resolve(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if d.scope.contains(resolved) || seen[resolved] {
+			continue
+		}
+		seen[resolved] = true
+		outside = append(outside, resolved)
+	}
+	return outside, nil
+}
+
+func commandPathCandidates(tokens []string) []string {
+	candidates := make([]string, 0, 2)
+	for _, token := range tokens[1:] {
+		if token == "" || token == "--" {
+			continue
+		}
+		value := token
+		if strings.HasPrefix(token, "-") {
+			if name, optionValue, ok := strings.Cut(token, "="); ok && name != "" {
+				value = optionValue
+			} else if len(token) > 2 && (token[2] == '/' || token[2] == '.') {
+				value = token[2:]
+			} else {
+				continue
+			}
+		} else if _, optionValue, ok := strings.Cut(token, "="); ok {
+			value = optionValue
+		}
+		if likelyPathToken(value) {
+			candidates = append(candidates, value)
+		}
+	}
+	return candidates
+}
+
+func likelyPathToken(value string) bool {
+	if value == "" || strings.Contains(value, "://") {
+		return false
+	}
+	if filepath.IsAbs(value) || value == "." || value == ".." ||
+		strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") {
+		return true
+	}
+	return strings.ContainsAny(value, `/\`)
 }
 
 func (d *Default) approve(ctx context.Context, request ApprovalRequest) (ApprovalDecision, error) {

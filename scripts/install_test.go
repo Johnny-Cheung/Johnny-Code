@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
@@ -12,8 +13,111 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/creack/pty"
 )
+
+func runInstalledTUI(t *testing.T, binary, work string, env []string) string {
+	t.Helper()
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Rows: 24, Cols: 90}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary)
+	cmd.Dir = work
+	cmd.Env = append(append([]string(nil), env...), "TERM=xterm-256color")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	kill := func() {
+		_ = cmd.Process.Kill()
+		select {
+		case <-waitDone:
+		case <-time.After(time.Second):
+		}
+	}
+	var mu sync.Mutex
+	var output bytes.Buffer
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		buffer := make([]byte, 4096)
+		for {
+			n, err := master.Read(buffer)
+			if n > 0 {
+				mu.Lock()
+				_, _ = output.Write(buffer[:n])
+				mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	waitFor := func(text string, timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			mu.Lock()
+			got := output.String()
+			mu.Unlock()
+			if strings.Contains(got, text) {
+				return true
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+	if !waitFor("Enter 发送", 10*time.Second) {
+		kill()
+		mu.Lock()
+		got := output.String()
+		mu.Unlock()
+		t.Fatalf("安装后的 TUI 未启动：%q", got)
+	}
+	if _, err := master.Write([]byte("你好\r")); err != nil {
+		kill()
+		t.Fatal(err)
+	}
+	if !waitFor("安装成功", 10*time.Second) {
+		kill()
+		mu.Lock()
+		got := output.String()
+		mu.Unlock()
+		t.Fatalf("安装后的 TUI 未返回模型结果：%q", got)
+	}
+	if _, err := master.Write([]byte("/exit\r")); err != nil {
+		kill()
+		t.Fatal(err)
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("安装后的 TUI 退出失败：%v", err)
+		}
+	case <-time.After(10 * time.Second):
+		kill()
+		t.Fatal("安装后的 TUI 未退出")
+	}
+	_ = slave.Close()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return output.String()
+}
 
 func TestInstallUpdateAndCollision(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -119,11 +223,9 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 	}
 
 	binary := filepath.Join(bin, "johnny")
-	cmd := exec.Command(binary, "你好")
-	cmd.Dir, cmd.Env = work, env
-	output, err := cmd.Output()
-	if err != nil || string(output) != "安装成功\n" {
-		t.Fatalf("跨目录调用失败：%v，输出 %q", err, output)
+	tuiOutput := runInstalledTUI(t, binary, work, env)
+	if !strings.Contains(tuiOutput, "安装成功") {
+		t.Fatalf("跨目录 TUI 调用失败，输出 %q", tuiOutput)
 	}
 	sessionLogs, err := filepath.Glob(filepath.Join(home, ".johnny", "sessions", "*.jsonl"))
 	if err != nil || len(sessionLogs) == 0 {
@@ -132,9 +234,9 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(work, ".johnny")); !os.IsNotExist(err) {
 		t.Fatal("工作目录不应创建日志目录")
 	}
-	cmd = exec.Command("bash", "--noprofile", "--rcfile", profile, "-ic", "command -v johnny; johnny --version")
+	cmd := exec.Command("bash", "--noprofile", "--rcfile", profile, "-ic", "command -v johnny; johnny --version")
 	cmd.Dir, cmd.Env = work, env
-	output, err = cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(output), binary) || !strings.Contains(string(output), "johnny v") {
 		t.Fatalf("新 shell 未找到安装的程序：%v\n%s", err, output)
 	}

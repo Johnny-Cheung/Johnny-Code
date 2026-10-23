@@ -37,6 +37,10 @@ func useConfigPath(t *testing.T, path string) {
 	}
 }
 
+func runLegacy(ctx context.Context, args []string, input io.Reader, output, stderr io.Writer) int {
+	return runWithEntryPolicy(ctx, args, input, output, stderr, false)
+}
+
 func assertNoSessionLog(t *testing.T) {
 	t.Helper()
 	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".johnny")); !errors.Is(err, os.ErrNotExist) {
@@ -128,8 +132,8 @@ func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 			if !strings.Contains(output.String(), "v"+version) || !strings.Contains(output.String(), commit) {
 				t.Fatal("版本输出缺少构建信息")
 			}
-		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "不读取标准输入") {
-			t.Fatal("帮助输出缺少双模式、退出方式或现有配置位置")
+		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
+			t.Fatal("帮助输出缺少 TUI 入口、退出方式或现有配置位置")
 		}
 		if stderr.Len() != 0 {
 			t.Fatalf("本地查询不应尝试加载配置：%s", stderr.String())
@@ -160,7 +164,7 @@ func TestInvalidFlagsDoNotRequestOrCreateLogs(t *testing.T) {
 		{"--permission-mode", "bad", "你好"},
 	} {
 		var output, stderr bytes.Buffer
-		if code := run(context.Background(), args, strings.NewReader(""), &output, &stderr); code == 0 {
+		if code := runLegacy(context.Background(), args, strings.NewReader(""), &output, &stderr); code == 0 {
 			t.Fatalf("%v 应返回错误", args)
 		}
 		if stderr.Len() == 0 {
@@ -185,7 +189,7 @@ func TestArgumentModeExecutesOnceWithoutReadingStdin(t *testing.T) {
 	}
 	input := &trackingReader{reader: strings.NewReader("不应读取的下一行\n")}
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"你好"}, input, &output, &stderr)
+	code := runLegacy(context.Background(), []string{"你好"}, input, &output, &stderr)
 	if code != 0 || requests.Load() != 1 || input.reads.Load() != 0 {
 		t.Fatalf("参数模式应只执行一次且不读 stdin：code=%d requests=%d reads=%d stderr=%s", code, requests.Load(), input.reads.Load(), stderr.String())
 	}
@@ -227,7 +231,7 @@ func TestInteractiveMultiTurnKeepsContextAndSingleSessionLog(t *testing.T) {
 	home := os.Getenv("HOME")
 
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), nil, strings.NewReader("first prompt\nsecond prompt\n/exit\n"), &output, &stderr)
+	code := runLegacy(context.Background(), nil, strings.NewReader("first prompt\nsecond prompt\n/exit\n"), &output, &stderr)
 	if code != 0 || requests.Load() != 3 {
 		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
 	}
@@ -295,7 +299,7 @@ func TestInteractiveExitBlankAndEOFDoNotRequestOrLog(t *testing.T) {
 				writeTextResponse(w, "不应出现")
 			})
 			var output, stderr bytes.Buffer
-			code := run(context.Background(), nil, strings.NewReader(tc.input), &output, &stderr)
+			code := runLegacy(context.Background(), nil, strings.NewReader(tc.input), &output, &stderr)
 			if code != 0 || requests.Load() != 0 || output.Len() != 0 {
 				t.Fatalf("应正常退出且不请求模型：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
 			}
@@ -311,7 +315,7 @@ func TestInteractiveProcessesFinalLineWithoutNewline(t *testing.T) {
 		writeTextResponse(w, "answer")
 	})
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), nil, strings.NewReader("first\nsecond"), &output, &stderr)
+	code := runLegacy(context.Background(), nil, strings.NewReader("first\nsecond"), &output, &stderr)
 	if code != 0 || requests.Load() != 2 || output.String() != "answer\nanswer\n" {
 		t.Fatalf("EOF 末行未处理：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
 	}
@@ -333,7 +337,7 @@ func TestInteractiveResetsMaxTurnsForEachUserInput(t *testing.T) {
 		}
 	})
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--max-turns", "2"}, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"--max-turns", "2"}, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
 	if code != 0 || requests.Load() != 3 || output.String() != "first answer\nsecond answer\n" {
 		t.Fatalf("每轮请求预算未重置：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
 	}
@@ -349,7 +353,7 @@ func TestInteractiveContinuesAfterFailedTurn(t *testing.T) {
 		writeTextResponse(w, "recovered")
 	})
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), nil, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
+	code := runLegacy(context.Background(), nil, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
 	if code != 0 || requests.Load() != 2 || output.String() != "recovered\n" {
 		t.Fatalf("失败后应继续下一轮：code=%d requests=%d output=%q stderr=%s", code, requests.Load(), output.String(), stderr.String())
 	}
@@ -365,7 +369,7 @@ func TestInteractiveStopsWhenOutputFails(t *testing.T) {
 		writeTextResponse(w, "answer")
 	})
 	var stderr bytes.Buffer
-	code := run(context.Background(), nil, strings.NewReader("first\nsecond\n/exit\n"), failingWriter{err: errors.New("输出坏了")}, &stderr)
+	code := runLegacy(context.Background(), nil, strings.NewReader("first\nsecond\n/exit\n"), failingWriter{err: errors.New("输出坏了")}, &stderr)
 	if code != 1 || requests.Load() != 1 {
 		t.Fatalf("输出失败应停止会话：code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
 	}
@@ -381,7 +385,7 @@ func TestInteractivePromptShortWriteStopsBeforeRequest(t *testing.T) {
 		writeTextResponse(w, "不应请求")
 	})
 	var output bytes.Buffer
-	code := run(context.Background(), nil, strings.NewReader("first\n/exit\n"), &output, shortWriter{})
+	code := runLegacy(context.Background(), nil, strings.NewReader("first\n/exit\n"), &output, shortWriter{})
 	if code != 1 || requests.Load() != 0 || output.Len() != 0 {
 		t.Fatalf("输入提示短写后不应请求模型：code=%d requests=%d", code, requests.Load())
 	}
@@ -395,7 +399,7 @@ func TestInteractiveReadFailureStops(t *testing.T) {
 		writeTextResponse(w, "不应出现")
 	})
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), nil, failingReader{err: errors.New("读取坏了")}, &output, &stderr)
+	code := runLegacy(context.Background(), nil, failingReader{err: errors.New("读取坏了")}, &output, &stderr)
 	if code != 1 || requests.Load() != 0 || output.Len() != 0 {
 		t.Fatalf("读取失败应退出：code=%d requests=%d output=%q", code, requests.Load(), output.String())
 	}
@@ -451,7 +455,7 @@ func TestCLIToolLoopAndSessionRecord(t *testing.T) {
 	t.Chdir(work)
 
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"创建文件"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"创建文件"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || requests.Load() != 2 {
 		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
 	}
@@ -523,7 +527,7 @@ func TestCLIReadOnlyModeRejectsWritesAndAllowsQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--permission-mode", "read-only", "检查项目"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"--permission-mode", "read-only", "检查项目"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || requests.Load() != 4 {
 		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
 	}
@@ -556,7 +560,7 @@ func TestCLIReadOnlyModeRejectsWritesAndAllowsQueries(t *testing.T) {
 func TestCLIReadOnlyModeNegative(t *testing.T) {
 	// 旧测试环境的 HOME 可能复用；这里只验证非法模式在读取配置前失败。
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--permission-mode", "unknown", "任务"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"--permission-mode", "unknown", "任务"}, strings.NewReader(""), &output, &stderr)
 	if code == 0 || !strings.Contains(stderr.String(), "permission-mode") {
 		t.Fatalf("非法权限模式应失败：code=%d stderr=%s", code, stderr.String())
 	}
@@ -584,7 +588,7 @@ func TestDefaultModeNonInteractiveDeniesApproval(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || !strings.Contains(output.String(), "DONE") {
 		t.Fatalf("默认模式非交互任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
 	}
@@ -647,7 +651,7 @@ func TestDefaultModeAutoAllowsWhitelistQuery(t *testing.T) {
 	}
 
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || !strings.Contains(output.String(), "DONE") {
 		t.Fatalf("默认模式自动放行任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
 	}
@@ -661,6 +665,20 @@ func TestDefaultModeAutoAllowsWhitelistQuery(t *testing.T) {
 		if recordType == "permission" {
 			t.Fatal("自动放行的查询不应产生审批记录")
 		}
+	}
+}
+
+func TestRunRequiresTerminalTUI(t *testing.T) {
+	var output, stderr bytes.Buffer
+	code := run(context.Background(), []string{"任务"}, strings.NewReader(""), &output, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "不接受参数任务") {
+		t.Fatalf("参数任务应被拒绝：code=%d stderr=%s", code, stderr.String())
+	}
+	output.Reset()
+	stderr.Reset()
+	code = run(context.Background(), nil, strings.NewReader(""), &output, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "管道和重定向不支持") {
+		t.Fatalf("非终端输入应被拒绝：code=%d stderr=%s", code, stderr.String())
 	}
 }
 
@@ -763,7 +781,7 @@ func TestSessionCreationFailureDegrades(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var output, stderr bytes.Buffer
-	code := run(context.Background(), []string{"你好"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"你好"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || output.String() != "答复\n" {
 		t.Fatalf("日志失败不应影响任务：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
 	}
@@ -800,7 +818,7 @@ func TestCancellationReturns130(t *testing.T) {
 	finished := make(chan int, 1)
 	var output, stderr bytes.Buffer
 	go func() {
-		finished <- run(ctx, []string{"你好"}, strings.NewReader(""), &output, &stderr)
+		finished <- runLegacy(ctx, []string{"你好"}, strings.NewReader(""), &output, &stderr)
 	}()
 	select {
 	case <-started:
@@ -837,7 +855,7 @@ func TestInteractiveCancellationReturns130(t *testing.T) {
 	finished := make(chan int, 1)
 	var output, stderr bytes.Buffer
 	go func() {
-		finished <- run(ctx, nil, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
+		finished <- runLegacy(ctx, nil, strings.NewReader("first\nsecond\n/exit\n"), &output, &stderr)
 	}()
 	select {
 	case <-started:

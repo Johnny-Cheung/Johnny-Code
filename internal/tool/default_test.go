@@ -264,6 +264,86 @@ func TestDefaultSymlinkOutsideNeedsApproval(t *testing.T) {
 	}
 }
 
+func TestDefaultProjectPrefixRequiresPathWhitelist(t *testing.T) {
+	permissioned, _, rules, approver := defaultTest(t)
+	if err := rules.AddPrefix([]string{"git", "log"}); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := executeDefault(t, permissioned, "bash", map[string]any{"command": "git log " + outside})
+	requireToolKind(t, err, KindPermissionDenied)
+	requests := approver.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("应产生一次路径审批：%#v", requests)
+	}
+	if len(requests[0].RecordPrefix) != 0 || len(requests[0].RecordPaths) != 1 {
+		t.Fatalf("已记录前缀的命令应只补记路径：%#v", requests[0])
+	}
+	if !strings.Contains(requests[0].Reason, "路径不在项目路径白名单") {
+		t.Fatalf("路径审批原因异常：%q", requests[0].Reason)
+	}
+}
+
+func TestDefaultProjectPrefixOffersPrefixAndPaths(t *testing.T) {
+	permissioned, _, _, approver := defaultTest(t)
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := executeDefault(t, permissioned, "bash", map[string]any{"command": "git log " + outside})
+	requireToolKind(t, err, KindPermissionDenied)
+	requests := approver.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("应产生一次审批：%#v", requests)
+	}
+	if !stringSlicesEqual(requests[0].RecordPrefix, []string{"git", "log"}) || len(requests[0].RecordPaths) != 1 {
+		t.Fatalf("未记录命令应同时提供前缀和路径：%#v", requests[0])
+	}
+	if !strings.Contains(requests[0].Reason, "项目前缀") || !strings.Contains(requests[0].Reason, "路径不在") {
+		t.Fatalf("审批原因未说明前缀和路径：%q", requests[0].Reason)
+	}
+}
+
+func TestCommandPathCandidates(t *testing.T) {
+	cases := []struct {
+		tokens []string
+		want   []string
+	}{
+		{[]string{"go", "test", "-o", "/outside", "-coverprofile=/outside2", "./..."}, []string{"/outside", "/outside2", "./..."}},
+		{[]string{"npm", "run", "build", "--", "/outside"}, []string{"/outside"}},
+		{[]string{"make", "test", "VAR=/outside"}, []string{"/outside"}},
+		{[]string{"git", "log", "https://example.com"}, nil},
+		{[]string{"git", "log", "--oneline"}, nil},
+	}
+	for _, c := range cases {
+		got := commandPathCandidates(c.tokens)
+		if !stringSlicesEqual(got, c.want) {
+			t.Fatalf("%v：got %v，want %v", c.tokens, got, c.want)
+		}
+	}
+}
+
+func TestPrefixExecutionWarning(t *testing.T) {
+	for _, prefix := range [][]string{
+		{"make", "test"},
+		{"go", "test"},
+		{"npm", "run", "build"},
+		{"cargo", "run"},
+	} {
+		if prefixExecutionWarning(prefix) == "" {
+			t.Fatalf("脚本前缀应提示内部路径限制：%v", prefix)
+		}
+	}
+	for _, prefix := range [][]string{{"git", "log"}, {"go", "doc"}, {"npm", "test"}} {
+		if prefixExecutionWarning(prefix) != "" && prefix[0] == "git" {
+			t.Fatalf("只读 Git 前缀不应有脚本警告：%v", prefix)
+		}
+	}
+}
+
 func TestDefaultDefinitionsPreserveTools(t *testing.T) {
 	permissioned, _, _, _ := defaultTest(t)
 	definitions := permissioned.Definitions()

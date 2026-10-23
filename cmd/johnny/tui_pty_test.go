@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,7 +36,7 @@ func TestTerminalHelperProcess(t *testing.T) {
 	}
 	configFileBase64 = base64.StdEncoding.EncodeToString([]byte(os.Getenv("JOHNNY_TUI_TEST_CONFIG")))
 	if os.Getenv("JOHNNY_TUI_TEST_PIPE") == "1" {
-		os.Exit(run(context.Background(), []string{"--permission-mode", "allow"}, strings.NewReader("hello\n/exit\n"), os.Stdout, os.Stderr))
+		os.Exit(run(context.Background(), nil, strings.NewReader("hello\n/exit\n"), os.Stdout, os.Stderr))
 	}
 	before, err := term.GetState(os.Stdin.Fd())
 	if err != nil {
@@ -451,10 +452,9 @@ func TestTerminalPTYCancelBashOrTerminate(t *testing.T) {
 	}
 }
 
-func TestTerminalPTYOutputWithPlainReaderStaysPlain(t *testing.T) {
+func TestTerminalPTYPlainReaderIsRejected(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		terminalAnswer(w, "PLAIN_OUTPUT")
+		t.Error("非终端输入不应请求模型")
 	}))
 	defer server.Close()
 	dir, home := t.TempDir(), t.TempDir()
@@ -491,8 +491,9 @@ func TestTerminalPTYOutputWithPlainReaderStaysPlain(t *testing.T) {
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			t.Fatalf("非终端输入应以 1 退出：%v", err)
 		}
 	case <-time.After(5 * time.Second):
 		_ = cmd.Process.Kill()
@@ -502,7 +503,7 @@ func TestTerminalPTYOutputWithPlainReaderStaysPlain(t *testing.T) {
 		case <-done:
 		case <-time.After(time.Second):
 		}
-		t.Fatal("普通文本模式被终端查询阻塞")
+		t.Fatal("非终端输入未被快速拒绝")
 	}
 	_ = slave.Close()
 	var output []byte
@@ -512,8 +513,8 @@ func TestTerminalPTYOutputWithPlainReaderStaysPlain(t *testing.T) {
 		_ = master.Close()
 		output = <-readDone
 	}
-	if !bytes.Contains(output, []byte("PLAIN_OUTPUT")) || bytes.Contains(output, []byte{'\x1b'}) {
-		t.Fatalf("管道输入不应触发 TUI 或颜色查询：%q", output)
+	if !bytes.Contains(output, []byte("只支持在终端")) || bytes.Contains(output, []byte{'\x1b'}) {
+		t.Fatalf("非终端输入应返回纯文本限制提示：%q", output)
 	}
 }
 
