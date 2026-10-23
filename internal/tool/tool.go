@@ -23,6 +23,7 @@ type ErrorKind string
 const (
 	KindInvalidArguments ErrorKind = "invalid_arguments"
 	KindExecution        ErrorKind = "execution"
+	KindPermissionDenied ErrorKind = "permission_denied"
 )
 
 type Error struct {
@@ -49,6 +50,10 @@ func invalidArguments(message string, err error) error {
 
 func executionError(message string, err error) error {
 	return &Error{Kind: KindExecution, Message: message, Err: err}
+}
+
+func permissionDenied(message string, err error) error {
+	return &Error{Kind: KindPermissionDenied, Message: message, Err: err}
 }
 
 func ToModelResult(callID string, result Result, err error) model.ToolResult {
