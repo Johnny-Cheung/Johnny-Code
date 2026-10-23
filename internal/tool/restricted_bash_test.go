@@ -1,10 +1,14 @@
 package tool
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -169,5 +173,163 @@ func TestBuildRestrictedCommandChecksPaths(t *testing.T) {
 	} {
 		_, err := buildRestrictedCommand(command, scope)
 		requireToolKind(t, err, KindExecution)
+	}
+}
+
+func skipWithoutCommand(t *testing.T, name string) {
+	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("系统缺少 %s", name)
+	}
+}
+
+func TestRestrictedBashRunsQueries(t *testing.T) {
+	runtime := testRuntime(t)
+	root := mustEvalSymlinks(t, runtime.WorkDir)
+	if err := os.WriteFile(filepath.Join(runtime.WorkDir, "file.txt"), []byte("hello\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		command string
+		want    string
+	}{
+		{"pwd", root},
+		{"ls -a", "file.txt"},
+		{"find . -maxdepth 1 -type f -name '*.txt'", "file.txt"},
+		{"grep -n hello file.txt", "1:hello"},
+	}
+	for _, c := range cases {
+		skipWithoutCommand(t, strings.Fields(c.command)[0])
+		result, err := b.execute(context.Background(), c.command, nil)
+		if err != nil {
+			t.Fatalf("命令 %q 执行失败：%v", c.command, err)
+		}
+		if !strings.Contains(result.Content, c.want) {
+			t.Fatalf("命令 %q 输出缺少 %q：%q", c.command, c.want, result.Content)
+		}
+	}
+}
+
+func TestRestrictedBashGrepNoMatches(t *testing.T) {
+	skipWithoutCommand(t, "grep")
+	runtime := testRuntime(t)
+	if err := os.WriteFile(filepath.Join(runtime.WorkDir, "file.txt"), []byte("hello\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := b.execute(context.Background(), "grep -n absent file.txt", nil)
+	if err != nil {
+		t.Fatalf("grep 无匹配不应作为执行失败：%v", err)
+	}
+	if !strings.Contains(result.Content, "无匹配") || result.IsError {
+		t.Fatalf("grep 无匹配结果异常：%#v", result)
+	}
+}
+
+func TestRestrictedBashRejectsBeforeStarting(t *testing.T) {
+	runtime := testRuntime(t)
+	if err := os.WriteFile(filepath.Join(runtime.WorkDir, "keep.txt"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		"cat keep.txt",
+		"find . -delete",
+		"grep foo | head",
+		"ls -R",
+	} {
+		_, err := b.execute(context.Background(), command, nil)
+		requireToolKind(t, err, KindPermissionDenied)
+	}
+	content, err := os.ReadFile(filepath.Join(runtime.WorkDir, "keep.txt"))
+	if err != nil || string(content) != "keep" {
+		t.Fatalf("被拒绝的命令产生了副作用：%q %v", content, err)
+	}
+}
+
+func TestRestrictedBashRejectsOutsidePaths(t *testing.T) {
+	runtime := testRuntime(t)
+	outsideBase := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outsideBase, "outside.txt"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.execute(context.Background(), "grep x "+filepath.Join(outsideBase, "outside.txt"), nil)
+	requireToolKind(t, err, KindPermissionDenied)
+}
+
+func TestRestrictedBashCancellation(t *testing.T) {
+	runtime := testRuntime(t)
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := b.execute(ctx, "pwd", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消上下文应直接返回取消错误：%v", err)
+	}
+}
+
+func TestRestrictedBashOutputLimit(t *testing.T) {
+	skipWithoutCommand(t, "find")
+	runtime := testRuntime(t)
+	runtime.MaxOutputBytes = 8
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(runtime.WorkDir, fmt.Sprintf("file-%02d.txt", i)), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := b.execute(context.Background(), "find . -maxdepth 1 -type f -name '*.txt'", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "输出已截断") {
+		t.Fatalf("输出限制未生效：%q", result.Content)
+	}
+}
+
+func TestRestrictedBashMissingProgram(t *testing.T) {
+	runtime := testRuntime(t)
+	b, err := newRestrictedBash(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	_, err = b.execute(context.Background(), "pwd", nil)
+	requireToolKind(t, err, KindExecution)
+}
+
+func TestRestrictedEnvironmentAllowlist(t *testing.T) {
+	base := []string{
+		"PATH=/bin:/usr/bin",
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+		"HOME=/home/user",
+		"JOHNNY_API_KEY=secret",
+		"ANTHROPIC_AUTH_TOKEN=secret",
+		"AWS_SECRET_ACCESS_KEY=secret",
+	}
+	got := restrictedEnvironment(base)
+	want := []string{"PATH=/bin:/usr/bin", "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("环境 allowlist 结果错误：%#v", got)
 	}
 }

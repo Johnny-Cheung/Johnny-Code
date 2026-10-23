@@ -1,10 +1,14 @@
 package tool
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -300,4 +304,121 @@ func queryPathError(path string, err error) error {
 		return permissionDenied(fmt.Sprintf("只读模式不允许访问工作目录外的路径 %q", path), err)
 	}
 	return executionError(fmt.Sprintf("只读查询路径不可用：%s", path), err)
+}
+
+// restrictedBash 执行经过 buildRestrictedCommand 校验的查询命令。它永远
+// 不启动 shell，只直接执行白名单程序。
+type restrictedBash struct {
+	runtime Runtime
+	scope   workspaceScope
+}
+
+func newRestrictedBash(runtime Runtime) (*restrictedBash, error) {
+	runtime = normalizeRuntime(runtime)
+	scope, err := newWorkspaceScope(runtime.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	return &restrictedBash{runtime: runtime, scope: scope}, nil
+}
+
+func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSeconds *int) (Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := contextError(ctx); err != nil {
+		return Result{}, err
+	}
+	if strings.TrimSpace(command) == "" {
+		return Result{}, invalidArguments("bash 的 command 不能为空", nil)
+	}
+	timeout := b.runtime.CommandTimeout
+	if timeoutSeconds != nil {
+		if *timeoutSeconds < 1 || *timeoutSeconds > 600 {
+			return Result{}, invalidArguments("bash 的 timeout_seconds 必须在 1 到 600 之间", nil)
+		}
+		timeout = time.Duration(*timeoutSeconds) * time.Second
+	}
+	spec, err := buildRestrictedCommand(command, b.scope)
+	if err != nil {
+		return Result{}, err
+	}
+	if _, err := exec.LookPath(spec.program); err != nil {
+		return Result{}, executionError(fmt.Sprintf("只读查询命令不可用：%s", spec.program), err)
+	}
+
+	commandCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, spec.program, spec.args...)
+	cmd.Dir = b.runtime.WorkDir
+	cmd.Env = restrictedEnvironment(b.runtime.Env)
+	cmd.WaitDelay = time.Second
+	configureProcess(cmd)
+	cmd.Cancel = func() error { return killProcess(cmd) }
+	stdout := &limitedWriter{limit: b.runtime.MaxOutputBytes}
+	stderr := &limitedWriter{limit: b.runtime.MaxOutputBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	runErr := cmd.Run()
+	_ = killProcess(cmd)
+	if runErr != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return Result{}, parentErr
+		}
+		if cmd.ProcessState != nil && cmd.ProcessState.Success() {
+			return Result{Content: formatBashOutput(stdout.String(), stderr.String(), "")}, nil
+		}
+		if errors.Is(commandCtx.Err(), context.DeadlineExceeded) {
+			content := formatBashOutput(stdout.String(), stderr.String(), "\n[命令执行超时]")
+			return Result{Content: content, IsError: true}, executionError(fmt.Sprintf("命令执行超时（%s）", timeout), context.DeadlineExceeded)
+		}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			code := exitErr.ExitCode()
+			if spec.program == "grep" && code == 1 {
+				content := formatBashOutput(stdout.String(), stderr.String(), "")
+				if strings.TrimSpace(content) == "" {
+					content = "（无匹配）"
+				}
+				return Result{Content: content}, nil
+			}
+			content := formatBashOutput(stdout.String(), stderr.String(), fmt.Sprintf("\n[exit code %d]", code))
+			return Result{Content: content, IsError: true}, executionError(fmt.Sprintf("命令退出码 %d", code), exitErr)
+		}
+		return Result{Content: formatBashOutput(stdout.String(), stderr.String(), ""), IsError: true}, executionError("bash 启动或执行失败", runErr)
+	}
+	if parentErr := ctx.Err(); parentErr != nil {
+		return Result{}, parentErr
+	}
+	return Result{Content: formatBashOutput(stdout.String(), stderr.String(), "")}, nil
+}
+
+// restrictedEnvironment 只保留查询命令运行所需的最小环境，避免把 Johnny、
+// 模型服务和云凭据变量传给子进程。它不是沙箱，命令仍可读取磁盘文件。
+func restrictedEnvironment(base []string) []string {
+	if base == nil {
+		base = os.Environ()
+	}
+	env := make([]string, 0, 8)
+	hasPath := false
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if name == "PATH" {
+			hasPath = true
+			env = append(env, entry)
+			continue
+		}
+		if name == "LANG" || strings.HasPrefix(name, "LC_") {
+			env = append(env, entry)
+		}
+	}
+	if !hasPath {
+		if path := os.Getenv("PATH"); path != "" {
+			env = append(env, "PATH="+path)
+		}
+	}
+	return env
 }
