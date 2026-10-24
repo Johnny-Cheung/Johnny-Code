@@ -1,7 +1,10 @@
 .DS_Store
 /johnny
 /bin/
-.johnny/
+# 项目权限规则和本地状态不进入仓库；项目级 Skill 需要随项目提交。
+.johnny/*
+!.johnny/skills/
+!.johnny/skills/**
 .env
 .env.*
 !.env.example

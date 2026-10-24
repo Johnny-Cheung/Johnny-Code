@@ -24,6 +24,14 @@ func NewConversation(opts Options) *Conversation {
 	return &Conversation{options: opts, seen: make(map[string]bool)}
 }
 
+// SetSystemPrompt 替换后续模型请求的系统提示。调用方必须保证不与 Run 并发。
+func (c *Conversation) SetSystemPrompt(system string) {
+	if c == nil {
+		return
+	}
+	c.options.System = system
+}
+
 // Run 处理一个独立用户任务；每次调用都从新会话开始。
 func Run(ctx context.Context, opts Options, prompt string, emit func(Event) error) (Result, error) {
 	return NewConversation(opts).Run(ctx, prompt, emit)

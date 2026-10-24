@@ -21,6 +21,7 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/config"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
 
@@ -31,7 +32,7 @@ const (
 )
 
 var (
-	version          = "0.7.0"
+	version          = "0.8.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -130,7 +131,9 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
-	registry, err := tool.NewDefaultRegistry(runtime)
+	skills := skill.Discover(runtime.WorkDir)
+	printSkillNotice(stderr, skills)
+	registry, err := tool.NewDefaultRegistryWithSkill(runtime, skills)
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
@@ -167,20 +170,24 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if gate != nil {
 		gate.SetAudit(logs.recordPermission)
 	}
-	localCommand := func(line string) (string, bool) {
-		return handleLocalCommand(line, rules)
-	}
 
 	display := newRenderer(output, stderr)
 	conversation := agent.NewConversation(agent.Options{
 		Client:          client,
 		Tools:           tools,
 		Model:           cfg.Model,
-		System:          systemPrompt(runtime.WorkDir, mode),
+		System:          systemPrompt(runtime.WorkDir, mode, skills),
 		MaxTurns:        *maxTurns,
 		RequestTimeout:  agent.DefaultRequestTimeout,
 		MaxOutputTokens: 4096,
 	})
+	localCommand := newLocalCommandHandler(rules, skills, func() error {
+		if err := skills.Reload(); err != nil {
+			return err
+		}
+		conversation.SetSystemPrompt(systemPrompt(runtime.WorkDir, mode, skills))
+		return nil
+	}).Handle
 
 	if !interactive {
 		printPermissionNotice(stderr, mode)
@@ -204,7 +211,7 @@ func runTask(ctx context.Context, conversation *agent.Conversation, prompt strin
 
 // runInteractive 反复读取用户输入并在同一会话历史上执行。
 // 输入 /exit、EOF 或父 context 取消时结束；单轮模型失败只报告并继续等待。
-func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer, localCommand func(string) (string, bool)) int {
+func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer, localCommand func(string) (localCommandResult, bool)) int {
 	reader := bufio.NewReader(input)
 	for {
 		if err := writeProgress(stderr, "请输入任务："); err != nil {
@@ -225,14 +232,20 @@ func runInteractive(ctx context.Context, conversation *agent.Conversation, input
 		if line == "/exit" {
 			return 0
 		}
+		prompt := line
 		if localCommand != nil {
-			if text, handled := localCommand(line); handled {
-				fmt.Fprintln(stderr, text)
-				continue
+			if result, handled := localCommand(line); handled {
+				if result.Prompt == "" {
+					if result.Output != "" {
+						fmt.Fprintln(stderr, result.Output)
+					}
+					continue
+				}
+				prompt = result.Prompt
 			}
 		}
 
-		result, runErr, displayErr := executeTurn(ctx, conversation, line, logs, display)
+		result, runErr, displayErr := executeTurn(ctx, conversation, prompt, logs, display)
 		if displayErr != nil {
 			return reportError(stderr, "任务失败：", displayErr)
 		}
@@ -279,7 +292,15 @@ func printPermissionNotice(output io.Writer, mode permissionMode) {
 	}
 }
 
-func systemPrompt(workDir string, mode permissionMode) string {
+func systemPrompt(workDir string, mode permissionMode, skills *skill.Store) string {
+	base := systemPromptBase(workDir, mode)
+	if section := skills.Prompt(); section != "" {
+		base += "\n\n" + section
+	}
+	return base
+}
+
+func systemPromptBase(workDir string, mode permissionMode) string {
 	if mode == permissionReadOnly {
 		return fmt.Sprintf(`你是 Johnny-Code，一个在用户本地工作目录中执行任务的编程助手。
 当前工作目录：%s
@@ -442,6 +463,7 @@ func toolKey(call *model.ToolCall) string {
 	var args struct {
 		Path    string `json:"path"`
 		Command string `json:"command"`
+		Name    string `json:"name"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return ""
@@ -449,7 +471,10 @@ func toolKey(call *model.ToolCall) string {
 	if args.Command != "" {
 		return args.Command
 	}
-	return args.Path
+	if args.Path != "" {
+		return args.Path
+	}
+	return args.Name
 }
 
 // toolPreview 只影响终端显示，不改变回传模型的工具结果。
@@ -702,6 +727,7 @@ func printHelp(output io.Writer) {
   只支持在终端直接运行 johnny 进入 TUI；参数任务、管道和重定向会被拒绝。
   每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
   /permissions 查看固定权限名单和项目规则；支持 remove-command、remove-path、clear。
+  /skills 查看已加载 Skill；/skills reload 重新扫描；/skill <name> [参数] 显式使用。
   Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
   Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
   TUI 审批只有允许本次、拒绝本次、批准并记录；等待审批时 Ctrl+C 取消本轮。

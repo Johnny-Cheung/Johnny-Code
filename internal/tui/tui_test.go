@@ -323,11 +323,11 @@ func TestApprovalCtrlCCancelsTurn(t *testing.T) {
 
 func TestLocalCommandDoesNotStartTurn(t *testing.T) {
 	m := testModel(t)
-	m.options.LocalCommand = func(line string) (string, bool) {
+	m.options.LocalCommand = func(line string) (LocalCommandResult, bool) {
 		if line != "/permissions" {
-			return "", false
+			return LocalCommandResult{}, false
 		}
-		return "权限列表", true
+		return LocalCommandResult{Output: "权限列表"}, true
 	}
 	m.input.SetValue("/permissions")
 	_, cmd := m.Update(keyPress(tea.KeyEnter))
@@ -339,6 +339,37 @@ func TestLocalCommandDoesNotStartTurn(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("本地命令应输出结果")
+	}
+}
+
+func TestLocalCommandExpandedPromptKeepsDisplay(t *testing.T) {
+	m := testModel(t)
+	received := make(chan string, 1)
+	m.options.LocalCommand = func(line string) (LocalCommandResult, bool) {
+		if line != "/skill demo 参数" {
+			return LocalCommandResult{}, false
+		}
+		return LocalCommandResult{Prompt: "展开后的 Skill 正文"}, true
+	}
+	m.options.RunTurn = func(_ context.Context, prompt string, _ func(Event) error, _ func(string)) (agent.Result, error) {
+		received <- prompt
+		return agent.Result{Status: agent.StatusCompleted}, nil
+	}
+	m.input.SetValue("/skill demo 参数")
+	m.Update(keyPress(tea.KeyEnter))
+	select {
+	case got := <-received:
+		if got != "展开后的 Skill 正文" {
+			t.Fatalf("模型收到的任务错误：%q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("展开的本地命令未启动任务")
+	}
+	if !m.busy {
+		t.Fatal("展开的本地命令应进入执行状态")
+	}
+	if len(m.history) == 0 || m.history[len(m.history)-1] != "/skill demo 参数" {
+		t.Fatalf("输入历史应保留用户原始命令：%v", m.history)
 	}
 }
 

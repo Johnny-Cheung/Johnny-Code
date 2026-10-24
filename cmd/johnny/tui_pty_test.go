@@ -253,6 +253,75 @@ func TestTerminalPTYDefaultModeApproval(t *testing.T) {
 	}
 }
 
+func TestTerminalPTYSkillReloadAndInvocation(t *testing.T) {
+	var count atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		switch count.Add(1) {
+		case 1:
+			if !strings.Contains(string(body), "## 可用 Skills") || !strings.Contains(string(body), "go-test [项目]：PTY 测试技能。") {
+				t.Errorf("重载后的系统提示缺少 Skill 元数据：%s", body)
+			}
+			if strings.Contains(string(body), "PTY_SKILL_BODY") {
+				t.Errorf("系统提示不应包含 Skill 正文：%s", body)
+			}
+			terminalTools(w, []map[string]any{{
+				"type": "tool_use", "id": "skill-auto", "name": "skill",
+				"input": map[string]any{"name": "go-test", "arguments": "自动参数"},
+			}})
+		case 2:
+			if !strings.Contains(string(body), "PTY_SKILL_BODY 执行 自动参数。") {
+				t.Errorf("模型调用 skill 后缺少正文：%s", body)
+			}
+			terminalAnswer(w, "SKILL_OK")
+		case 3:
+			if !strings.Contains(string(body), "PTY_SKILL_BODY 执行 显式参数。") {
+				t.Errorf("/skill 展开后缺少参数替换：%s", body)
+			}
+			terminalAnswer(w, "EXPLICIT_OK")
+		default:
+			t.Errorf("不应发出第 %d 次请求", count.Load())
+			terminalAnswer(w, "多余")
+		}
+	}))
+	defer server.Close()
+	p := startTerminalMode(t, server.URL, "default")
+	p.write(t, "/skills\r")
+	end := p.expect(t, 0, "未发现 Skill")
+	writeCommandSkill(t, filepath.Join(p.dir, ".johnny", "skills"), "go-test", "PTY 测试技能。", "PTY_SKILL_BODY 执行 $ARGUMENTS。")
+	p.write(t, "/skills reload\r")
+	end = p.expect(t, end, "Skill 已重载")
+	p.expect(t, end, "go-test")
+	end = p.expect(t, end, "[项目]")
+	runStart := end
+	p.write(t, "run\r")
+	end = p.expect(t, end, "SKILL_OK")
+	runText := p.text()[runStart:end]
+	if !strings.Contains(runText, "skill") || !strings.Contains(runText, "go-test") {
+		t.Fatalf("运行期间应显示 skill 工具和名称：%s", runText)
+	}
+	p.write(t, "/skill go-test 显式参数\r")
+	end = p.expect(t, end, "EXPLICIT_OK")
+	if strings.Contains(p.text(), "PTY_SKILL_BODY") {
+		t.Fatalf("终端不应显示 Skill 正文：%s", p.text())
+	}
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+	logs, _ := filepath.Glob(filepath.Join(p.home, ".johnny", "sessions", "*.jsonl"))
+	if len(logs) != 1 {
+		t.Fatalf("应生成一份会话记录：%v", logs)
+	}
+	log, _ := os.ReadFile(logs[0])
+	for _, want := range []string{`"skill"`, "PTY_SKILL_BODY 执行 自动参数。"} {
+		if !bytes.Contains(log, []byte(want)) {
+			t.Fatalf("会话记录缺少 %q：%s", want, log)
+		}
+	}
+}
+
 func TestTerminalPTYDefaultModeBashChainApproval(t *testing.T) {
 	var count atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

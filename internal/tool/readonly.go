@@ -44,6 +44,8 @@ func (r *ReadOnly) Definitions() []model.ToolDefinition {
 			definitions[i].Description += " 只读模式仅允许读取工作目录内文件。"
 		case "bash":
 			definitions[i].Description += " 只读模式只支持用户级只读查询白名单，不经过 shell；允许固定查询命令组成的两段只读管道。"
+		case "skill":
+			definitions[i].Description += " 只读模式可以加载已发现的 Skill。"
 		case "write", "edit":
 			definitions[i].Description += " 只读模式下此工具会被拒绝。"
 		}
@@ -75,6 +77,9 @@ func (r *ReadOnly) Execute(ctx context.Context, call model.ToolCall) (Result, er
 		return r.deny(fmt.Sprintf("只读模式不允许使用 %s 修改文件；如需写入请切换到放行模式", call.Name))
 	case "bash":
 		return r.executeBash(ctx, arguments)
+	case "skill":
+		// Skill 只读取已加载的本地指导，不修改文件，也不接受路径参数。
+		return r.base.Execute(ctx, call)
 	default:
 		// 已注册但未显式授权的工具默认拒绝，避免以后新增工具意外绕过只读策略。
 		return r.deny(fmt.Sprintf("只读模式未授权工具 %q", call.Name))

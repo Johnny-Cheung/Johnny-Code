@@ -47,8 +47,15 @@ type Options struct {
 	Version      string
 	Mode         string
 	Gate         *tool.ApprovalGate
-	LocalCommand func(string) (string, bool)
+	LocalCommand func(string) (LocalCommandResult, bool)
 	RunTurn      func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
+}
+
+// LocalCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
+// 但终端只显示用户输入的原始命令；否则只显示 Output。
+type LocalCommandResult struct {
+	Output string
+	Prompt string
 }
 
 type approvalDelivery struct {
@@ -306,8 +313,11 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if m.options.LocalCommand != nil {
-				if text, handled := m.options.LocalCommand(prompt); handled {
-					return m, m.showLocalResult(prompt, text)
+				if result, handled := m.options.LocalCommand(prompt); handled {
+					if result.Prompt != "" {
+						return m, m.startExpanded(result.Prompt, prompt)
+					}
+					return m, m.showLocalResult(prompt, result.Output)
 				}
 			}
 			return m, m.start(prompt)
@@ -362,6 +372,15 @@ func (m *terminalModel) navigateHistory(direction int) {
 }
 
 func (m *terminalModel) start(prompt string) tea.Cmd {
+	return m.startExpanded(prompt, prompt)
+}
+
+// startExpanded 把 prompt 发送给模型，但历史记录和滚动区只显示 display。
+// 用于 /skill 这类本地展开：实际上下文包含完整 Skill 正文，界面仍显示用户输入。
+func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
+	if display == "" {
+		display = prompt
+	}
 	m.busy, m.stopping = true, false
 	m.status = "正在等待模型回复…"
 	m.pendingReady = nil
@@ -370,7 +389,7 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 	m.resetResponse()
 	m.input.Reset()
 	m.input.Blur()
-	m.history = append(m.history, prompt)
+	m.history = append(m.history, display)
 	m.historyIndex, m.draft = len(m.history), ""
 	m.resizeInput()
 	turnCtx, cancel := context.WithCancel(m.ctx)
@@ -415,7 +434,7 @@ func (m *terminalModel) start(prompt string) tea.Cmd {
 		case <-m.ctx.Done():
 		}
 	}()
-	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(prompt)+"\n", m.contentWidth())), m.waitEvent())
+	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth())), m.waitEvent())
 }
 
 func (m *terminalModel) requestApproval(ctx context.Context, request tool.ApprovalRequest) (tool.ApprovalDecision, error) {

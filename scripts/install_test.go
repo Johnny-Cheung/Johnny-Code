@@ -143,7 +143,7 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 		}
 	}
 	names := []string{"go.mod", "go.sum", "scripts/install.sh"}
-	for _, packageDir := range []string{"cmd/johnny", "internal/config", "internal/model", "internal/tool", "internal/agent", "internal/session", "internal/tui"} {
+	for _, packageDir := range []string{"cmd/johnny", "internal/config", "internal/model", "internal/tool", "internal/agent", "internal/session", "internal/skill", "internal/tui"} {
 		err := filepath.WalkDir(filepath.Join(root, packageDir), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err

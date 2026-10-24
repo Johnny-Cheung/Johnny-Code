@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 )
 
 func useConfigPath(t *testing.T, path string) {
@@ -488,6 +490,63 @@ func TestCLIToolLoopAndSessionRecord(t *testing.T) {
 	}
 }
 
+func TestCLISkillDiscoveryAndToolLoad(t *testing.T) {
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		count := requests.Add(1)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		switch count {
+		case 1:
+			if !strings.Contains(string(body), "## 可用 Skills") || !strings.Contains(string(body), "- go-test [项目]：运行 Go 测试时使用。") {
+				t.Errorf("第一次请求缺少 Skill 元数据：%s", body)
+			}
+			if strings.Contains(string(body), "执行 修复 TestFoo 并检查结果。") {
+				t.Errorf("系统提示不应包含 Skill 正文：%s", body)
+			}
+			writeToolUseResponse(w, "加载 Skill。", "toolu_skill_1", "skill", `{"name":"go-test","arguments":"修复 TestFoo"}`)
+		case 2:
+			if !strings.Contains(string(body), "执行 修复 TestFoo 并检查结果。") {
+				t.Errorf("第二次请求缺少 Skill 工具结果：%s", body)
+			}
+			writeTextResponse(w, "完成")
+		default:
+			t.Errorf("不应发出第 %d 次请求", count)
+			writeTextResponse(w, "多余")
+		}
+	})
+	work := t.TempDir()
+	writeCommandSkill(t, filepath.Join(work, ".johnny", "skills"), "go-test", "运行 Go 测试时使用。", "执行 $ARGUMENTS 并检查结果。")
+	t.Chdir(work)
+
+	var output, stderr bytes.Buffer
+	code := runLegacy(context.Background(), []string{"--permission-mode", "default", "使用技能"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || requests.Load() != 2 {
+		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
+	}
+	if !strings.Contains(output.String(), "完成") {
+		t.Fatalf("最终回答缺失：%q", output.String())
+	}
+	if !strings.Contains(stderr.String(), "Skill：已加载 1 个") || !strings.Contains(stderr.String(), "[skill] go-test") {
+		t.Fatalf("启动提示或工具显示缺失：%s", stderr.String())
+	}
+	logs, err := filepath.Glob(filepath.Join(os.Getenv("HOME"), ".johnny", "sessions", "*.jsonl"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("应生成一条会话记录：%v %v", logs, err)
+	}
+	record, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"skill"`, "执行 修复 TestFoo 并检查结果。"} {
+		if !strings.Contains(string(record), want) {
+			t.Fatalf("会话记录缺少 %q：%s", want, record)
+		}
+	}
+}
+
 func TestCLIReadOnlyModeRejectsWritesAndAllowsQueries(t *testing.T) {
 	var requests atomic.Int32
 	server := newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -707,13 +766,13 @@ func (f *failingRecorder) Close() error {
 }
 
 func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
-	prompt := systemPrompt("/tmp/johnny work", permissionAllow)
+	prompt := systemPrompt("/tmp/johnny work", permissionAllow, nil)
 	for _, want := range []string{"/tmp/johnny work", "当前工作目录", "使用可用工具实际", "工具成功返回", "围栏代码块"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("系统提示缺少 %q：%s", want, prompt)
 		}
 	}
-	readOnly := systemPrompt("/tmp/johnny work", permissionReadOnly)
+	readOnly := systemPrompt("/tmp/johnny work", permissionReadOnly, nil)
 	for _, want := range []string{"/tmp/johnny work", "只读", "pwd", "ls", "find", "grep", "两段固定查询管道", "--permission-mode default", "不要尝试 write、edit"} {
 		if !strings.Contains(readOnly, want) {
 			t.Fatalf("只读系统提示缺少 %q：%s", want, readOnly)
@@ -722,11 +781,44 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 	if strings.Contains(readOnly, "修改代码或执行命令") {
 		t.Fatalf("只读系统提示仍在鼓励修改：%s", readOnly)
 	}
-	defaultPrompt := systemPrompt("/tmp/johnny work", permissionDefault)
+	defaultPrompt := systemPrompt("/tmp/johnny work", permissionDefault, nil)
 	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "不要尝试绕过权限层"} {
 		if !strings.Contains(defaultPrompt, want) {
 			t.Fatalf("默认模式系统提示缺少 %q：%s", want, defaultPrompt)
 		}
+	}
+}
+
+func TestSystemPromptIncludesSkillMetadataOnly(t *testing.T) {
+	work, home := t.TempDir(), t.TempDir()
+	dir := filepath.Join(work, ".johnny", "skills", "go-test")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: go-test\ndescription: 运行 Go 测试时使用。\n---\n系统提示不应包含这段正文。"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := skill.DiscoverWithHome(work, home)
+	prompt := systemPrompt(work, permissionDefault, store)
+	for _, want := range []string{"## 可用 Skills", "- go-test [项目]：运行 Go 测试时使用。", "不能授予权限"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("系统提示缺少 %q：%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "系统提示不应包含这段正文") {
+		t.Fatalf("系统提示不应包含 Skill 正文：%s", prompt)
+	}
+	empty := systemPrompt(work, permissionDefault, skill.DiscoverWithHome(t.TempDir(), t.TempDir()))
+	if strings.Contains(empty, "可用 Skills") {
+		t.Fatalf("没有 Skill 时不应注入区块：%s", empty)
+	}
+}
+
+func TestToolKeyIncludesSkillName(t *testing.T) {
+	key := toolKey(&model.ToolCall{Name: "skill", Arguments: []byte(`{"name":"go-test"}`)})
+	if key != "go-test" {
+		t.Fatalf("skill 工具显示名错误：%q", key)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 )
 
 var toolNamePattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
@@ -59,6 +60,25 @@ func NewDefaultRegistry(runtime Runtime) (*Registry, error) {
 		NewRead(runtime),
 		NewEdit(runtime),
 		NewWrite(runtime),
+	)
+}
+
+// NewDefaultRegistryWithSkill 在四个内置工具之外注册 skill 工具。
+func NewDefaultRegistryWithSkill(runtime Runtime, skills *skill.Store) (*Registry, error) {
+	skillTool, err := NewSkillTool(skills)
+	if err != nil {
+		return nil, err
+	}
+	runtime = normalizeRuntime(runtime)
+	if strings.TrimSpace(runtime.WorkDir) == "" {
+		return nil, errorsForRegistry("工具运行时工作目录不能为空")
+	}
+	return NewRegistry(
+		NewBash(runtime),
+		NewRead(runtime),
+		NewEdit(runtime),
+		NewWrite(runtime),
+		skillTool,
 	)
 }
 
