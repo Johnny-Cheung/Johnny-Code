@@ -37,7 +37,10 @@ TUI 操作：
 | `Alt+Enter` 或 `Ctrl+J` | 输入换行；Alt 组合键需要终端发送相应按键序列 |
 | 粘贴多行文本 | 保留换行，按 Enter 后才提交；使用终端自带粘贴快捷键 |
 | 左右方向键、Home/End、删除键 | 编辑输入 |
-| 上下方向键 | 在多行内移动；位于首行/末行时切换本进程输入历史，向下返回未发送草稿 |
+| 上下方向键 | 在多行内移动；位于首行/末行时切换本进程输入历史；斜杠菜单打开时改为选择菜单项 |
+| 输入 `/` | 在输入框上方打开 Skill 和内置命令菜单；继续输入自动过滤 |
+| 菜单中 `Enter` 或 `Tab` | 补全选中的命令；完整命令直接按 `Enter` 执行 |
+| 菜单中 `Esc` | 关闭菜单；清空输入后重新输入 `/` 可再次打开 |
 | 中文等输入法 | 组合文本和候选窗口跟随输入框中的真实光标位置 |
 | 任务执行中 | 输入框上方实时逐条显示工具名、路径或命令和执行状态 |
 | 本轮结束按 `Ctrl+O` | 展开最近一次工具过程；默认折叠为一行摘要 |
@@ -97,6 +100,9 @@ description: 当需要运行 Go 测试、定位失败用例或补充回归测试
 ```
 
 - 启动时只解析名称、描述和正文；系统提示只注入名称、描述和来源，正文不进入上下文。
+- 输入 `/` 会在输入框上方打开斜杠菜单，列出全部 Skill 和内置命令；继续输入按名称过滤，`↑`/`↓` 选择，`Enter` 或 `Tab` 补全，`Esc` 关闭。选中后会补全为 `/skill-name ` 并留一个空格，便于继续输入参数。
+- 每个 Skill 同时是独立的 `/skill-name` 命令，例如 `/hello-file`、`/report-maker`；原来的 `/skill <name> [参数]` 继续保留。输入完整命令后直接 `Enter` 执行；只输入前缀时第一次 `Enter` 补全，第二次执行。
+- 内置命令优先于同名 Skill；例如 Skill 名为 `exit` 时，`/exit` 仍然是退出，使用该 Skill 需要输入 `/skill exit`。
 - 模型判断任务匹配后调用 `skill` 工具加载完整正文；`/skill <name> [参数]` 可以直接显式加载，正文进入本轮任务但不写入终端滚动历史。
 - 项目级与用户级同名时项目级覆盖用户级；项目级 Skill 自动加载，不额外请求信任确认；无效项不会阻断启动，`/skills` 显示原因。
 - `/skills reload` 重新扫描并更新后续轮次的系统提示；任一目录无法读取时保留原集合。
@@ -194,9 +200,9 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载和 `/skill` 本地展开、PTY 自动与显式调用；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
+测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
-统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
+统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，斜杠菜单在 `internal/tui/slash_menu.go`，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
 
 手动验证工具：
 
