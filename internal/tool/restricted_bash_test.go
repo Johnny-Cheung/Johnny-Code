@@ -117,7 +117,7 @@ func TestBuildRestrictedCommandRejectsCommandsAndOptions(t *testing.T) {
 	for _, command := range []string{
 		"sed -n 1p file.txt",
 		"sh -c id",
-		"grep foo | head",
+		"ls | cat",
 		"ls > out",
 		"pwd extra",
 		"ls -R",
@@ -281,7 +281,7 @@ func TestRestrictedBashRejectsBeforeStarting(t *testing.T) {
 	}
 	for _, command := range []string{
 		"find . -delete",
-		"grep foo | head",
+		"ls | cat",
 		"ls -R",
 	} {
 		_, err := b.execute(context.Background(), command, nil)

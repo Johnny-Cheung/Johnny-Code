@@ -224,7 +224,7 @@ func TestDefaultDangerousSuffixAndShellSyntaxDoNotRecord(t *testing.T) {
 	}{
 		{"git log --output=out.txt", "危险后缀"},
 		{"rm keep.txt", "命令不在"},
-		{"ls; rm keep.txt", "shell 语法"},
+		{"ls; rm keep.txt", "分段命令不在"},
 	}
 	for _, c := range cases {
 		approver.setRequests(nil)

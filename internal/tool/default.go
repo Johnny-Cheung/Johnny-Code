@@ -60,7 +60,7 @@ func (d *Default) Definitions() []model.ToolDefinition {
 		case "write", "edit":
 			definitions[i].Description += " 默认模式自动执行路径白名单内修改，范围外需要审批。"
 		case "bash":
-			definitions[i].Description += " 默认模式按分段检查用户级查询白名单或已记录的项目命令前缀；受控的 cd && 简单命令链可自动执行，其他命令需要审批。"
+			definitions[i].Description += " 默认模式按分段检查用户级查询白名单或已记录的项目命令前缀；受控的 cd && 简单命令链、|| 和 ; 可按规则执行，只读模式支持固定查询两段管道，其他命令需要审批。"
 		}
 	}
 	return definitions
@@ -179,6 +179,7 @@ func previewForApproval(text string) string {
 
 type chainSegmentPlan struct {
 	index      int
+	operator   string
 	tokens     []string
 	cwd        string
 	cd         bool
@@ -199,6 +200,7 @@ type chainPlan struct {
 	recordPaths    []PathRule
 	auto           bool
 	recordable     bool
+	hasOr          bool
 	reason         string
 }
 
@@ -311,10 +313,14 @@ func (d *Default) analyzeBashChain(chain bashChain) (chainPlan, error) {
 	for index, segment := range chain.segments {
 		part := chainSegmentPlan{
 			index:      index + 1,
+			operator:   segment.operator,
 			tokens:     append([]string(nil), segment.tokens...),
 			cwd:        currentDir,
 			auto:       true,
 			recordable: true,
+		}
+		if segment.operator == "||" {
+			plan.hasOr = true
 		}
 		if segment.tokens[0] == "cd" {
 			resolved, err := d.scope.resolveExistingFrom(currentDir, segment.tokens[1])
@@ -409,6 +415,11 @@ func (d *Default) analyzeBashChain(chain bashChain) (chainPlan, error) {
 		plan.segments = append(plan.segments, part)
 		plan.auto = false
 	}
+	if plan.hasOr {
+		plan.recordable = false
+		plan.recordPrefixes = nil
+		plan.recordPaths = nil
+	}
 	return plan, nil
 }
 
@@ -463,8 +474,29 @@ func executeChainPlan(ctx context.Context, runtime Runtime, plan chainPlan, time
 		}
 		truncated = true
 	}
-	for _, segment := range plan.segments {
+
+	lastCode := 0
+	var lastResult Result
+	var lastErr error
+	lastCompleted := true
+	for index, segment := range plan.segments {
+		if index > 0 {
+			switch segment.operator {
+			case "&&":
+				if lastCode != 0 {
+					continue
+				}
+			case "||":
+				if lastCode == 0 {
+					continue
+				}
+			case ";":
+				// Always execute after a completed command.
+			}
+		}
 		if segment.cd {
+			lastCode = 0
+			lastCompleted = true
 			continue
 		}
 		remaining := time.Until(deadline)
@@ -473,29 +505,36 @@ func executeChainPlan(ctx context.Context, runtime Runtime, plan chainPlan, time
 		}
 		segmentRuntime := runtime
 		segmentRuntime.WorkDir = segment.cwd
-		var result Result
-		var err error
+		var outcome argvOutcome
 		if segment.query != nil {
-			result, err = executeRestrictedSpec(ctx, segmentRuntime, *segment.query, remaining)
+			outcome = executeRestrictedSpecOutcome(ctx, segmentRuntime, *segment.query, remaining)
 		} else {
 			if len(segment.tokens) == 0 {
 				return Result{Content: output.String(), IsError: true}, invalidArguments("命令链包含空分段", nil)
 			}
 			spec := restrictedCommand{program: segment.tokens[0], args: append([]string(nil), segment.tokens[1:]...)}
-			result, err = executeArgv(ctx, segmentRuntime, spec, remaining, segmentRuntime.Env, nil)
+			outcome = executeArgvOutcome(ctx, segmentRuntime, spec, remaining, segmentRuntime.Env, nil)
 		}
-		appendOutput(result.Content)
-		if err != nil {
+		appendOutput(outcome.result.Content)
+		lastResult, lastErr, lastCode = outcome.result, outcome.err, outcome.exitCode
+		lastCompleted = outcome.err == nil || outcome.exitCode >= 0
+		if outcome.err != nil && outcome.exitCode < 0 {
 			content := output.String()
 			if truncated && !strings.HasSuffix(content, "\n[输出已截断：超过限制，已省略后续内容]") {
 				content += "\n[输出已截断：超过限制，已省略后续内容]"
 			}
-			return Result{Content: content, IsError: true}, err
+			return Result{Content: content, IsError: true}, outcome.err
 		}
 	}
 	content := output.String()
 	if truncated {
 		content += "\n[输出已截断：超过限制，已省略后续内容]"
+	}
+	if !lastCompleted {
+		return Result{Content: content, IsError: true}, lastErr
+	}
+	if lastCode != 0 {
+		return Result{Content: content, IsError: lastResult.IsError}, lastErr
 	}
 	return Result{Content: content}, nil
 }

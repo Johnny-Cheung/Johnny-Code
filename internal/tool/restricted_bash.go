@@ -15,9 +15,10 @@ import (
 // 只保留已经校验过的程序和参数。paths 保存已经解析的路径操作数，供默认
 // 模式判断是否需要路径审批。
 type restrictedCommand struct {
-	program string
-	args    []string
-	paths   []string
+	program    string
+	args       []string
+	paths      []string
+	readsStdin bool
 }
 
 type queryPathResolver interface {
@@ -342,6 +343,13 @@ func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSec
 	if err != nil {
 		return Result{}, err
 	}
+	if _, claimed := splitReadonlyPipeline(command); claimed {
+		pipeline, err := buildRestrictedPipeline(command, b.scope)
+		if err != nil {
+			return Result{}, err
+		}
+		return executeRestrictedPipelineWithTimeout(ctx, b.runtime, pipeline, timeout)
+	}
 	spec, err := buildRestrictedCommand(command, b.scope)
 	if err != nil {
 		return Result{}, err
@@ -349,16 +357,21 @@ func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSec
 	return executeRestrictedSpec(ctx, b.runtime, spec, timeout)
 }
 
-func executeRestrictedSpec(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) (Result, error) {
+func executeRestrictedSpecOutcome(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) argvOutcome {
 	successExitCodes := map[int]bool{}
 	if spec.program == "grep" || spec.program == "diff" {
 		successExitCodes[1] = true
 	}
-	result, err := executeArgv(ctx, runtime, spec, timeout, restrictedEnvironment(runtime.Env), successExitCodes)
-	if err == nil && spec.program == "grep" && strings.TrimSpace(result.Content) == "" {
-		result.Content = "（无匹配）"
+	outcome := executeArgvOutcome(ctx, runtime, spec, timeout, restrictedEnvironment(runtime.Env), successExitCodes)
+	if outcome.err == nil && spec.program == "grep" && strings.TrimSpace(outcome.result.Content) == "" {
+		outcome.result.Content = "（无匹配）"
 	}
-	return result, err
+	return outcome
+}
+
+func executeRestrictedSpec(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) (Result, error) {
+	outcome := executeRestrictedSpecOutcome(ctx, runtime, spec, timeout)
+	return outcome.result, outcome.err
 }
 
 // restrictedEnvironment 只保留查询命令运行所需的最小环境，避免把 Johnny、

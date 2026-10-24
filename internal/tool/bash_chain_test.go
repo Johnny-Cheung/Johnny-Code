@@ -40,8 +40,8 @@ func TestParseBashChainLeavesUnsupportedShellForApproval(t *testing.T) {
 	for _, command := range []string{
 		"cd sub && ls | head",
 		"cd sub && ls > out",
-		"cd sub && ls; pwd",
-		"cd sub && ls || pwd",
+		"cd sub && ls > out",
+		"cd sub && ls ||",
 		"cd sub && echo $(pwd)",
 		"cd sub && for x in *; do echo $x; done",
 		"ls *.go && pwd",

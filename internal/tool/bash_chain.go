@@ -11,8 +11,9 @@ const maxCommandChainSegments = 8
 var errUnclaimedBashChain = errors.New("命令包含当前分段执行器未覆盖的 shell 语法")
 
 type bashChainSegment struct {
-	text   string
-	tokens []string
+	text     string
+	tokens   []string
+	operator string
 }
 
 type bashChain struct {
@@ -23,7 +24,7 @@ type bashChain struct {
 // parseBashChain 只认默认模式可以安全转换为多个直接 argv 调用的 && 链。
 // 返回 false 表示交给原有单命令/审批路径处理，不代表命令本身无效。
 func parseBashChain(command string) (bashChain, bool) {
-	parts, ok := splitBashChain(command)
+	parts, operators, ok := splitBashChain(command)
 	if !ok || len(parts) < 2 || len(parts) > maxCommandChainSegments {
 		return bashChain{}, false
 	}
@@ -40,18 +41,26 @@ func parseBashChain(command string) (bashChain, bool) {
 		} else if requiresShell(tokens) {
 			return bashChain{}, false
 		}
-		chain.segments = append(chain.segments, bashChainSegment{text: part, tokens: tokens})
+		operator := ""
+		if index > 0 {
+			operator = operators[index-1]
+		}
+		chain.segments = append(chain.segments, bashChainSegment{text: part, tokens: tokens, operator: operator})
+	}
+	if chain.segments[0].tokens[0] == "cd" && operators[0] == "||" {
+		return bashChain{}, false
 	}
 	return chain, true
 }
 
-// splitBashChain 只拆分未引用的 &&。其他 shell 操作符由调用方的旧
-// 审批路径处理，避免新的分段执行器意外改变 shell 语义。
-func splitBashChain(command string) ([]string, bool) {
+// splitBashChain 拆分未引用的 &&、|| 和 ;。单独的 | 仍留给
+// 只读管道解析器，默认模式不认领管道。
+func splitBashChain(command string) ([]string, []string, bool) {
 	if strings.TrimSpace(command) == "" || !utf8.ValidString(command) {
-		return nil, false
+		return nil, nil, false
 	}
 	parts := make([]string, 0, 2)
+	operators := make([]string, 0, 1)
 	start := 0
 	inSingle, inDouble, escaped := false, false, false
 	for i := 0; i < len(command); {
@@ -75,7 +84,7 @@ func splitBashChain(command string) ([]string, bool) {
 			case '"':
 				inDouble = false
 			case '\n', '\r':
-				return nil, false
+				return nil, nil, false
 			}
 			i++
 			continue
@@ -93,30 +102,57 @@ func splitBashChain(command string) ([]string, bool) {
 			i++
 		case '&':
 			if i+1 >= len(command) || command[i+1] != '&' {
-				return nil, false
+				return nil, nil, false
 			}
-			part := strings.TrimSpace(command[start:i])
-			if part == "" {
-				return nil, false
+			if !appendChainPart(&parts, &operators, command[start:i], "&&") {
+				return nil, nil, false
 			}
-			parts = append(parts, part)
 			i += 2
 			start = i
-		case '|', ';', '<', '>', '$', '`', '(', ')', '\n', '\r':
-			return nil, false
+		case '|':
+			if i+1 < len(command) && command[i+1] == '|' {
+				if !appendChainPart(&parts, &operators, command[start:i], "||") {
+					return nil, nil, false
+				}
+				i += 2
+				start = i
+				continue
+			}
+			return nil, nil, false
+		case ';':
+			if !appendChainPart(&parts, &operators, command[start:i], ";") {
+				return nil, nil, false
+			}
+			i++
+			start = i
+		case '<', '>', '$', '`', '(', ')', '\n', '\r':
+			return nil, nil, false
 		default:
 			i++
 		}
 	}
 	if escaped || inSingle || inDouble {
-		return nil, false
+		return nil, nil, false
 	}
 	part := strings.TrimSpace(command[start:])
 	if part == "" {
-		return nil, false
+		return nil, nil, false
 	}
 	parts = append(parts, part)
-	return parts, true
+	if len(operators) != len(parts)-1 {
+		return nil, nil, false
+	}
+	return parts, operators, true
+}
+
+func appendChainPart(parts *[]string, operators *[]string, raw, operator string) bool {
+	part := strings.TrimSpace(raw)
+	if part == "" {
+		return false
+	}
+	*parts = append(*parts, part)
+	*operators = append(*operators, operator)
+	return true
 }
 
 // unsupportedChainExpansion 过滤直接 exec 与 shell 之间会产生不同含义的
