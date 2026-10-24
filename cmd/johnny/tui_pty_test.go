@@ -253,6 +253,51 @@ func TestTerminalPTYDefaultModeApproval(t *testing.T) {
 	}
 }
 
+func TestTerminalPTYDefaultModeBashChainApproval(t *testing.T) {
+	var count atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if count.Add(1) == 1 {
+			terminalTools(w, []map[string]any{{
+				"type": "tool_use", "id": "chain-bash", "name": "bash",
+				"input": map[string]any{"command": "cd sub && make test"},
+			}})
+			return
+		}
+		terminalAnswer(w, "CHAIN_OK")
+	}))
+	defer server.Close()
+	p := startTerminalMode(t, server.URL, "default")
+	if err := os.Mkdir(filepath.Join(p.dir, "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.dir, "sub", "Makefile"), []byte("test:\n\t@touch chain-marker\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p.write(t, "run\r")
+	end := p.expect(t, 0, "权限确认")
+	p.expect(t, end, "cd sub && make test")
+	p.expect(t, end, "命令前缀 make test")
+	p.expect(t, end, "批准并记录")
+	p.write(t, "j\r")
+	p.expect(t, end, "CHAIN_OK")
+	if _, err := os.Stat(filepath.Join(p.dir, "sub", "chain-marker")); err != nil {
+		t.Fatalf("命令链中的 Makefile 未执行：%v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(p.dir, ".johnny", "permissions.local.json")); err != nil || !bytes.Contains(data, []byte(`"make"`)) || !bytes.Contains(data, []byte(`"test"`)) {
+		t.Fatalf("命令链前缀未写入项目规则：%v %s", err, data)
+	}
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+	logs, _ := filepath.Glob(filepath.Join(p.home, ".johnny", "sessions", "*.jsonl"))
+	if len(logs) != 1 {
+		t.Fatalf("应生成一份会话记录：%v", logs)
+	}
+	log, _ := os.ReadFile(logs[0])
+	if !bytes.Contains(log, []byte(`"recorded_prefixes":[["make","test"]]`)) {
+		t.Fatalf("缺少复合命令前缀审计：%s", log)
+	}
+}
+
 func TestTerminalPTYMultilineToolsCancelAndHistory(t *testing.T) {
 	var count atomic.Int32
 	requests := make(chan string, 8)

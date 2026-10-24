@@ -56,13 +56,14 @@ johnny --permission-mode read-only
 johnny --permission-mode allow
 ```
 
-- `default`：不传 `--permission-mode` 时使用。启动工作目录和项目路径白名单内 `read`、`write`、`edit` 自动执行；`pwd`、`ls`、`find`、`grep`、`cat`、`head`、`tail`、`wc`、`stat`、`du`、`diff` 的受限形式自动执行；其余文件访问、Bash 命令通过审批。
-- 自动执行必须同时满足：未命中危险后缀黑名单；命令命中用户级查询白名单或已记录的项目前缀；可识别的路径参数都在项目路径白名单内。
-- 项目命令前缀只接受固定工具族的安全子命令，例如 `git status`、`git log`、`go test`、`go build`、`cargo test`、`npm run build`、`make test`。首次审批选择“批准并记录”后写入 `.johnny/permissions.local.json`，后续同前缀自动执行；解释器、shell、复合命令和危险后缀不提供记录。
+- `default`：不传 `--permission-mode` 时使用。启动工作目录和项目路径白名单内 `read`、`write`、`edit` 自动执行；`echo`、`pwd`、`ls`、`find`、`grep`、`cat`、`head`、`tail`、`wc`、`stat`、`du`、`diff` 的受限形式自动执行；其余文件访问、Bash 命令通过审批。
+- 自动执行必须同时满足：未命中危险后缀黑名单；每个命令段命中用户级查询白名单或已记录的项目前缀；可识别的路径参数都在项目路径白名单内。
+- 默认模式支持受控的 `cd <目录> && <简单命令>` 链，最多 8 段；每段独立检查，`cd` 只允许出现在第一段。满足条件时整条链按多个直接 argv 调用执行，不经过 shell；“批准并记录”可以一次记录多个命令前缀和路径。管道、重定向、`||`、`;`、后台执行、命令替换、循环和脚本解释器仍进入一次性审批，不提供记录。
+- 项目命令前缀只接受固定工具族的安全子命令，例如 `git status`、`git log`、`go test`、`go build`、`cargo test`、`npm run build`、`make test`。首次审批选择“批准并记录”后写入 `.johnny/permissions.local.json`，后续同前缀自动执行；解释器、shell、危险后缀不提供记录。
 - 项目前缀命令会检查形似路径的参数和常见选项值；脚本、测试和构建目标内部访问仍无法静态限制，这是应用层策略的边界。
 - 审批只有“允许本次”“拒绝本次”“批准并记录”三项；默认焦点在拒绝。等待审批期间 `Ctrl+C` 取消本轮。参数任务、管道和重定向在入口处直接拒绝，不会进入 TUI 或打开 `/dev/tty`。
 - 项目规则文件加载前会展示内容并请求确认，确认后的内容哈希保存在 `~/.johnny/trusted_permissions.json`；文件变化后重新确认。
-- `read-only`：拒绝 `write`、`edit`；`read` 只能读取启动工作目录内的文件（允许读取 `.env` 等敏感文件）；`bash` 只允许上述 11 个查询命令的受限形式，不经过 shell，拒绝管道、重定向和复合命令；不做 shell 通配符展开，按名称查找文件请用 `find -name`。
+- `read-only`：拒绝 `write`、`edit`；`read` 只能读取启动工作目录内的文件（允许读取 `.env` 等敏感文件）；`bash` 只允许上述 12 个查询命令的受限形式，不经过 shell，拒绝管道、重定向和复合命令；不做 shell 通配符展开，按名称查找文件请用 `find -name`。
 - `allow`：保持直接执行四个工具的行为，不进行逐次确认，必须显式选择。
 - 三种模式都是应用层策略，不是操作系统沙箱。允许的 Bash 仍以当前用户权限运行，可以访问路径白名单外的文件；脚本内部行为不受路径检查限制。路径白名单内 `.env`、私钥、`.git` 和 `.johnny` 权限文件也直接可读写，这是明确的取舍。默认模式的子进程环境会过滤 Johnny 和模型服务凭据变量，但不能阻止命令读取磁盘上的配置。
 - 默认模式不是“所有操作都自动”，也不是“所有操作都弹窗”：低风险、可解释的操作保持流畅，写入、任意命令和范围外访问由用户决定。
@@ -123,7 +124,7 @@ JOHNNY_MODEL=中转站提供的模型名称
 
 模型正文在 TUI 中流式接收并按 Markdown 渲染；思考字段不作为正文显示。工具名称、路径或命令、成功或失败状态，以及有限结果预览在执行期间显示在输入框上方，本轮结束后折叠为一行摘要，可用 `Ctrl+O` 展开；日志路径和警告也经界面显示。成功退出码为 0，失败为 1，进程取消为 130；TUI 内取消单轮后仍保留进程，之后正常退出为 0。
 
-会话调试记录保存到 `~/.johnny/sessions/<会话ID>.jsonl`，第一轮开始执行时显示路径；同一交互会话共用一个文件，记录完整消息、工具调用及结果、请求用量和停止原因。元数据包含启动工作目录、协议、模型和 `permission_mode`；不写入 API Key 或环境变量配置。审批决策额外记录为 `permission` 事件，包含工具调用 ID、目标、允许/拒绝/记录、来源、原因以及实际记录的命令前缀或路径。`user_turn` 表示第几次用户输入，`turn` 表示该轮内第几次模型请求。记录目录权限为 0700、文件为 0600；记录失败会警告并降级继续任务。记录只用于排查，不自动加载旧会话，不做记忆处理或会话恢复。
+会话调试记录保存到 `~/.johnny/sessions/<会话ID>.jsonl`，第一轮开始执行时显示路径；同一交互会话共用一个文件，记录完整消息、工具调用及结果、请求用量和停止原因。元数据包含启动工作目录、协议、模型和 `permission_mode`；不写入 API Key 或环境变量配置。审批决策额外记录为 `permission` 事件，包含工具调用 ID、目标、允许/拒绝/记录、来源、原因以及实际记录的命令前缀数组或路径。`user_turn` 表示第几次用户输入，`turn` 表示该轮内第几次模型请求。记录目录权限为 0700、文件为 0600；记录失败会警告并降级继续任务。记录只用于排查，不自动加载旧会话，不做记忆处理或会话恢复。
 
 例如，在用于验证的空目录中运行 `johnny`，输入：
 
@@ -156,9 +157,9 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 11 个只读查询、危险后缀黑名单、项目前缀和路径规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；调试记录、审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
+测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 12 个只读查询、`&&` 命令链逐段检查与直接执行、危险后缀黑名单、项目前缀和路径规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
-统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装四个工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`。它仍是工具策略，不是系统沙箱。
+统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装四个工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`。它仍是工具策略，不是系统沙箱。
 
 手动验证工具：
 
