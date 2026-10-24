@@ -287,7 +287,7 @@ func systemPrompt(workDir string, mode permissionMode) string {
 
 你只能读取当前工作目录内的文件，并使用受限查询命令（echo、pwd、ls、find、grep、cat、head、tail、wc、stat、du、diff）了解项目。
 请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、重定向、构建或测试命令。查询时可以使用两段固定查询管道，例如 find . -name '*.go' | head -n 20；不要组合管道、&&、||、; 或其他 shell 语法。
-如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户使用 --permission-mode allow 重启后再操作。
+如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户使用 --permission-mode default 重启后由审批决定；放行模式需要用户显式选择。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
 展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
 完成任务后，用简洁的中文总结结果。`, workDir)
