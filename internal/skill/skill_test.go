@@ -70,6 +70,22 @@ func TestDiscoverProjectOverridesUser(t *testing.T) {
 	}
 }
 
+func TestDiscoverUserSkillOnly(t *testing.T) {
+	work, home := testDirs(t)
+	writeSkill(t, filepath.Join(home, ".johnny", "skills"), "user-only", "用户级测试指导。", "user body")
+	store := DiscoverWithHome(work, home)
+	item, ok := store.Lookup("user-only")
+	if !ok || item.Source != SourceUser || item.Body != "user body" {
+		t.Fatalf("应加载用户级 Skill：%+v %v", item, ok)
+	}
+	if !strings.Contains(store.Prompt(), "- user-only [用户]：用户级测试指导。") {
+		t.Fatalf("系统提示缺少用户级元数据：%s", store.Prompt())
+	}
+	if stats := store.Stats(); stats.Project != 0 || stats.User != 1 {
+		t.Fatalf("来源统计异常：%+v", stats)
+	}
+}
+
 func TestDiscoverInvalidSkillsAreSkipped(t *testing.T) {
 	work, home := testDirs(t)
 	dir := filepath.Join(work, ".johnny", "skills")
@@ -81,18 +97,25 @@ func TestDiscoverInvalidSkillsAreSkipped(t *testing.T) {
 	writeSkill(t, dir, "huge-description", strings.Repeat("描", MaxDescriptionBytes), "body")
 	writeSkill(t, dir, "huge-body", "描述", strings.Repeat("x", MaxBodyBytes+1))
 	writeRawSkill(t, dir, "with-tools", "---\nname: with-tools\ndescription: 带工具限制的 Skill\nallowed-tools: Read, Grep\n---\nbody")
+	writeRawSkill(t, dir, "quoted-description", "---\nname: quoted-description\ndescription: \"Use when: testing, with 'quotes'\"\n---\nbody")
+	if err := os.MkdirAll(filepath.Join(dir, "no-file"), 0700); err != nil {
+		t.Fatal(err)
+	}
 
 	store := DiscoverWithHome(work, home)
 	names := store.Names()
-	if len(names) != 2 || names[0] != "good" || names[1] != "with-tools" {
-		t.Fatalf("应只加载 good 和 with-tools：%v", names)
+	if len(names) != 3 || names[0] != "good" || names[1] != "quoted-description" || names[2] != "with-tools" {
+		t.Fatalf("应只加载 good、quoted-description 和 with-tools：%v", names)
 	}
 	if got, ok := store.Lookup("with-tools"); !ok || !strings.Contains(got.Body, "body") {
 		t.Fatal("allowed-tools 应被静默忽略，不影响加载")
 	}
+	if got, ok := store.Lookup("quoted-description"); !ok || got.Description != "Use when: testing, with 'quotes'" {
+		t.Fatalf("带引号的描述解析错误：%+v %v", got, ok)
+	}
 	problems := store.Problems()
-	if len(problems) != 6 {
-		t.Fatalf("应有 6 个被跳过的 Skill：%+v", problems)
+	if len(problems) != 7 {
+		t.Fatalf("应有 7 个被跳过的 Skill：%+v", problems)
 	}
 	for _, problem := range problems {
 		if problem.Reason == "" {
