@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.7 在 v0.6 TUI 基础上增加默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.7 代码已实现，等待用户验收。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.7、v0.8 代码已实现，等待用户验收。
 
 ## 安装和更新
 
@@ -45,6 +45,9 @@ TUI 操作：
 | 审批等待中 `↑`/`↓`、`k`/`j`、`Enter` | 选择“允许本次 / 拒绝本次 / 批准并记录”；默认焦点在拒绝 |
 | 审批等待中 `Ctrl+C` | 取消本轮，不执行待审批操作 |
 | `/permissions` | 查看固定白名单、危险后缀黑名单和项目规则；支持 `remove-command`、`remove-path`、`clear` |
+| `/skills` | 查看已加载、被项目级覆盖、未加载和未注入提示的 Skill |
+| `/skills reload` | 重新扫描项目级和用户级 Skill 目录，并更新后续轮次的系统提示 |
+| `/skill <name> [参数]` | 显式使用某个 Skill；正文直接进入本轮任务，终端只显示原始命令 |
 | 空闲时 `Ctrl+C` | 清空输入，保留会话 |
 | `/exit`、空输入 `Ctrl+D` | 正常退出 |
 
@@ -64,9 +67,43 @@ johnny --permission-mode allow
 - 审批只有“允许本次”“拒绝本次”“批准并记录”三项；默认焦点在拒绝。等待审批期间 `Ctrl+C` 取消本轮。参数任务、管道和重定向在入口处直接拒绝，不会进入 TUI 或打开 `/dev/tty`。
 - 项目规则文件加载前会展示内容并请求确认，确认后的内容哈希保存在 `~/.johnny/trusted_permissions.json`；文件变化后重新确认。
 - `read-only`：拒绝 `write`、`edit`；`read` 只能读取启动工作目录内的文件（允许读取 `.env` 等敏感文件）；`bash` 只允许上述 12 个查询命令的受限形式，不经过 shell，并额外允许两段固定查询管道，例如 `find . -name '*.go' | head -n 20`、`ls | wc -l`；管道消费者不能带路径，仍拒绝重定向、`&&`、`||`、`;` 和其他复合命令。不做 shell 通配符展开，按名称查找文件请用 `find -name`。
-- `allow`：保持直接执行四个工具的行为，不进行逐次确认，必须显式选择。
+- `allow`：直接执行工具（包括 `skill`），不进行逐次确认，必须显式选择。
 - 三种模式都是应用层策略，不是操作系统沙箱。默认模式的 Bash 仍以当前用户权限运行，脚本内部行为不受路径检查限制；只读模式允许读取范围内的 `.env`、私钥、`.git` 等文件但拒绝写入；放行模式不应用路径规则。默认模式路径白名单内的 `.env`、私钥、`.git` 和 `.johnny` 权限文件可以直接读写，这是明确取舍。默认模式的子进程环境会过滤 Johnny 和模型服务凭据变量，但不能阻止命令读取磁盘上的配置。
 - 默认模式不是“所有操作都自动”，也不是“所有操作都弹窗”：低风险、可解释的操作保持流畅，写入、任意命令和范围外访问由用户决定。
+
+## Skills
+
+Skill 是任务指导包，不是新的执行引擎。它告诉模型某类任务应遵循的步骤和项目约定；Skill 不能授予工具权限，真正的文件读写和命令执行仍受当前权限模式管理。
+
+发现位置：
+
+```text
+<启动工作目录>/.johnny/skills/<name>/SKILL.md     # 项目级，优先
+~/.johnny/skills/<name>/SKILL.md                  # 用户级
+```
+
+`SKILL.md` 使用最小 frontmatter：
+
+```markdown
+---
+name: go-test
+description: 当需要运行 Go 测试、定位失败用例或补充回归测试时使用。
+---
+
+# Go 测试流程
+
+1. 先运行 `go test ./...`
+2. 失败时按包定位
+```
+
+- 启动时只解析名称、描述和正文；系统提示只注入名称、描述和来源，正文不进入上下文。
+- 模型判断任务匹配后调用 `skill` 工具加载完整正文；`/skill <name> [参数]` 可以直接显式加载，正文进入本轮任务但不写入终端滚动历史。
+- 项目级与用户级同名时项目级覆盖用户级；项目级 Skill 自动加载，不额外请求信任确认；无效项不会阻断启动，`/skills` 显示原因。
+- `/skills reload` 重新扫描并更新后续轮次的系统提示；任一目录无法读取时保留原集合。
+- 最多 64 个 Skill；名称和描述等元数据最多 8 KiB；单个正文 128 KiB；描述 1024 字节。名称只能使用小写字母、数字和连字符，并与目录名一致。
+- `allowed-tools` 在 v0.8 静默忽略，不改变工具集合。
+- 用户级 Skill 的引用文件位于工作目录外，只读模式下不可读；需要引用文件时建议放在项目级目录。
+- `.johnny/*` 默认不进入仓库，但 `.johnny/skills/` 保留，项目级 Skill 可以随项目提交。
 
 任务执行期间不排队提交新任务。界面显示模型、工作目录、等待/接收/执行/取消状态。执行期间，工具调用会在输入框上方按顺序实时显示，使用终端可用高度；超过一屏时保留最新记录并在顶部提示更早条数。本轮结束时清除实时进展，在最终回答前保留一行折叠摘要（已执行次数、工具名，按 `Ctrl+O` 展开），随后显示完整的最终回答。完整工具调用与结果保留在会话 JSONL 中；需要回看时用 `Ctrl+O` 展开最近一次过程。模型回复按 Markdown 渲染标题、列表、引用、表格和代码块；明确语言的代码块包含语法高亮，未标注或纯文本代码块按无高亮等宽原文显示，长行按词换行。目录树有单独的排版规则：无围栏也能识别，不进行语法高亮；宽度足够时保持原始列，窄终端压缩数字列并把说明换行到说明列或条目下方，树形分支不会被拆断。调用链、关系图等自由排版内容保留原缩进换行，长说明不会被省略号截断。当前使用深色终端样式，暂不提供主题切换。生成期间状态区显示已接收字数，不把回答原文写入动态区域；响应结束后先提交折叠摘要，再提交排版后的正文，避免重复显示。单次输入最多 10000 行，超限粘贴会整体拒绝并提示，不静默截断。
 
@@ -157,9 +194,9 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
+测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载和 `/skill` 本地展开、PTY 自动与显式调用；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
-统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装四个工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`。它仍是工具策略，不是系统沙箱。
+统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
 
 手动验证工具：
 
@@ -180,4 +217,4 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.5：Agent Loop](docs/versions/v0.5.md)
 - [v0.6：TUI](docs/versions/v0.6.md)
 - [v0.7：安全与权限（已实现，等待验收）](docs/versions/v0.7.md)
-- [v0.8：Skills（讨论中）](docs/versions/v0.8.md)
+- [v0.8：Skills（已实现，等待验收）](docs/versions/v0.8.md)
