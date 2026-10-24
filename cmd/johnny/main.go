@@ -603,7 +603,7 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 		Decision:   audit.Decision,
 		Source:     audit.Source,
 		Reason:     audit.Reason,
-		Prefix:     append([]string(nil), audit.Prefix...),
+		Prefixes:   clonePermissionPrefixes(audit.Prefixes),
 	}
 	for _, path := range audit.Paths {
 		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})
@@ -614,6 +614,17 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 		l.recorder = nil
 		l.disabled = true
 	}
+}
+
+func clonePermissionPrefixes(prefixes [][]string) [][]string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	cloned := make([][]string, len(prefixes))
+	for i, prefix := range prefixes {
+		cloned[i] = append([]string(nil), prefix...)
+	}
+	return cloned
 }
 
 func (l *sessionLogger) close() {

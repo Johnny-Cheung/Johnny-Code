@@ -47,13 +47,24 @@ type PermissionRecord struct {
 	Decision   string           `json:"decision"`
 	Source     string           `json:"source,omitempty"`
 	Reason     string           `json:"reason,omitempty"`
-	Prefix     []string         `json:"recorded_prefix,omitempty"`
+	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
 	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
 }
 
 type PermissionPath struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
+}
+
+func clonePermissionPrefixes(prefixes [][]string) [][]string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	cloned := make([][]string, len(prefixes))
+	for i, prefix := range prefixes {
+		cloned[i] = append([]string(nil), prefix...)
+	}
+	return cloned
 }
 
 // Recorder writes JSONL records synchronously. Record and Close return I/O
@@ -187,7 +198,7 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 		Decision:   record.Decision,
 		Source:     record.Source,
 		Reason:     record.Reason,
-		Prefix:     record.Prefix,
+		Prefixes:   clonePermissionPrefixes(record.Prefixes),
 		Paths:      record.Paths,
 	})
 }
@@ -267,7 +278,7 @@ type permissionEvent struct {
 	Decision   string           `json:"decision"`
 	Source     string           `json:"source,omitempty"`
 	Reason     string           `json:"reason,omitempty"`
-	Prefix     []string         `json:"recorded_prefix,omitempty"`
+	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
 	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
 }
 

@@ -33,6 +33,10 @@ func newMultiPathScope(workDir string, rules *ProjectRules) (*multiPathScope, er
 }
 
 func (s *multiPathScope) resolve(path string) (string, error) {
+	return s.resolveFrom(s.workDir, path)
+}
+
+func (s *multiPathScope) resolveFrom(base, path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", errors.New("路径不能为空")
@@ -40,15 +44,22 @@ func (s *multiPathScope) resolve(path string) (string, error) {
 	if strings.IndexByte(path, 0) >= 0 {
 		return "", errors.New("路径包含无效字符")
 	}
+	if strings.TrimSpace(base) == "" {
+		return "", errors.New("路径基准不能为空")
+	}
 	target := path
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(s.workDir, target)
+		target = filepath.Join(base, target)
 	}
 	return resolveExistingAncestors(filepath.Clean(target))
 }
 
 func (s *multiPathScope) resolveExisting(path string) (string, error) {
-	resolved, err := s.resolve(path)
+	return s.resolveExistingFrom(s.workDir, path)
+}
+
+func (s *multiPathScope) resolveExistingFrom(base, path string) (string, error) {
+	resolved, err := s.resolveFrom(base, path)
 	if err != nil {
 		return "", err
 	}

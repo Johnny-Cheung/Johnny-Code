@@ -199,7 +199,7 @@ func TestRecordPermission(t *testing.T) {
 		Decision:   "record",
 		Source:     "tui",
 		Reason:     "批准并记录",
-		Prefix:     []string{"git", "log"},
+		Prefixes:   [][]string{{"git", "log"}},
 		Paths:      []PermissionPath{{Path: "/tmp/out", Kind: "file"}},
 	}
 	if err := recorder.RecordPermission(record); err != nil {
@@ -219,9 +219,9 @@ func TestRecordPermission(t *testing.T) {
 			t.Fatalf("%s = %q (%v)，want %q", key, got, err, want)
 		}
 	}
-	var prefix []string
-	if err := json.Unmarshal(object["recorded_prefix"], &prefix); err != nil || len(prefix) != 2 || prefix[0] != "git" {
-		t.Fatalf("recorded_prefix 异常：%v %v", prefix, err)
+	var prefixes [][]string
+	if err := json.Unmarshal(object["recorded_prefixes"], &prefixes); err != nil || len(prefixes) != 1 || len(prefixes[0]) != 2 || prefixes[0][0] != "git" {
+		t.Fatalf("recorded_prefixes 异常：%v %v", prefixes, err)
 	}
 	var paths []PermissionPath
 	if err := json.Unmarshal(object["recorded_paths"], &paths); err != nil || len(paths) != 1 || paths[0].Kind != "file" {

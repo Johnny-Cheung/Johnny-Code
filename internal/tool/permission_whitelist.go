@@ -17,6 +17,7 @@ type queryCommandSpec struct {
 }
 
 var fixedQueryCommands = []queryCommandSpec{
+	{name: "echo", summary: "字面量参数，不经过 shell 展开", parse: parseEcho},
 	{name: "pwd", summary: "无参数", parse: parsePwd},
 	{name: "ls", summary: "-a -l -h -1 -F -d，路径可省略", parse: parseLs},
 	{name: "find", summary: "起始路径；-maxdepth/-type/-name/-print", parse: parseFind},
@@ -56,6 +57,10 @@ func fixedQueryCommandNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func parseEcho(tokens []string, _ queryPathResolver) (restrictedCommand, error) {
+	return restrictedCommand{program: "echo", args: append([]string(nil), tokens[1:]...)}, nil
 }
 
 func parseCat(tokens []string, scope queryPathResolver) (restrictedCommand, error) {

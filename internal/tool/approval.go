@@ -13,25 +13,27 @@ var ErrApprovalUnavailable = errors.New("当前入口不支持交互审批")
 // ApprovalRequest 是工具层交给审批界面的有界数据。Target/Command/Detail
 // 只用于展示，授权判断已经由调用方完成。
 type ApprovalRequest struct {
-	ToolCallID   string
-	Tool         string
-	WorkDir      string
-	Target       string
-	Command      string
-	Reason       string
-	Detail       string
-	RecordPrefix []string
-	RecordPaths  []PathRule
+	ToolCallID     string
+	Tool           string
+	WorkDir        string
+	Target         string
+	Command        string
+	Reason         string
+	Detail         string
+	RecordPrefixes [][]string
+	RecordPaths    []PathRule
 }
 
 func (r ApprovalRequest) CanRecord() bool {
-	return len(r.RecordPrefix) > 0 || len(r.RecordPaths) > 0
+	return len(r.RecordPrefixes) > 0 || len(r.RecordPaths) > 0
 }
 
 func (r ApprovalRequest) RecordLabel() string {
 	var parts []string
-	if len(r.RecordPrefix) > 0 {
-		parts = append(parts, "命令前缀 "+strings.Join(r.RecordPrefix, " "))
+	for _, prefix := range r.RecordPrefixes {
+		if len(prefix) > 0 {
+			parts = append(parts, "命令前缀 "+strings.Join(prefix, " "))
+		}
 	}
 	for _, rule := range r.RecordPaths {
 		kind := "文件"
@@ -59,7 +61,7 @@ type ApprovalAudit struct {
 	Decision   string
 	Source     string
 	Reason     string
-	Prefix     []string
+	Prefixes   [][]string
 	Paths      []PathRule
 }
 
@@ -156,10 +158,10 @@ func auditDecision(audit AuditFunc, request ApprovalRequest, decision ApprovalDe
 			result = "record"
 		}
 	}
-	var prefix []string
+	var prefixes [][]string
 	var paths []PathRule
 	if decision.Record {
-		prefix = append([]string(nil), request.RecordPrefix...)
+		prefixes = clonePrefixes(request.RecordPrefixes)
 		paths = append([]PathRule(nil), request.RecordPaths...)
 	}
 	audit(ApprovalAudit{
@@ -169,7 +171,7 @@ func auditDecision(audit AuditFunc, request ApprovalRequest, decision ApprovalDe
 		Decision:   result,
 		Source:     decision.Source,
 		Reason:     decision.Reason,
-		Prefix:     prefix,
+		Prefixes:   prefixes,
 		Paths:      paths,
 	})
 }

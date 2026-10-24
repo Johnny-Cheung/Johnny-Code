@@ -117,7 +117,6 @@ func TestBuildRestrictedCommandRejectsCommandsAndOptions(t *testing.T) {
 	for _, command := range []string{
 		"sed -n 1p file.txt",
 		"sh -c id",
-		"echo hello",
 		"grep foo | head",
 		"ls > out",
 		"pwd extra",

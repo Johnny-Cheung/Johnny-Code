@@ -129,6 +129,13 @@ func buildRestrictedCommand(command string, scope queryPathResolver) (restricted
 	if err != nil {
 		return restrictedCommand{}, permissionDenied("只读模式不支持该 shell 命令", err)
 	}
+	return buildRestrictedCommandTokens(tokens, scope)
+}
+
+func buildRestrictedCommandTokens(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
+	if len(tokens) == 0 || strings.TrimSpace(tokens[0]) == "" {
+		return restrictedCommand{}, invalidArguments("命令不能为空", nil)
+	}
 	spec, ok := fixedQueryCommandByName[tokens[0]]
 	if !ok {
 		return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式不允许执行 %q", tokens[0]), nil)

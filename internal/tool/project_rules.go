@@ -260,6 +260,64 @@ func (r *ProjectRules) PathsRules() []PathRule {
 	return append([]PathRule(nil), r.paths...)
 }
 
+func (r *ProjectRules) AddRules(prefixes [][]string, paths []PathRule) error {
+	if r == nil {
+		return errors.New("项目规则不能为空")
+	}
+	validatedPrefixes := make([][]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		prefix = append([]string(nil), prefix...)
+		if !validRecordablePrefix(prefix) {
+			return fmt.Errorf("命令前缀不可记录：%s", strings.Join(prefix, " "))
+		}
+		validatedPrefixes = append(validatedPrefixes, prefix)
+	}
+	validatedPaths := make([]PathRule, 0, len(paths))
+	for _, path := range paths {
+		rule, err := canonicalPathRule(path.Path, path.Kind)
+		if err != nil {
+			return err
+		}
+		validatedPaths = append(validatedPaths, rule)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.trusted {
+		return errProjectRulesUntrusted
+	}
+	oldPrefixes, oldPaths := r.snapshotLocked()
+	for _, prefix := range validatedPrefixes {
+		found := false
+		for _, existing := range r.commandPrefixes {
+			if stringSlicesEqual(existing, prefix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.commandPrefixes = append(r.commandPrefixes, prefix)
+		}
+	}
+	for _, rule := range validatedPaths {
+		found := false
+		for _, existing := range r.paths {
+			if existing.Path == rule.Path && existing.Kind == rule.Kind {
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.paths = append(r.paths, rule)
+		}
+	}
+	r.normalizeLocked()
+	if err := r.saveLocked(); err != nil {
+		r.restoreLocked(oldPrefixes, oldPaths)
+		return err
+	}
+	return nil
+}
+
 func (r *ProjectRules) AddPrefix(prefix []string) error {
 	if r == nil {
 		return errors.New("项目规则不能为空")

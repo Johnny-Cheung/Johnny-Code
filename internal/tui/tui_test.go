@@ -228,7 +228,7 @@ func TestApprovalPanelDefaultsToDenyAndSupportsRecord(t *testing.T) {
 		request: tool.ApprovalRequest{
 			ToolCallID: "call-1", Tool: "bash", WorkDir: "/tmp/work",
 			Target: "go test ./...", Command: "go test ./...", Reason: "命令不在白名单",
-			RecordPrefix: []string{"go", "test"},
+			RecordPrefixes: [][]string{{"go", "test"}},
 		},
 		response: response,
 	})

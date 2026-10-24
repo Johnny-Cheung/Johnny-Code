@@ -10,7 +10,7 @@ import (
 func TestFixedQueryWhitelistTable(t *testing.T) {
 	names := fixedQueryCommandNames()
 	want := []string{
-		"cat", "diff", "du", "find", "grep", "head", "ls", "pwd", "stat", "tail", "wc",
+		"cat", "diff", "du", "echo", "find", "grep", "head", "ls", "pwd", "stat", "tail", "wc",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("固定查询名单错误：%#v", names)

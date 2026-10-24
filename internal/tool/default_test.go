@@ -234,7 +234,7 @@ func TestDefaultDangerousSuffixAndShellSyntaxDoNotRecord(t *testing.T) {
 		if len(requests) != 1 {
 			t.Fatalf("%q 应产生一次审批：%#v", c.command, requests)
 		}
-		if len(requests[0].RecordPrefix) != 0 || len(requests[0].RecordPaths) != 0 {
+		if len(requests[0].RecordPrefixes) != 0 || len(requests[0].RecordPaths) != 0 {
 			t.Fatalf("%q 不应提供记录：%#v", c.command, requests[0])
 		}
 		if !strings.Contains(requests[0].Reason, c.want) {
@@ -279,7 +279,7 @@ func TestDefaultProjectPrefixRequiresPathWhitelist(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatalf("应产生一次路径审批：%#v", requests)
 	}
-	if len(requests[0].RecordPrefix) != 0 || len(requests[0].RecordPaths) != 1 {
+	if len(requests[0].RecordPrefixes) != 0 || len(requests[0].RecordPaths) != 1 {
 		t.Fatalf("已记录前缀的命令应只补记路径：%#v", requests[0])
 	}
 	if !strings.Contains(requests[0].Reason, "路径不在项目路径白名单") {
@@ -299,7 +299,7 @@ func TestDefaultProjectPrefixOffersPrefixAndPaths(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatalf("应产生一次审批：%#v", requests)
 	}
-	if !stringSlicesEqual(requests[0].RecordPrefix, []string{"git", "log"}) || len(requests[0].RecordPaths) != 1 {
+	if len(requests[0].RecordPrefixes) != 1 || !stringSlicesEqual(requests[0].RecordPrefixes[0], []string{"git", "log"}) || len(requests[0].RecordPaths) != 1 {
 		t.Fatalf("未记录命令应同时提供前缀和路径：%#v", requests[0])
 	}
 	if !strings.Contains(requests[0].Reason, "项目前缀") || !strings.Contains(requests[0].Reason, "路径不在") {
@@ -392,7 +392,7 @@ func TestApprovalGateAuditOnlyRecordsActualRecords(t *testing.T) {
 	if _, err := executeDefault(t, permissioned, "read", map[string]any{"path": target}); err != nil {
 		t.Fatal(err)
 	}
-	if len(audits) != 1 || audits[0].Decision != "allow" || len(audits[0].Prefix) != 0 || len(audits[0].Paths) != 0 {
+	if len(audits) != 1 || audits[0].Decision != "allow" || len(audits[0].Prefixes) != 0 || len(audits[0].Paths) != 0 {
 		t.Fatalf("一次性允许审计异常：%#v", audits)
 	}
 	approver.setDecision(ApprovalDecision{Allow: true, Record: true})
