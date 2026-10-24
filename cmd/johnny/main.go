@@ -194,7 +194,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
 	if useTUI(input, output) {
-		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand)
+		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand, skills)
 	}
 	printPermissionNotice(stderr, mode)
 	return runInteractive(ctx, conversation, input, logs, display, stderr, localCommand)

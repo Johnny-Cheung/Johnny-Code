@@ -158,7 +158,9 @@ func (p *terminalProcess) write(t *testing.T, text string) {
 
 func (p *terminalProcess) expect(t *testing.T, offset int, text string) int {
 	t.Helper()
-	timer := time.NewTimer(10 * time.Second)
+	// 全量测试会并行构建和启动多个子进程；给 PTY 渲染留出足够调度时间，
+	// 同时仍能暴露真实的界面卡死。
+	timer := time.NewTimer(20 * time.Second)
 	defer timer.Stop()
 	for {
 		got := p.text()
@@ -190,7 +192,7 @@ func (p *terminalProcess) wait(t *testing.T, code int) {
 	t.Helper()
 	select {
 	case <-p.done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("终端未退出")
 	}
 	if p.cmd.ProcessState.ExitCode() != code {
@@ -253,6 +255,30 @@ func TestTerminalPTYDefaultModeApproval(t *testing.T) {
 	}
 }
 
+func TestTerminalPTYSlashMenuCompletion(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		t.Error("斜杠菜单本地命令不应请求模型")
+	}))
+	defer server.Close()
+	p := startTerminalMode(t, server.URL, "default")
+	start := len(p.text())
+	p.write(t, "/sk")
+	end := p.expect(t, start, "/skills")
+	p.expect(t, start, "/skills reload")
+	p.expect(t, start, "Enter 补全")
+	p.write(t, "\r")
+	end = p.expect(t, end, "已补全 /skills")
+	p.write(t, "\r")
+	end = p.expect(t, end, "未发现 Skill")
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+	if requests.Load() != 0 {
+		t.Fatalf("菜单和本地命令不应请求模型：%d", requests.Load())
+	}
+}
+
 func TestTerminalPTYSkillReloadAndInvocation(t *testing.T) {
 	var count atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +322,12 @@ func TestTerminalPTYSkillReloadAndInvocation(t *testing.T) {
 	end = p.expect(t, end, "Skill 已重载")
 	p.expect(t, end, "go-test")
 	end = p.expect(t, end, "[项目]")
-	runStart := end
+	p.write(t, "/")
+	end = p.expect(t, end, "go-test")
+	p.expect(t, end, "Enter 补全")
+	p.write(t, "\x1b")
+	p.write(t, "\x03")
+	runStart := len(p.text())
 	p.write(t, "run\r")
 	end = p.expect(t, end, "SKILL_OK")
 	runText := p.text()[runStart:end]

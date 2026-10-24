@@ -40,15 +40,16 @@ type toolRecord struct {
 }
 
 type Options struct {
-	Input        io.Reader
-	Output       io.Writer
-	Model        string
-	WorkDir      string
-	Version      string
-	Mode         string
-	Gate         *tool.ApprovalGate
-	LocalCommand func(string) (LocalCommandResult, bool)
-	RunTurn      func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
+	Input         io.Reader
+	Output        io.Writer
+	Model         string
+	WorkDir       string
+	Version       string
+	Mode          string
+	Gate          *tool.ApprovalGate
+	LocalCommand  func(string) (LocalCommandResult, bool)
+	SlashCommands func() []SlashCommand
+	RunTurn       func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
 }
 
 // LocalCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
@@ -130,6 +131,7 @@ type terminalModel struct {
 	historyIndex  int
 	draft         string
 	approval      *approvalState
+	slash         slashMenuState
 }
 
 // Run 在退出前取消并等待所有任务。即使库因终端错误提前恢复终端，也不会留下
@@ -238,6 +240,7 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
 		m.markdown.SetWidth(m.contentWidth())
 		m.resizeInput()
+		m.refreshSlashMenu()
 		// 尾行留到下一次有序 delivery 再提交，避免 resize 的独立 print
 		// 命令与正在到达的正文竞争顺序。View 只暂时裁剪可见部分。
 		return m, nil
@@ -285,12 +288,36 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		m.refreshSlashMenu()
+		if m.slash.visible {
+			switch keys {
+			case "up":
+				m.moveSlash(-1)
+				return m, nil
+			case "down":
+				m.moveSlash(1)
+				return m, nil
+			case "tab":
+				m.completeSlash()
+				return m, nil
+			case "esc":
+				m.dismissSlash()
+				return m, nil
+			case "enter":
+				if !m.slashExactMatch() {
+					m.completeSlash()
+					return m, nil
+				}
+			}
+		}
 		switch keys {
 		case "ctrl+c":
 			m.input.Reset()
 			m.historyIndex = len(m.history)
 			m.draft = ""
+			m.status = "空闲"
 			m.resizeInput()
+			m.refreshSlashMenu()
 			return m, nil
 		case "ctrl+d":
 			if m.input.Value() == "" {
@@ -341,6 +368,7 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(message)
 	m.resizeInput()
+	m.refreshSlashMenu()
 	return m, cmd
 }
 
@@ -369,6 +397,7 @@ func (m *terminalModel) navigateHistory(direction int) {
 	}
 	m.input.SetValue(value)
 	m.resizeInput()
+	m.refreshSlashMenu()
 }
 
 func (m *terminalModel) start(prompt string) tea.Cmd {
@@ -389,6 +418,7 @@ func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
 	m.resetResponse()
 	m.input.Reset()
 	m.input.Blur()
+	m.slash = slashMenuState{}
 	m.history = append(m.history, display)
 	m.historyIndex, m.draft = len(m.history), ""
 	m.resizeInput()
@@ -524,6 +554,7 @@ func (m *terminalModel) handleApprovalKey(keys string) tea.Cmd {
 func (m *terminalModel) showLocalResult(prompt, text string) tea.Cmd {
 	m.input.Reset()
 	m.input.Focus()
+	m.slash = slashMenuState{}
 	m.history = append(m.history, prompt)
 	m.historyIndex, m.draft = len(m.history), ""
 	m.resizeInput()
@@ -951,7 +982,11 @@ func (m *terminalModel) View() tea.View {
 	}
 	border := muted.Render(strings.Repeat("─", width))
 	hasBorder := m.height >= len(lines)+2
+	menu := m.slashView(width, m.slashMaxRows(len(lines)))
 	var parts []string
+	if len(menu) > 0 {
+		parts = append(parts, menu...)
+	}
 	if hasBorder {
 		parts = append(parts, border)
 	}
@@ -970,11 +1005,12 @@ func (m *terminalModel) View() tea.View {
 	content := strings.Join(parts, "\n")
 	result := tea.NewView(content)
 	// 真实光标必须落在输入框中的文字位置：输入法组合文本、候选窗口会跟随
-	// 这个位置。上边框占用一行，需要加到输入框内的相对坐标上。
+	// 这个位置。菜单、上边框占用行，需要加到输入框内的相对坐标上。
 	if cursor := m.input.Cursor(); cursor != nil {
 		if hasBorder {
 			cursor.Position.Y++
 		}
+		cursor.Position.Y += len(menu)
 		cursor.Position.X = min(cursor.Position.X, width-1)
 		cursor.Position.Y = min(cursor.Position.Y, max(0, len(parts)-1))
 		result.Cursor = cursor

@@ -45,7 +45,38 @@ func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
 	if text, handled := handleLocalCommand(line, h.rules); handled {
 		return localCommandResult{Output: text}, true
 	}
+	if result, handled := handleDirectSkillCommand(line, h.skills); handled {
+		return result, true
+	}
 	return localCommandResult{}, false
+}
+
+// handleDirectSkillCommand 支持把每个 Skill 作为 /skill-name 独立命令使用。
+// 内置命令由调用方先处理，因此同名 Skill 不会覆盖 /skills、/permissions 等。
+func handleDirectSkillCommand(line string, skills *skill.Store) (localCommandResult, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "/") {
+		return localCommandResult{}, false
+	}
+	rest := strings.TrimPrefix(line, "/")
+	if rest == "" {
+		return localCommandResult{}, false
+	}
+	name, arguments := rest, ""
+	if index := strings.IndexAny(rest, " \t"); index >= 0 {
+		name = rest[:index]
+		arguments = strings.TrimSpace(rest[index+1:])
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		return localCommandResult{}, false
+	}
+	item, ok := skills.Lookup(name)
+	if !ok {
+		return localCommandResult{}, false
+	}
+	prompt := "请使用下面的 Skill 完成任务。\n\n" + item.Loaded(arguments)
+	return localCommandResult{Prompt: prompt}, true
 }
 
 func handleSkillCommand(line string, skills *skill.Store, reload func() error) (localCommandResult, bool) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tui"
 	"github.com/charmbracelet/x/term"
@@ -19,7 +20,7 @@ func useTUI(input io.Reader, output io.Writer) bool {
 	return inOK && outOK && term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
-func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool)) int {
+func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), skills *skill.Store) int {
 	var tuiLocalCommand func(string) (tui.LocalCommandResult, bool)
 	if localCommand != nil {
 		tuiLocalCommand = func(line string) (tui.LocalCommandResult, bool) {
@@ -27,12 +28,16 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 			return tui.LocalCommandResult{Output: result.Output, Prompt: result.Prompt}, handled
 		}
 	}
+	var tuiSlashCommands func() []tui.SlashCommand
+	if skills != nil {
+		tuiSlashCommands = func() []tui.SlashCommand { return slashCommands(skills) }
+	}
 	// 运行中的日志提示进入 UI 队列，避免直接写 stderr 破坏正在重绘的输入区。
 	// Run 等待所有任务退出后才返回，此时关闭日志的警告可回到普通 stderr。
 	defer func() { logs.stderr = stderr }()
 	err := tui.Run(ctx, tui.Options{
 		Input: input, Output: output, Model: modelName, WorkDir: workDir, Version: version, Mode: permissionLabel,
-		Gate: gate, LocalCommand: tuiLocalCommand,
+		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands,
 		RunTurn: func(turnCtx context.Context, prompt string, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
 			logs.stderr = noticeWriter{notice: notice}
 			return conversation.Run(turnCtx, prompt, func(event agent.Event) error {
@@ -55,6 +60,32 @@ type noticeWriter struct{ notice func(string) }
 func (w noticeWriter) Write(data []byte) (int, error) {
 	w.notice(string(data))
 	return len(data), nil
+}
+
+// slashCommands 返回斜杠菜单项目：先列 Skill，再列内置命令。
+// 与内置命令同名的 Skill 不作为独立命令展示，但仍可用 /skill <name>。
+func slashCommands(skills *skill.Store) []tui.SlashCommand {
+	reserved := map[string]bool{
+		"skills": true, "skill": true, "permissions": true, "exit": true,
+	}
+	commands := make([]tui.SlashCommand, 0, 5)
+	for _, item := range skills.Skills() {
+		if reserved[item.Name] {
+			continue
+		}
+		commands = append(commands, tui.SlashCommand{
+			Command:     item.Name,
+			Description: item.Description,
+			Source:      item.Source.Label(),
+		})
+	}
+	return append(commands,
+		tui.SlashCommand{Command: "skills", Description: "查看已加载、被覆盖和未加载的 Skill", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "skills reload", Description: "重新扫描项目级和用户级目录", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "skill", Description: "显式使用 Skill：/skill <name> [参数]", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "permissions", Description: "查看固定权限名单和项目规则", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "exit", Description: "退出当前会话", Source: "内置", Builtin: true},
+	)
 }
 
 func terminalEvent(event agent.Event) (tui.Event, bool) {

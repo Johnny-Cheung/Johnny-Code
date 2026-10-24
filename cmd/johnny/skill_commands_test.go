@@ -95,6 +95,69 @@ func TestSkillReloadCommand(t *testing.T) {
 	}
 }
 
+func TestDirectSkillCommand(t *testing.T) {
+	store, dir := testCommandSkillStore(t)
+	handler := newLocalCommandHandler(nil, store, nil)
+	result, handled := handler.Handle("/go-test 修复 TestFoo")
+	if !handled || result.Prompt == "" || result.Output != "" {
+		t.Fatalf("独立 Skill 命令应生成本轮任务：%+v %v", result, handled)
+	}
+	for _, want := range []string{"Skill：go-test", "执行 修复 TestFoo 并检查结果。"} {
+		if !strings.Contains(result.Prompt, want) {
+			t.Fatalf("独立 Skill 命令缺少 %q：%s", want, result.Prompt)
+		}
+	}
+	result, handled = handler.Handle("/go-test")
+	if !handled || !strings.Contains(result.Prompt, "Skill：go-test") {
+		t.Fatalf("无参数独立命令应加载 Skill：%+v %v", result, handled)
+	}
+
+	writeCommandSkill(t, dir, "permissions", "不应覆盖内置命令。", "body")
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	result, handled = handler.Handle("/permissions")
+	if !handled || result.Prompt != "" || !strings.Contains(result.Output, "当前模式未加载项目规则") {
+		t.Fatalf("内置命令应优先于同名 Skill：%+v %v", result, handled)
+	}
+	if _, handled = handler.Handle("/missing"); handled {
+		t.Fatal("未知斜杠命令不应被本地拦截")
+	}
+}
+
+func TestSlashCommandsProvider(t *testing.T) {
+	store, dir := testCommandSkillStore(t)
+	writeCommandSkill(t, dir, "exit", "与内置命令同名。", "body")
+	writeCommandSkill(t, dir, "skills", "与内置命令同名。", "body")
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	commands := slashCommands(store)
+	if len(commands) != 6 {
+		t.Fatalf("菜单条目数量错误：%+v", commands)
+	}
+	if commands[0].Command != "go-test" || commands[0].Source != "项目" || commands[0].Builtin {
+		t.Fatalf("项目级 Skill 应排在内置命令之前：%+v", commands[0])
+	}
+	counts := make(map[string]int)
+	for _, command := range commands {
+		counts[command.Command]++
+	}
+	for _, name := range []string{"exit", "skills"} {
+		if counts[name] != 1 {
+			t.Fatalf("内置命令 %q 不应重复：%+v", name, commands)
+		}
+	}
+	builtins := []string{"skills", "skills reload", "skill", "permissions", "exit"}
+	start := len(commands) - len(builtins)
+	for index, want := range builtins {
+		got := commands[start+index]
+		if got.Command != want || !got.Builtin || got.Source != "内置" {
+			t.Fatalf("内置命令顺序错误：%+v", commands)
+		}
+	}
+}
+
 func TestSkillSummaryEmptyAndProblems(t *testing.T) {
 	work, home := t.TempDir(), t.TempDir()
 	store := skill.DiscoverWithHome(work, home)
