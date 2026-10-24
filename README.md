@@ -180,3 +180,4 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.5：Agent Loop](docs/versions/v0.5.md)
 - [v0.6：TUI](docs/versions/v0.6.md)
 - [v0.7：安全与权限（已实现，等待验收）](docs/versions/v0.7.md)
+- [v0.8：Skills（讨论中）](docs/versions/v0.8.md)
