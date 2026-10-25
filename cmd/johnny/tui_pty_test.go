@@ -74,7 +74,7 @@ func startTerminal(t *testing.T, serverURL string) *terminalProcess {
 	return startTerminalMode(t, serverURL, "allow")
 }
 
-func startTerminalMode(t *testing.T, serverURL, mode string) *terminalProcess {
+func startTerminalMode(t *testing.T, serverURL, mode string, extraEnv ...string) *terminalProcess {
 	t.Helper()
 	dir, home := t.TempDir(), t.TempDir()
 	path := filepath.Join(dir, "test.env")
@@ -102,6 +102,7 @@ func startTerminalMode(t *testing.T, serverURL, mode string) *terminalProcess {
 	}
 	cmd.Env = append(cmd.Env, "JOHNNY_TUI_TEST_HELPER=1", "JOHNNY_TUI_TEST_CONFIG="+path,
 		"JOHNNY_TUI_TEST_MODE="+mode, "HOME="+home, "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	p := &terminalProcess{cmd: cmd, master: master, slave: slave, changed: make(chan struct{}, 1), done: make(chan struct{}), dir: dir, home: home}
