@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.10 在 v0.8 基础上增加上下文治理：完整历史与每次请求视图分离，单次工具结果模型可见预览最多 32 KiB，bash 大输出保存到 `.johnny/artifacts/<会话ID>/`，每轮结束按节省量压缩工具结果，接近模型窗口时保留最近 5 个已完成轮次并生成九段式摘要；`/context` 查看预算、缓存和摘要，`/compact` 手动压缩。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。v0.10 已实现，等待联合验收。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.10 在 v0.8 基础上增加上下文治理：完整历史与每次请求视图分离，单次工具结果模型可见预览最多 32 KiB，bash 大输出保存到 `.johnny/artifacts/<会话ID>/`，每轮结束按节省量压缩工具结果，接近模型窗口时保留最近 5 个已完成轮次并生成九段式摘要；`/context` 查看预算、缓存和摘要，`/compact` 手动压缩。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。v0.10 已于 2026-10-25 确认冻结。
 
 ## 安装和更新
 
@@ -219,7 +219,7 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；上下文估算、32 KiB 预览、轮内预览预算、bash 存档与清理、轮级压缩、摘要前缀替换、90%/95% 触发、摘要失败降级、上下文超限和 thrashing 熔断；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；`/context`、`/compact`、上下文配置解析和摘要事件日志；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
+测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；上下文估算、32 KiB 预览、轮内预览预算、bash 存档与清理、轮级压缩、摘要前缀替换、90%/95% 触发、摘要失败降级、上下文超限和 thrashing 熔断；终端模拟大输出、存档、手动压缩和自动摘要；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；`/context`、`/compact`、上下文配置解析和摘要事件日志；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
 统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/contextview` 负责预算和 token 估算、工具结果预览与存档、请求视图、轮级压缩、摘要前缀替换和 thrashing 保护；`internal/agent` 负责本轮消息历史、模型与工具调度、摘要请求及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，斜杠菜单在 `internal/tui/slash_menu.go`，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
 
@@ -244,6 +244,7 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.7：安全与权限（已实现，验收与收口后置）](docs/versions/v0.7.md)
 - [v0.8：Skills（已确认冻结）](docs/versions/v0.8.md)
 - [v0.9：MCP（暂缓）](docs/versions/v0.9.md)
-- [v0.10：上下文治理（已实现，待联合验收）](docs/versions/v0.10.md)
+- [v0.10：上下文治理（已确认冻结）](docs/versions/v0.10.md)
+- [v0.11：长期记忆（待讨论）](docs/versions/v0.11.md)
 
-> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已实现，等待联合验收；随后 v0.11 长期记忆和 v0.12 SubAgent。
+> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；下一阶段进入 v0.11 长期记忆讨论，随后 v0.12 SubAgent。
