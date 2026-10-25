@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
@@ -24,9 +25,12 @@ type Options struct {
 	Tools           Tools
 	Model           string
 	System          string
+	InteractionMode string
 	MaxTurns        int
 	RequestTimeout  time.Duration
 	MaxOutputTokens int
+	// ContextView 为 nil 时使用默认窗口创建请求视图，便于直接使用 Agent 的调用方。
+	ContextView *contextview.Manager
 }
 
 type Status string
@@ -42,9 +46,10 @@ const (
 )
 
 var (
-	ErrMaxTurns  = errors.New("已达到模型请求次数上限，任务尚未完成")
-	ErrMaxTokens = errors.New("模型达到输出上限，响应可能不完整，未执行本次工具调用")
-	ErrRefusal   = errors.New("模型拒绝了本次请求")
+	ErrMaxTurns        = errors.New("已达到模型请求次数上限，任务尚未完成")
+	ErrMaxTokens       = errors.New("模型达到输出上限，响应可能不完整，未执行本次工具调用")
+	ErrRefusal         = errors.New("模型拒绝了本次请求")
+	ErrContextExceeded = errors.New("上下文压缩后仍超过可用输入预算")
 )
 
 type EventType string
@@ -57,8 +62,19 @@ const (
 	EventToolStart    EventType = "tool_start"
 	EventToolEnd      EventType = "tool_end"
 	EventToolSkipped  EventType = "tool_skipped"
+	EventNotice       EventType = "notice"
+	EventSummary      EventType = "summary"
 	EventEnd          EventType = "end"
 )
+
+// SummaryInfo 描述一次极限态摘要的结果，便于展示和诊断记录。
+type SummaryInfo struct {
+	Text           string
+	Before         int
+	After          int
+	CoveredThrough int
+	Note           bool
+}
 
 // Event 按执行顺序同步交付，观察方不得修改载荷。
 // ModelEvent 仅用于流式显示；持久化应使用完整 Response。
@@ -71,6 +87,9 @@ type Event struct {
 	Response   *model.Response
 	Call       *model.ToolCall
 	ToolResult *model.ToolResult
+	Artifact   string
+	Notice     string
+	Summary    *SummaryInfo
 	Status     Status
 	Error      string
 }

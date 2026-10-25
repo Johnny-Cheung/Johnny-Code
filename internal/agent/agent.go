@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
@@ -18,10 +19,19 @@ type Conversation struct {
 	messages []model.Message
 	seen     map[string]bool
 	userTurn int
+	view     *contextview.Manager
 }
 
 func NewConversation(opts Options) *Conversation {
-	return &Conversation{options: opts, seen: make(map[string]bool)}
+	view := opts.ContextView
+	if view == nil {
+		maxOutput := opts.MaxOutputTokens
+		if maxOutput <= 0 {
+			maxOutput = 4096
+		}
+		view = contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(contextview.DefaultWindow, maxOutput)})
+	}
+	return &Conversation{options: opts, seen: make(map[string]bool), view: view}
 }
 
 // SetSystemPrompt 替换后续模型请求的系统提示。调用方必须保证不与 Run 并发。
@@ -56,6 +66,10 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	if opts.Client == nil || opts.Tools == nil || strings.TrimSpace(opts.Model) == "" || strings.TrimSpace(prompt) == "" || opts.MaxTurns < 1 || opts.RequestTimeout < 0 || opts.MaxOutputTokens < 1 {
 		return result, fmt.Errorf("模型、工具、模型名、任务及正数执行上限必须提供")
 	}
+	if c.view == nil {
+		c.view = contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(contextview.DefaultWindow, opts.MaxOutputTokens)})
+	}
+	definitions := opts.Tools.Definitions()
 	c.userTurn++
 	result.UserTurn = c.userTurn
 	notify := func(event Event) error {
@@ -73,8 +87,13 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 		// 保留已执行结果，未执行调用补显式错误结果，避免下一轮带着悬空 ID。
 		for _, call := range pending {
 			skipped := model.ToolResult{ToolCallID: call.ID, Content: "工具未执行：本轮已中止。" + errorText(err), IsError: true}
-			c.appendToolResult(skipped)
-			_ = notify(Event{Type: EventToolSkipped, Turn: result.Turns, Call: &call, ToolResult: &skipped, Error: errorText(err)})
+			preview := c.appendToolResult(call, skipped)
+			_ = notify(Event{Type: EventToolSkipped, Turn: result.Turns, Call: &call, ToolResult: &skipped, Artifact: preview.Artifact, Error: errorText(err)})
+		}
+		if compacted := c.view.FinishTurn(); compacted.Compacted {
+			if noticeErr := notify(Event{Type: EventNotice, Notice: fmt.Sprintf("本轮工具输出已轮级压缩：估算 %d → %d token。", compacted.Before, compacted.After)}); noticeErr != nil && err == nil {
+				err = noticeErr
+			}
 		}
 		result.Status = statusFor(err)
 		endErr := notify(Event{Type: EventEnd, Turn: result.Turns, Status: result.Status, Error: errorText(err)})
@@ -85,12 +104,23 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	}()
 	user := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: prompt}}}
 	c.messages = append(c.messages, user)
+	c.view.BeginTurn(c.userTurn, user)
 	if err = notify(Event{Type: EventStart, Message: &user}); err != nil {
 		return result, err
+	}
+	if c.view.NeedsTurnCompaction(opts.System, definitions) {
+		if err = c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, false, notify); err != nil {
+			return result, err
+		}
 	}
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		if err = ctx.Err(); err != nil {
 			return result, err
+		}
+		if c.view.NeedsRequestCompaction(opts.System, definitions) {
+			if err = c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, false, notify); err != nil {
+				return result, err
+			}
 		}
 		if err = notify(Event{Type: EventRequestStart, Turn: turn}); err != nil {
 			return result, err
@@ -99,11 +129,12 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 			return result, err
 		}
 		result.Turns = turn
+		rawEstimate := c.view.RawEstimate(opts.System, definitions)
 		requestCtx, cancel := context.WithTimeout(ctx, opts.RequestTimeout)
 		response, streamErr := opts.Client.Stream(requestCtx, model.Request{
 			Model: opts.Model, System: opts.System,
-			Messages: append([]model.Message(nil), c.messages...),
-			Tools:    opts.Tools.Definitions(), MaxOutputTokens: opts.MaxOutputTokens,
+			Messages: c.view.Messages(),
+			Tools:    definitions, MaxOutputTokens: opts.MaxOutputTokens,
 		}, func(event model.Event) error {
 			if ctxErr := requestCtx.Err(); ctxErr != nil {
 				return ctxErr
@@ -114,6 +145,7 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 			streamErr = requestCtx.Err()
 		}
 		cancel()
+		c.view.ObserveUsage(rawEstimate, response.Usage)
 		result.Message = response.Message
 		if err = notify(Event{Type: EventResponse, Turn: turn, Response: &response, Error: errorText(streamErr)}); err != nil {
 			return result, err
@@ -145,6 +177,7 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 		}
 		// 只有可续接的完整响应进入会话历史；失败或截断原文仍交给诊断记录。
 		c.messages = append(c.messages, response.Message)
+		c.view.AppendAssistant(response.Message)
 		for _, call := range calls {
 			c.seen[call.ID] = true
 		}
@@ -168,9 +201,14 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 			// 模型请求的子 context 已释放；工具使用任务 context 和自身超时。
 			value, execErr := opts.Tools.Execute(ctx, call)
 			converted := tool.ToModelResult(call.ID, value, execErr)
-			c.appendToolResult(converted)
+			preview := c.appendToolResult(call, converted)
+			if preview.Warning != "" {
+				if err = notify(Event{Type: EventNotice, Notice: preview.Warning}); err != nil {
+					return result, err
+				}
+			}
 			pending = pending[1:]
-			if err = notify(Event{Type: EventToolEnd, Turn: turn, Call: &call, ToolResult: &converted, Error: errorText(execErr)}); err != nil {
+			if err = notify(Event{Type: EventToolEnd, Turn: turn, Call: &call, ToolResult: &converted, Artifact: preview.Artifact, Error: errorText(execErr)}); err != nil {
 				return result, err
 			}
 			// 工具自身 DeadlineExceeded 是普通工具错误；只检查父任务是否已结束。
@@ -182,8 +220,9 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	return result, ErrMaxTurns
 }
 
-func (c *Conversation) appendToolResult(result model.ToolResult) {
+func (c *Conversation) appendToolResult(call model.ToolCall, result model.ToolResult) contextview.Preview {
 	c.messages = append(c.messages, model.Message{Role: model.RoleTool, Content: []model.ContentBlock{{Type: model.BlockToolResult, ToolResult: &result}}})
+	return c.view.AppendToolResult(c.userTurn, call, result)
 }
 
 func responseCalls(message model.Message, seen map[string]bool) ([]model.ToolCall, error) {

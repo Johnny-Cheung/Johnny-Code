@@ -13,6 +13,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +33,7 @@ var errRecorderClosed = errors.New("session recorder is closed")
 // Metadata identifies the task that produced a session log. It deliberately
 // contains no credentials or environment snapshot.
 type Metadata struct {
+	ID             string
 	WorkDir        string
 	API            string
 	Model          string
@@ -93,9 +96,15 @@ func New(meta Metadata) (*Recorder, error) {
 		return nil, fmt.Errorf("set session directory permissions: %w", err)
 	}
 
-	id, err := newSessionID()
-	if err != nil {
-		return nil, fmt.Errorf("generate session id: %w", err)
+	id := strings.TrimSpace(meta.ID)
+	if id == "" {
+		id, err = NewID()
+		if err != nil {
+			return nil, fmt.Errorf("generate session id: %w", err)
+		}
+	}
+	if !validSessionID(id) {
+		return nil, fmt.Errorf("session id is invalid")
 	}
 	path := filepath.Join(dir, id+".jsonl")
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sessionFileMode)
@@ -174,6 +183,11 @@ func (r *Recorder) Record(event agent.Event) error {
 	case agent.EventToolEnd, agent.EventToolSkipped:
 		record.Call = newToolCall(event.Call)
 		record.Result = event.ToolResult
+		record.Artifact = event.Artifact
+	case agent.EventNotice:
+		record.Notice = event.Notice
+	case agent.EventSummary:
+		record.Summary = newSummary(event.Summary)
 	case agent.EventEnd:
 		record.Status = event.Status
 	}
@@ -239,11 +253,22 @@ func (r *Recorder) write(value any) error {
 }
 
 func newSessionID() (string, error) {
+	return NewID()
+}
+
+// NewID 生成会话 ID。会话日志和工具输出存档共用同一个 ID。
+func NewID() (string, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(id[:]), nil
+}
+
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+func validSessionID(id string) bool {
+	return sessionIDPattern.MatchString(id)
 }
 
 type metaEvent struct {
@@ -265,8 +290,32 @@ type eventRecord struct {
 	Response *responseRecord   `json:"response,omitempty"`
 	Call     *toolCallRecord   `json:"call,omitempty"`
 	Result   *model.ToolResult `json:"result,omitempty"`
+	Artifact string            `json:"artifact,omitempty"`
+	Notice   string            `json:"notice,omitempty"`
+	Summary  *summaryRecord    `json:"summary,omitempty"`
 	Status   agent.Status      `json:"status,omitempty"`
 	Error    string            `json:"error,omitempty"`
+}
+
+type summaryRecord struct {
+	Text           string `json:"text"`
+	BeforeTokens   int    `json:"before_tokens"`
+	AfterTokens    int    `json:"after_tokens"`
+	CoveredThrough int    `json:"covered_through,omitempty"`
+	Note           bool   `json:"note,omitempty"`
+}
+
+func newSummary(summary *agent.SummaryInfo) *summaryRecord {
+	if summary == nil {
+		return nil
+	}
+	return &summaryRecord{
+		Text:           summary.Text,
+		BeforeTokens:   summary.Before,
+		AfterTokens:    summary.After,
+		CoveredThrough: summary.CoveredThrough,
+		Note:           summary.Note,
+	}
 }
 
 type permissionEvent struct {
