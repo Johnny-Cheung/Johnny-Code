@@ -225,5 +225,6 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.7：安全与权限（已实现，等待验收）](docs/versions/v0.7.md)
 - [v0.8：Skills（已确认冻结）](docs/versions/v0.8.md)
 - [v0.9：MCP（暂缓）](docs/versions/v0.9.md)
+- [v0.10：上下文治理（讨论中）](docs/versions/v0.10.md)
 
-> v0.9 MCP 已确认暂缓，设计讨论保留；下一阶段优先 v0.10 上下文治理，随后 v0.11 长期记忆和 v0.12 SubAgent。
+> v0.9 MCP 已确认暂缓，设计讨论保留；下一阶段优先 v0.10 上下文治理，已开始讨论；随后 v0.11 长期记忆和 v0.12 SubAgent。
