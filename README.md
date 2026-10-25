@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。v0.10 上下文治理设计已完成，待确认后实现。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.10 在 v0.8 基础上增加上下文治理：完整历史与每次请求视图分离，单次工具结果模型可见预览最多 32 KiB，bash 大输出保存到 `.johnny/artifacts/<会话ID>/`，每轮结束按节省量压缩工具结果，接近模型窗口时保留最近 5 个已完成轮次并生成九段式摘要；`/context` 查看预算、缓存和摘要，`/compact` 手动压缩。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。v0.10 已实现，等待联合验收。
 
 ## 安装和更新
 
@@ -48,6 +48,8 @@ TUI 操作：
 | 审批等待中 `↑`/`↓`、`k`/`j`、`Enter` | 选择“允许本次 / 拒绝本次 / 批准并记录”；默认焦点在拒绝 |
 | 审批等待中 `Ctrl+C` | 取消本轮，不执行待审批操作 |
 | `/permissions` | 查看固定白名单、危险后缀黑名单和项目规则；支持 `remove-command`、`remove-path`、`clear` |
+| `/context` | 查看上下文估算、窗口预算、缓存指标、摘要和工具输出存档 |
+| `/compact` | 手动压缩较早的已完成轮次；压缩期间 `Ctrl+C` 取消 |
 | `/skills` | 查看已加载、被项目级覆盖、未加载和未注入提示的 Skill |
 | `/skills reload` | 重新扫描项目级和用户级 Skill 目录，并更新后续轮次的系统提示 |
 | `/skill <name> [参数]` | 显式使用某个 Skill；正文直接进入本轮任务，终端只显示原始命令 |
@@ -75,6 +77,21 @@ johnny --permission-mode read-only
 - 默认模式不是“所有操作都自动”，也不是“所有操作都弹窗”：低风险、可解释的操作保持流畅，写入、任意命令和范围外访问由用户决定。
 
 > 下文的“默认模式”均指 `--permission-mode default`，不是未传参数时的 CLI 默认值。自 2026-10-25 起，开发阶段 CLI 默认值改为 `allow`。
+
+## 上下文治理
+
+v0.10 把上下文分成三层：完整历史、每次实际发送给模型的请求视图、终端展示视图。完整历史只追加不压缩；请求视图按预算截断大载荷、保存工具输出并在接近窗口上限时压缩；展示视图只负责如实显示，不做上下文压缩。
+
+- 单次工具结果超过 32 KiB 时，模型可见内容最多保留 32 KiB 预览；完整结果仍在会话 JSONL 中。bash 超出部分保存到 `<工作目录>/.johnny/artifacts/<会话ID>/turn-N/call-M-bash.log`，模型可以直接用 `read` 再次读取；目录权限 0700，文件 0600，正常退出时删除当前会话存档。
+- bash 预览保留开头 24 KiB 和结尾 8 KiB，便于同时看到启动信息和错误尾部；`read` 保留开头 32 KiB，并在预览中给出下一次 `offset`；其他工具保留开头 32 KiB。
+- 一轮内工具预览累计达到 128 KiB 后，后续大结果只保留 8 KiB 小预览和存档/续读路径。
+- 每轮结束评估该轮工具结果：只有节省至少 4096 token 且至少节省一半时才整轮替换为压缩记录。压缩记录保留工具名、状态、大小、存档路径和小预览；`tool_call` / `tool_result` 保持成对，更早轮次不重写。
+- 接近窗口时自动压缩：轮开始前估算达到 90% 可用输入预算，或每次请求前达到 95%，保留当前轮和最近 5 个已完成轮次，把更早轮次替换为一条带边界的合成 user 摘要消息。只保留最新摘要，旧摘要通过“历史摘要”字段带入新摘要。
+- 摘要请求不使用工具，独立超时并使用单独输出上限，不占当前轮 `--max-turns`。摘要采用九段结构，并包含当前交互模式、历史摘要、待办和与最近轮次的衔接；运行时会丢弃 `<analysis>`，只保留 `<summary>`。
+- 摘要失败时降级为确定性裁剪；仍超过预算时报 `context_exceeded`。连续失败或压缩后快速回填会触发 thrashing 熔断，停止自动压缩；`/compact` 仍可手动执行。
+- 预算口径：`W` 为窗口，`O` 为输出预留，`S = max(16384, W × 5%)`，`U = W - O - S`。`JOHNNY_CONTEXT_WINDOW` 覆盖 `W`（默认 1000000），`JOHNNY_MAX_OUTPUT_TOKENS` 覆盖 `O`（默认 4096）。
+- `read` / `bash` 的大结果预览是请求视图，不改变完整历史和 JSONL 记录；工具结果存档不是长期记忆，也不用于会话恢复。
+- `/context` 显示估算占用、预算、最近请求缓存读写、摘要和存档目录；JSONL 中 `notice` / `summary` 事件记录压缩过程和摘要正文，`tool_end` 同时记录完整结果和存档路径。
 
 ## Skills
 
@@ -165,7 +182,7 @@ JOHNNY_MODEL=中转站提供的模型名称
 
 命令行 `--api`、`--model` 优先于相应环境变量；`JOHNNY_*` 环境变量按字段优先于文件值。显式空值也会覆盖配置并报错；可选协议字段只有在完全未提供时才使用默认值。其他应用的 Anthropic/OpenAI 凭据不会覆盖本项目认证。`.env` 被 Git 忽略，仓库只包含模板。
 
-每次模型请求最多等待 5 分钟、最多输出 4096 个 token；每轮用户输入默认最多请求模型 50 次，可用 `--max-turns 正整数` 调整（选项放在启动命令上），下一轮重新计算预算。任务不设固定总超时。最后一次允许的响应仍请求工具时，不再执行这批工具，明确提示达到上限；截断、拒绝或请求失败也会清楚停止本轮，不自动重试。Bash 默认超时 2 分钟，工具参数可指定 1～600 秒。
+每次模型请求最多等待 5 分钟、默认最多输出 4096 个 token（可用 `JOHNNY_MAX_OUTPUT_TOKENS` 覆盖）；每轮用户输入默认最多请求模型 50 次，可用 `--max-turns 正整数` 调整（选项放在启动命令上），下一轮重新计算预算。任务不设固定总超时。最后一次允许的响应仍请求工具时，不再执行这批工具，明确提示达到上限；截断、拒绝或请求失败也会清楚停止本轮，不自动重试。Bash 默认超时 2 分钟，工具参数可指定 1～600 秒。
 
 模型正文在 TUI 中流式接收并按 Markdown 渲染；思考字段不作为正文显示。工具名称、路径或命令、成功或失败状态，以及有限结果预览在执行期间显示在输入框上方，本轮结束后折叠为一行摘要，可用 `Ctrl+O` 展开；日志路径和警告也经界面显示。成功退出码为 0，失败为 1，进程取消为 130；TUI 内取消单轮后仍保留进程，之后正常退出为 0。
 
@@ -202,9 +219,9 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
+测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；上下文估算、32 KiB 预览、轮内预览预算、bash 存档与清理、轮级压缩、摘要前缀替换、90%/95% 触发、摘要失败降级、上下文超限和 thrashing 熔断；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；`/context`、`/compact`、上下文配置解析和摘要事件日志；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
-统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/agent` 负责本轮消息历史、模型与工具调度及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，斜杠菜单在 `internal/tui/slash_menu.go`，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
+统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/contextview` 负责预算和 token 估算、工具结果预览与存档、请求视图、轮级压缩、摘要前缀替换和 thrashing 保护；`internal/agent` 负责本轮消息历史、模型与工具调度、摘要请求及结束判断；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，斜杠菜单在 `internal/tui/slash_menu.go`，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
 
 手动验证工具：
 
@@ -227,6 +244,6 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.7：安全与权限（已实现，验收与收口后置）](docs/versions/v0.7.md)
 - [v0.8：Skills（已确认冻结）](docs/versions/v0.8.md)
 - [v0.9：MCP（暂缓）](docs/versions/v0.9.md)
-- [v0.10：上下文治理（设计完成，待确认）](docs/versions/v0.10.md)
+- [v0.10：上下文治理（已实现，待联合验收）](docs/versions/v0.10.md)
 
-> v0.9 MCP 已确认暂缓，设计讨论保留；下一阶段优先 v0.10 上下文治理，设计已完成，待用户确认后实现；随后 v0.11 长期记忆和 v0.12 SubAgent。
+> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已实现，等待联合验收；随后 v0.11 长期记忆和 v0.12 SubAgent。
