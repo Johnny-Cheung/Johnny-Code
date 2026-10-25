@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 仍等待后续统一复核。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。
 
 ## 安装和更新
 
@@ -57,12 +57,12 @@ TUI 操作：
 权限模式：
 
 ```sh
-johnny                                      # 默认模式
+johnny                                      # 开发阶段默认：放行模式
+johnny --permission-mode default            # 逐次审批
 johnny --permission-mode read-only
-johnny --permission-mode allow
 ```
 
-- `default`：不传 `--permission-mode` 时使用。启动工作目录和项目路径白名单内 `read`、`write`、`edit` 自动执行；`echo`、`pwd`、`ls`、`find`、`grep`、`cat`、`head`、`tail`、`wc`、`stat`、`du`、`diff` 的受限形式自动执行；其余文件访问、Bash 命令通过审批。
+- `default`：显式传入 `--permission-mode default` 时使用。启动工作目录和项目路径白名单内 `read`、`write`、`edit` 自动执行；`echo`、`pwd`、`ls`、`find`、`grep`、`cat`、`head`、`tail`、`wc`、`stat`、`du`、`diff` 的受限形式自动执行；其余文件访问、Bash 命令通过审批。
 - 自动执行必须同时满足：未命中危险后缀黑名单；每个命令段命中用户级查询白名单或已记录的项目前缀；可识别的路径参数都在项目路径白名单内。
 - 默认模式支持受控的 `cd <目录> && <简单命令>` 链，以及简单的 `||`、`;` 控制运算符，最多 8 段；每段独立检查，`cd` 只允许出现在第一段。满足条件时整条链按直接 argv 调用执行，不经过 shell；`&&`、`;` 可记录，含 `||` 的链只能本次允许。默认模式的管道仍进入一次性审批，不提供记录；重定向、后台执行、命令替换、循环和脚本解释器同样需要审批。
 - 项目命令前缀只接受固定工具族的安全子命令，例如 `git status`、`git log`、`go test`、`go build`、`cargo test`、`npm run build`、`make test`。首次审批选择“批准并记录”后写入 `.johnny/permissions.local.json`，后续同前缀自动执行；解释器、shell、危险后缀不提供记录。
@@ -70,9 +70,11 @@ johnny --permission-mode allow
 - 审批只有“允许本次”“拒绝本次”“批准并记录”三项；默认焦点在拒绝。等待审批期间 `Ctrl+C` 取消本轮。参数任务、管道和重定向在入口处直接拒绝，不会进入 TUI 或打开 `/dev/tty`。
 - 项目规则文件加载前会展示内容并请求确认，确认后的内容哈希保存在 `~/.johnny/trusted_permissions.json`；文件变化后重新确认。
 - `read-only`：拒绝 `write`、`edit`；`read` 只能读取启动工作目录内的文件（允许读取 `.env` 等敏感文件）；`bash` 只允许上述 12 个查询命令的受限形式，不经过 shell，并额外允许两段固定查询管道，例如 `find . -name '*.go' | head -n 20`、`ls | wc -l`；管道消费者不能带路径，仍拒绝重定向、`&&`、`||`、`;` 和其他复合命令。不做 shell 通配符展开，按名称查找文件请用 `find -name`。
-- `allow`：直接执行工具（包括 `skill`），不进行逐次确认，必须显式选择。
+- `allow`：开发阶段不传 `--permission-mode` 时的默认模式；直接执行工具（包括 `skill`），不进行逐次确认，也可以显式选择。
 - 三种模式都是应用层策略，不是操作系统沙箱。默认模式的 Bash 仍以当前用户权限运行，脚本内部行为不受路径检查限制；只读模式允许读取范围内的 `.env`、私钥、`.git` 等文件但拒绝写入；放行模式不应用路径规则。默认模式路径白名单内的 `.env`、私钥、`.git` 和 `.johnny` 权限文件可以直接读写，这是明确取舍。默认模式的子进程环境会过滤 Johnny 和模型服务凭据变量，但不能阻止命令读取磁盘上的配置。
 - 默认模式不是“所有操作都自动”，也不是“所有操作都弹窗”：低风险、可解释的操作保持流畅，写入、任意命令和范围外访问由用户决定。
+
+> 下文的“默认模式”均指 `--permission-mode default`，不是未传参数时的 CLI 默认值。自 2026-10-25 起，开发阶段 CLI 默认值改为 `allow`。
 
 ## Skills
 
@@ -175,7 +177,7 @@ JOHNNY_MODEL=中转站提供的模型名称
 用 write 创建输出 hello 的 main.go，用 read 读取，用 edit 将 hello 改成 world，再用 bash 执行 go run main.go 并检查输出。
 ```
 
-默认模式下 `go run` 会请求审批；也可以启动 `johnny --permission-mode allow` 直接执行。所有入口都必须是终端 TUI，参数任务和管道会被拒绝。
+开发阶段默认放行，`go run` 会直接执行；需要审批时使用 `johnny --permission-mode default`。所有入口都必须是终端 TUI，参数任务和管道会被拒绝。
 
 若网络需要代理，启动前设置本机适用的 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`。Go 默认依赖源不可访问时，可以临时为安装命令指定可用镜像：
 
@@ -222,7 +224,7 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.4：工具系统](docs/versions/v0.4.md)
 - [v0.5：Agent Loop](docs/versions/v0.5.md)
 - [v0.6：TUI](docs/versions/v0.6.md)
-- [v0.7：安全与权限（已实现，等待验收）](docs/versions/v0.7.md)
+- [v0.7：安全与权限（已实现，验收与收口后置）](docs/versions/v0.7.md)
 - [v0.8：Skills（已确认冻结）](docs/versions/v0.8.md)
 - [v0.9：MCP（暂缓）](docs/versions/v0.9.md)
 - [v0.10：上下文治理（讨论中）](docs/versions/v0.10.md)
