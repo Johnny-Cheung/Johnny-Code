@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.7、v0.8 代码已实现，等待用户验收。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 仍等待后续统一复核。
 
 ## 安装和更新
 
@@ -223,4 +223,5 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.5：Agent Loop](docs/versions/v0.5.md)
 - [v0.6：TUI](docs/versions/v0.6.md)
 - [v0.7：安全与权限（已实现，等待验收）](docs/versions/v0.7.md)
-- [v0.8：Skills（已实现，等待验收）](docs/versions/v0.8.md)
+- [v0.8：Skills（已确认冻结）](docs/versions/v0.8.md)
+- [v0.9：MCP（讨论中）](docs/versions/v0.9.md)
