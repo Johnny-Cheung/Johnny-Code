@@ -224,4 +224,4 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.6：TUI](docs/versions/v0.6.md)
 - [v0.7：安全与权限（已实现，等待验收）](docs/versions/v0.7.md)
 - [v0.8：Skills（已确认冻结）](docs/versions/v0.8.md)
-- [v0.9：MCP（讨论中）](docs/versions/v0.9.md)
+- [v0.9：MCP（讨论中，首版只做 Tools）](docs/versions/v0.9.md)
