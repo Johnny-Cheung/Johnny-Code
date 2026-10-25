@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -20,24 +21,43 @@ func useTUI(input io.Reader, output io.Writer) bool {
 	return inOK && outOK && term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
-func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), skills *skill.Store) int {
+func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store) int {
 	var tuiLocalCommand func(string) (tui.LocalCommandResult, bool)
 	if localCommand != nil {
 		tuiLocalCommand = func(line string) (tui.LocalCommandResult, bool) {
 			result, handled := localCommand(line)
-			return tui.LocalCommandResult{Output: result.Output, Prompt: result.Prompt}, handled
+			return tui.LocalCommandResult{Output: result.Output, Prompt: result.Prompt, Compact: result.Compact}, handled
 		}
 	}
 	var tuiSlashCommands func() []tui.SlashCommand
 	if skills != nil {
 		tuiSlashCommands = func() []tui.SlashCommand { return slashCommands(skills) }
 	}
+	var tuiCompact func(context.Context, func(string)) (string, error)
+	if compact != nil {
+		tuiCompact = func(runCtx context.Context, notice func(string)) (string, error) {
+			logs.stderr = noticeWriter{notice: notice}
+			return compact(runCtx, func(event agent.Event) error {
+				switch event.Type {
+				case agent.EventNotice:
+					if event.Notice != "" {
+						notice(event.Notice)
+					}
+				case agent.EventSummary:
+					if event.Summary != nil {
+						notice(fmt.Sprintf("上下文摘要已更新：估算 %d → %d token；输入 /context 查看摘要。", event.Summary.Before, event.Summary.After))
+					}
+				}
+				return nil
+			})
+		}
+	}
 	// 运行中的日志提示进入 UI 队列，避免直接写 stderr 破坏正在重绘的输入区。
 	// Run 等待所有任务退出后才返回，此时关闭日志的警告可回到普通 stderr。
 	defer func() { logs.stderr = stderr }()
 	err := tui.Run(ctx, tui.Options{
 		Input: input, Output: output, Model: modelName, WorkDir: workDir, Version: version, Mode: permissionLabel,
-		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands,
+		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands, RunCompact: tuiCompact,
 		RunTurn: func(turnCtx context.Context, prompt string, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
 			logs.stderr = noticeWriter{notice: notice}
 			return conversation.Run(turnCtx, prompt, func(event agent.Event) error {
@@ -66,7 +86,7 @@ func (w noticeWriter) Write(data []byte) (int, error) {
 // 与内置命令同名的 Skill 不作为独立命令展示，但仍可用 /skill <name>。
 func slashCommands(skills *skill.Store) []tui.SlashCommand {
 	reserved := map[string]bool{
-		"skills": true, "skill": true, "permissions": true, "exit": true,
+		"skills": true, "skill": true, "permissions": true, "context": true, "compact": true, "exit": true,
 	}
 	commands := make([]tui.SlashCommand, 0, 5)
 	for _, item := range skills.Skills() {
@@ -84,6 +104,8 @@ func slashCommands(skills *skill.Store) []tui.SlashCommand {
 		tui.SlashCommand{Command: "skills reload", Description: "重新扫描项目级和用户级目录", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "skill", Description: "显式使用 Skill：/skill <name> [参数]", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "permissions", Description: "查看固定权限名单和项目规则", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "context", Description: "查看上下文估算、预算、摘要和存档", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "compact", Description: "手动压缩较早的已完成轮次", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "exit", Description: "退出当前会话", Source: "内置", Builtin: true},
 	)
 }
@@ -96,6 +118,16 @@ func terminalEvent(event agent.Event) (tui.Event, bool) {
 		return converted, true
 	case agent.EventRequestStart, agent.EventEnd:
 		return converted, true
+	case agent.EventNotice:
+		converted.Text = event.Notice
+		return converted, true
+	case agent.EventSummary:
+		if event.Summary != nil {
+			converted.Kind = agent.EventNotice
+			converted.Text = fmt.Sprintf("上下文摘要已更新：估算 %d → %d token；输入 /context 查看摘要。", event.Summary.Before, event.Summary.After)
+			return converted, true
+		}
+		return converted, false
 	case agent.EventModel:
 		if event.ModelEvent == nil || event.ModelEvent.Type != model.EventBlockDelta || event.ModelEvent.Block.Type != model.BlockText || event.ModelEvent.Delta == "" {
 			return converted, false
@@ -131,6 +163,9 @@ func terminalEvent(event agent.Event) (tui.Event, bool) {
 			}
 			if truncated {
 				detail += "\n…（预览已截断）"
+			}
+			if event.Artifact != "" {
+				detail += "\n[存档] " + event.Artifact
 			}
 			converted.Text = detail
 		}

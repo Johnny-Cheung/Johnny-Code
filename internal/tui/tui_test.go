@@ -114,6 +114,48 @@ func TestExitKeys(t *testing.T) {
 	}
 }
 
+func TestCompactCommandRunsInBackgroundAndRestoresInput(t *testing.T) {
+	m := testModel(t)
+	notices := 0
+	m.options.RunCompact = func(ctx context.Context, notice func(string)) (string, error) {
+		notice("正在压缩")
+		return "上下文已压缩", nil
+	}
+	m.input.SetValue("/compact")
+	m.options.LocalCommand = func(line string) (LocalCommandResult, bool) {
+		if line == "/compact" {
+			return LocalCommandResult{Compact: true}, true
+		}
+		return LocalCommandResult{}, false
+	}
+	if _, cmd := m.Update(keyPress(tea.KeyEnter)); cmd == nil || !m.busy {
+		t.Fatal("/compact 应进入后台压缩状态")
+	}
+	deadline := time.After(2 * time.Second)
+	for done := false; !done; {
+		select {
+		case item := <-m.events:
+			if item.notice != "" {
+				notices++
+			}
+			if item.compactDone {
+				m.receive(item)
+				done = true
+				continue
+			}
+			m.receive(item)
+		case <-deadline:
+			t.Fatal("压缩未在预期时间内完成")
+		}
+	}
+	if m.busy || m.stopping || m.status != "空闲" {
+		t.Fatalf("压缩后状态错误：busy=%v stopping=%v status=%q", m.busy, m.stopping, m.status)
+	}
+	if notices == 0 {
+		t.Fatal("压缩提示未传递到界面")
+	}
+}
+
 func TestCancellationWaitsForWorkerAndAllowsNextTurn(t *testing.T) {
 	m := testModel(t)
 	started, release := make(chan string, 2), make(chan struct{})

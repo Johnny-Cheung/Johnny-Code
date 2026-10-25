@@ -19,6 +19,7 @@ import (
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/config"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
@@ -32,7 +33,7 @@ const (
 )
 
 var (
-	version          = "0.8.0"
+	version          = "0.10.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -122,6 +123,14 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
 	}
+	contextCfg, err := contextConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return reportError(stderr, "配置错误：", err)
+	}
+	sessionID, err := session.NewID()
+	if err != nil {
+		return reportError(stderr, "会话初始化失败：", err)
+	}
 
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -164,8 +173,19 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		return reportError(stderr, "配置错误：", err)
 	}
 
+	view := contextview.NewManager(contextview.Config{
+		Budget:    contextview.NewBudget(contextCfg.Window, contextCfg.OutputTokens),
+		WorkDir:   runtime.WorkDir,
+		SessionID: sessionID,
+	})
+	defer func() {
+		if err := view.Close(); err != nil {
+			fmt.Fprintf(stderr, "警告：清理工具输出存档失败：%s\n", escapeTerminal(err.Error()))
+		}
+	}()
+
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
-	logs := openSessionLogger(session.Metadata{WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
+	logs := openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
 	defer logs.close()
 	if gate != nil {
 		gate.SetAudit(logs.recordPermission)
@@ -177,27 +197,54 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		Tools:           tools,
 		Model:           cfg.Model,
 		System:          systemPrompt(runtime.WorkDir, mode, skills),
+		InteractionMode: mode.label(),
 		MaxTurns:        *maxTurns,
 		RequestTimeout:  agent.DefaultRequestTimeout,
-		MaxOutputTokens: 4096,
+		MaxOutputTokens: contextCfg.OutputTokens,
+		ContextView:     view,
 	})
+	compact := func(ctx context.Context, emit func(agent.Event) error) (string, error) {
+		return conversation.Compact(ctx, func(event agent.Event) error {
+			logs.record(event)
+			if emit != nil {
+				return emit(event)
+			}
+			switch event.Type {
+			case agent.EventNotice:
+				if event.Notice != "" {
+					fmt.Fprintln(stderr, "[上下文] "+event.Notice)
+				}
+			case agent.EventSummary:
+				if event.Summary != nil {
+					fmt.Fprintf(stderr, "[上下文] 摘要已更新：估算 %d → %d token。\n", event.Summary.Before, event.Summary.After)
+				}
+			}
+			return nil
+		})
+	}
+	contextCommands := &contextController{
+		stats: func() string { return contextStatsText(conversation.ContextStats()) },
+		compact: func(ctx context.Context) (string, error) {
+			return compact(ctx, nil)
+		},
+	}
 	localCommand := newLocalCommandHandler(rules, skills, func() error {
 		if err := skills.Reload(); err != nil {
 			return err
 		}
 		conversation.SetSystemPrompt(systemPrompt(runtime.WorkDir, mode, skills))
 		return nil
-	}).Handle
+	}, contextCommands).Handle
 
 	if !interactive {
 		printPermissionNotice(stderr, mode)
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
 	if useTUI(input, output) {
-		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand, skills)
+		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand, compact, skills)
 	}
 	printPermissionNotice(stderr, mode)
-	return runInteractive(ctx, conversation, input, logs, display, stderr, localCommand)
+	return runInteractive(ctx, conversation, input, logs, display, stderr, localCommand, contextCommands.compact)
 }
 
 // runTask 执行参数模式下的唯一任务；无论成功失败都直接结束进程。
@@ -211,7 +258,7 @@ func runTask(ctx context.Context, conversation *agent.Conversation, prompt strin
 
 // runInteractive 反复读取用户输入并在同一会话历史上执行。
 // 输入 /exit、EOF 或父 context 取消时结束；单轮模型失败只报告并继续等待。
-func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer, localCommand func(string) (localCommandResult, bool)) int {
+func runInteractive(ctx context.Context, conversation *agent.Conversation, input io.Reader, logs *sessionLogger, display *renderer, stderr io.Writer, localCommand func(string) (localCommandResult, bool), compact func(context.Context) (string, error)) int {
 	reader := bufio.NewReader(input)
 	for {
 		if err := writeProgress(stderr, "请输入任务："); err != nil {
@@ -235,6 +282,24 @@ func runInteractive(ctx context.Context, conversation *agent.Conversation, input
 		prompt := line
 		if localCommand != nil {
 			if result, handled := localCommand(line); handled {
+				if result.Compact {
+					if compact == nil {
+						fmt.Fprintln(stderr, "当前会话未启用上下文治理。")
+						continue
+					}
+					text, compactErr := compact(ctx)
+					if compactErr != nil {
+						if ctx.Err() != nil {
+							return reportError(stderr, "任务失败：", compactErr)
+						}
+						fmt.Fprintln(stderr, "上下文压缩失败：", compactErr)
+						continue
+					}
+					if text != "" {
+						fmt.Fprintln(stderr, text)
+					}
+					continue
+				}
 				if result.Prompt == "" {
 					if result.Output != "" {
 						fmt.Fprintln(stderr, result.Output)
@@ -361,6 +426,19 @@ func (r *renderer) Handle(event agent.Event) error {
 		return writeProgress(r.stderr, message)
 	case agent.EventModel:
 		return r.displayModel(event.ModelEvent)
+	case agent.EventNotice:
+		if err := r.endLine(); err != nil {
+			return err
+		}
+		return writeProgress(r.stderr, "[上下文] "+event.Notice+"\n")
+	case agent.EventSummary:
+		if event.Summary == nil {
+			return nil
+		}
+		if err := r.endLine(); err != nil {
+			return err
+		}
+		return writeProgress(r.stderr, fmt.Sprintf("[上下文] 摘要已更新：估算 %d → %d token；输入 /context 查看摘要。\n", event.Summary.Before, event.Summary.After))
 	case agent.EventResponse, agent.EventToolStart, agent.EventToolEnd:
 		if err := r.endLine(); err != nil {
 			return err
@@ -369,7 +447,7 @@ func (r *renderer) Handle(event agent.Event) error {
 		case agent.EventToolStart:
 			return r.displayToolStart(event.Call)
 		case agent.EventToolEnd:
-			return r.displayToolEnd(event.ToolResult)
+			return r.displayToolEnd(event.ToolResult, event.Artifact)
 		}
 	case agent.EventEnd:
 		return r.endLine()
@@ -429,7 +507,7 @@ func (r *renderer) displayToolStart(call *model.ToolCall) error {
 	return writeProgress(r.stderr, fmt.Sprintf("[%s] %s\n", name, key))
 }
 
-func (r *renderer) displayToolEnd(result *model.ToolResult) error {
+func (r *renderer) displayToolEnd(result *model.ToolResult, artifact string) error {
 	if result == nil {
 		return writeProgress(r.stderr, "[完成]\n")
 	}
@@ -438,6 +516,12 @@ func (r *renderer) displayToolEnd(result *model.ToolResult) error {
 		status = "失败"
 	}
 	preview := toolPreview(result.Content)
+	if artifact != "" {
+		if preview != "" {
+			preview += "\n"
+		}
+		preview += "存档：" + escapeTerminal(artifact)
+	}
 	if preview == "" {
 		return writeProgress(r.stderr, fmt.Sprintf("[%s]\n", status))
 	}
@@ -730,10 +814,16 @@ func printHelp(output io.Writer) {
   每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
   /permissions 查看固定权限名单和项目规则；支持 remove-command、remove-path、clear。
   /skills 查看已加载 Skill；/skills reload 重新扫描；/skill <name> [参数] 显式使用。
+  /context 查看上下文估算、预算、摘要、缓存指标和工具输出存档。
+  /compact 手动压缩较早的已完成轮次；自动压缩在接近窗口上限时触发。
   Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
   Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
   TUI 审批只有允许本次、拒绝本次、批准并记录；等待审批时 Ctrl+C 取消本轮。
   每轮独立计算模型请求次数；单轮失败会说明原因并继续等待输入。
+上下文预算：
+  JOHNNY_CONTEXT_WINDOW 模型上下文窗口，默认 1000000
+  JOHNNY_MAX_OUTPUT_TOKENS 每次请求输出预留，默认 4096
+  单次工具结果模型可见预览最多 32 KiB；bash 大输出保存到 .johnny/artifacts/<会话ID>/
 配置文件：%s
 `, agent.DefaultMaxTurns, path)
 }

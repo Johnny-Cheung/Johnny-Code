@@ -50,13 +50,15 @@ type Options struct {
 	LocalCommand  func(string) (LocalCommandResult, bool)
 	SlashCommands func() []SlashCommand
 	RunTurn       func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
+	RunCompact    func(context.Context, func(string)) (string, error)
 }
 
 // LocalCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
-// 但终端只显示用户输入的原始命令；否则只显示 Output。
+// Compact 为 true 时执行一次手动上下文压缩，否则只显示 Output。
 type LocalCommandResult struct {
-	Output string
-	Prompt string
+	Output  string
+	Prompt  string
+	Compact bool
 }
 
 type approvalDelivery struct {
@@ -78,13 +80,15 @@ type approvalState struct {
 }
 
 type delivery struct {
-	event    Event
-	approval *approvalDelivery
-	notice   string
-	ready    chan error
-	done     bool
-	result   agent.Result
-	err      error
+	event       Event
+	approval    *approvalDelivery
+	notice      string
+	ready       chan error
+	done        bool
+	compactDone bool
+	text        string
+	result      agent.Result
+	err         error
 }
 
 // toolStatusShownMsg 标记状态区已经获得一次渲染机会，可以检查输出错误并
@@ -341,6 +345,9 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.options.LocalCommand != nil {
 				if result, handled := m.options.LocalCommand(prompt); handled {
+					if result.Compact {
+						return m, m.startCompact(prompt)
+					}
 					if result.Prompt != "" {
 						return m, m.startExpanded(result.Prompt, prompt)
 					}
@@ -467,6 +474,44 @@ func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
 	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth())), m.waitEvent())
 }
 
+// startCompact 在后台生成摘要，期间保持输入区不可编辑，结束后打印结果。
+func (m *terminalModel) startCompact(display string) tea.Cmd {
+	if m.options.RunCompact == nil {
+		return m.showLocalResult(display, "当前会话未启用上下文治理。")
+	}
+	m.busy, m.stopping = true, false
+	m.status = "正在压缩上下文…"
+	m.pendingReady = nil
+	m.liveTools = nil
+	m.pendingPrint = nil
+	m.resetResponse()
+	m.input.Reset()
+	m.input.Blur()
+	m.slash = slashMenuState{}
+	m.history = append(m.history, display)
+	m.historyIndex, m.draft = len(m.history), ""
+	m.resizeInput()
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	m.cancel = cancel
+	m.workers.Add(1)
+	go func() {
+		defer m.workers.Done()
+		defer cancel()
+		notice := func(text string) {
+			select {
+			case m.events <- delivery{notice: text}:
+			case <-m.ctx.Done():
+			}
+		}
+		text, err := m.options.RunCompact(turnCtx, notice)
+		select {
+		case m.events <- delivery{compactDone: true, text: text, err: err}:
+		case <-m.ctx.Done():
+		}
+	}()
+	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth())), m.waitEvent())
+}
+
 func (m *terminalModel) requestApproval(ctx context.Context, request tool.ApprovalRequest) (tool.ApprovalDecision, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -575,6 +620,9 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 	if item.done {
 		return m.finishTurn(item)
 	}
+	if item.compactDone {
+		return m.finishCompact(item)
+	}
 	if item.approval != nil {
 		m.beginApproval(item.approval)
 		return m.waitEvent()
@@ -590,6 +638,12 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 		m.resetResponse()
 		if !m.stopping {
 			m.status = "正在等待模型回复…"
+		}
+	case agent.EventNotice:
+		if event.Text != "" {
+			m.status = safeText(event.Text)
+			notice := wrap(safeText(event.Text), m.contentWidth())
+			return tea.Sequence(tea.Println(notice), m.waitEvent())
 		}
 	case agent.EventModel:
 		if event.Text != "" {
@@ -627,6 +681,31 @@ func (m *terminalModel) receive(item delivery) tea.Cmd {
 		}
 	}
 	return m.waitEvent()
+}
+
+func (m *terminalModel) finishCompact(item delivery) tea.Cmd {
+	m.busy, m.stopping = false, false
+	m.cancel = nil
+	m.pendingReady = nil
+	m.approval = nil
+	body := ""
+	switch {
+	case errors.Is(item.err, context.Canceled):
+		m.status = "已取消压缩"
+		body = "已取消上下文压缩。"
+	case item.err != nil:
+		m.status = "压缩失败，可继续输入"
+		body = "上下文压缩失败：" + item.err.Error()
+	default:
+		m.status = "空闲"
+		body = item.text
+	}
+	focus := m.input.Focus()
+	m.resizeInput()
+	if body == "" {
+		return focus
+	}
+	return tea.Sequence(tea.Println(wrap(safeText(body), m.contentWidth())), focus)
 }
 
 // finishResponse 在完整响应结束后一次性提交正文。最终响应会先打印折叠摘要，

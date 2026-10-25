@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -21,25 +22,43 @@ const skillUsage = `用法：
   /skills reload             重新扫描项目级和用户级目录
   /skill <name> [参数]       显式使用某个 Skill`
 
+const contextUsage = `用法：
+  /context                   查看上下文估算、预算、摘要和存档
+  /compact                   手动压缩较早的已完成轮次`
+
 // localCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
-// 否则只显示 Output。
+// Compact 为 true 时由调用方执行一次手动上下文压缩。
 type localCommandResult struct {
-	Output string
-	Prompt string
+	Output  string
+	Prompt  string
+	Compact bool
+}
+
+type contextController struct {
+	stats   func() string
+	compact func(context.Context) (string, error)
 }
 
 type localCommandHandler struct {
-	rules  *tool.ProjectRules
-	skills *skill.Store
-	reload func() error
+	rules   *tool.ProjectRules
+	skills  *skill.Store
+	reload  func() error
+	context *contextController
 }
 
-func newLocalCommandHandler(rules *tool.ProjectRules, skills *skill.Store, reload func() error) *localCommandHandler {
-	return &localCommandHandler{rules: rules, skills: skills, reload: reload}
+func newLocalCommandHandler(rules *tool.ProjectRules, skills *skill.Store, reload func() error, controllers ...*contextController) *localCommandHandler {
+	var contextController *contextController
+	if len(controllers) > 0 {
+		contextController = controllers[0]
+	}
+	return &localCommandHandler{rules: rules, skills: skills, reload: reload, context: contextController}
 }
 
 func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
 	if result, handled := handleSkillCommand(line, h.skills, h.reload); handled {
+		return result, true
+	}
+	if result, handled := handleContextCommand(line, h.context); handled {
 		return result, true
 	}
 	if text, handled := handleLocalCommand(line, h.rules); handled {
@@ -47,6 +66,27 @@ func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
 	}
 	if result, handled := handleDirectSkillCommand(line, h.skills); handled {
 		return result, true
+	}
+	return localCommandResult{}, false
+}
+
+func handleContextCommand(line string, controller *contextController) (localCommandResult, bool) {
+	line = strings.TrimSpace(line)
+	switch {
+	case line == "/context":
+		if controller == nil || controller.stats == nil {
+			return localCommandResult{Output: "当前会话未启用上下文治理。"}, true
+		}
+		return localCommandResult{Output: controller.stats()}, true
+	case strings.HasPrefix(line, "/context "):
+		return localCommandResult{Output: contextUsage}, true
+	case line == "/compact":
+		if controller == nil || controller.compact == nil {
+			return localCommandResult{Output: "当前会话未启用上下文治理。"}, true
+		}
+		return localCommandResult{Compact: true}, true
+	case strings.HasPrefix(line, "/compact "):
+		return localCommandResult{Output: contextUsage}, true
 	}
 	return localCommandResult{}, false
 }
