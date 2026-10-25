@@ -65,7 +65,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	api := flags.String("api", "", "临时选择 API 协议")
 	modelName := flags.String("model", "", "临时选择模型")
 	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "每轮任务最多模型请求次数")
-	permissionFlag := flags.String("permission-mode", string(permissionDefault), "权限模式：default、read-only 或 allow")
+	permissionFlag := flags.String("permission-mode", string(permissionAllow), "权限模式：default、read-only 或 allow")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -289,6 +289,8 @@ func printPermissionNotice(output io.Writer, mode permissionMode) {
 		fmt.Fprintln(output, "权限模式：只读（仅允许 read 和受限查询；不是系统沙箱）。")
 	case permissionDefault:
 		fmt.Fprintln(output, "权限模式：默认（路径白名单内自动；其他操作需要审批；当前非 TUI 入口的审批会被拒绝）。")
+	case permissionAllow:
+		fmt.Fprintln(output, "权限模式：放行（开发阶段默认；工具直接执行，不逐次审批）。")
 	}
 }
 
@@ -720,7 +722,7 @@ func printHelp(output io.Writer) {
   --version         显示版本和提交号
   --model 名称      临时覆盖模型名（选项放在 johnny 之后）
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
-  --permission-mode 模式  default、read-only 或 allow；默认模式自动执行白名单内操作，其他操作审批（默认 default）
+  --permission-mode 模式  default、read-only 或 allow；未指定时使用 allow（开发阶段直接执行；default 为逐次审批）
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
 
 交互模式：

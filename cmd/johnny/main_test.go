@@ -647,7 +647,7 @@ func TestDefaultModeNonInteractiveDeniesApproval(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var output, stderr bytes.Buffer
-	code := runLegacy(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"--permission-mode", "default", "run"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || !strings.Contains(output.String(), "DONE") {
 		t.Fatalf("默认模式非交互任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
 	}
@@ -710,7 +710,7 @@ func TestDefaultModeAutoAllowsWhitelistQuery(t *testing.T) {
 	}
 
 	var output, stderr bytes.Buffer
-	code := runLegacy(context.Background(), []string{"run"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"--permission-mode", "default", "run"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || !strings.Contains(output.String(), "DONE") {
 		t.Fatalf("默认模式自动放行任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
 	}
