@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
@@ -22,6 +23,9 @@ type Conversation struct {
 	view          *contextview.Manager
 	pinnedText    string
 	pinnedWarning string
+
+	reviewMu      sync.Mutex
+	reviewNotices []string
 }
 
 func NewConversation(opts Options) *Conversation {
@@ -88,6 +92,48 @@ func (c *Conversation) refreshPinned(notify func(Event) error) error {
 	return nil
 }
 
+// drainReviewNotices 在下一轮开始时显示上一轮异步记忆审查的结果。
+func (c *Conversation) drainReviewNotices(notify func(Event) error) error {
+	if c == nil || notify == nil {
+		return nil
+	}
+	c.reviewMu.Lock()
+	notices := c.reviewNotices
+	c.reviewNotices = nil
+	c.reviewMu.Unlock()
+	for _, notice := range notices {
+		if notice == "" {
+			continue
+		}
+		if err := notify(Event{Type: EventNotice, Notice: notice}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startMemoryReview 在轮末启动旁路审查，不阻塞下一轮输入。
+func (c *Conversation) startMemoryReview(ctx context.Context, userTurn int, messages []model.Message) {
+	if c == nil || c.options.MemoryReview == nil {
+		return
+	}
+	snapshot := append([]model.Message(nil), messages...)
+	review := c.options.MemoryReview
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		reviewCtx := context.WithoutCancel(ctx)
+		notice, err := review(reviewCtx, userTurn, snapshot)
+		if err != nil || notice == "" {
+			return
+		}
+		c.reviewMu.Lock()
+		c.reviewNotices = append(c.reviewNotices, notice)
+		c.reviewMu.Unlock()
+	}()
+}
+
 // Run 处理一个独立用户任务；每次调用都从新会话开始。
 func Run(ctx context.Context, opts Options, prompt string, emit func(Event) error) (Result, error) {
 	return NewConversation(opts).Run(ctx, prompt, emit)
@@ -117,6 +163,7 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	}
 	opts.System = c.system()
 	definitions := opts.Tools.Definitions()
+	turnStart := len(c.messages)
 	c.userTurn++
 	result.UserTurn = c.userTurn
 	notify := func(event Event) error {
@@ -148,6 +195,9 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 			err = endErr
 			result.Status = StatusFailed
 		}
+		if err == nil {
+			c.startMemoryReview(ctx, c.userTurn, c.messages[turnStart:])
+		}
 	}()
 	user := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: prompt}}}
 	c.messages = append(c.messages, user)
@@ -160,6 +210,9 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 			return result, err
 		}
 		c.pinnedWarning = ""
+	}
+	if err = c.drainReviewNotices(notify); err != nil {
+		return result, err
 	}
 	if c.view.NeedsTurnCompaction(opts.System, definitions) {
 		if err = c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, false, notify); err != nil {

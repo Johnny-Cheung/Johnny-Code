@@ -39,12 +39,22 @@ type WriteResult struct {
 	Path   string
 }
 
+// WriteEvent 是记忆或规则写入的诊断事件，不包含正文。
+type WriteEvent struct {
+	Scope  string
+	Action string
+	Name   string
+	Path   string
+	Source string
+}
+
 // Store 管理用户级和项目级记忆文件及其派生索引。
 type Store struct {
-	HomeDir string
-	WorkDir string
-	Project ProjectInfo
-	Warning string
+	HomeDir  string
+	WorkDir  string
+	Project  ProjectInfo
+	Warning  string
+	Observer func(WriteEvent)
 }
 
 func NewStore(workDir string) (*Store, error) {
@@ -244,6 +254,9 @@ func (s *Store) Write(ctx context.Context, item Item) (WriteResult, error) {
 		return WriteResult{}, err
 	}
 	_ = RecordProject(s.HomeDir, s.Project)
+	if s.Observer != nil {
+		s.Observer(WriteEvent{Scope: string(item.Scope), Action: string(action), Name: item.Name, Path: path, Source: item.Source})
+	}
 	return WriteResult{Action: action, Item: item, Path: path}, nil
 }
 
@@ -269,6 +282,9 @@ func (s *Store) Delete(ctx context.Context, scope Scope, name string) (string, e
 		return "", err
 	}
 	_ = RecordProject(s.HomeDir, s.Project)
+	if s.Observer != nil {
+		s.Observer(WriteEvent{Scope: string(scope), Action: "deleted", Name: name, Path: path})
+	}
 	return path, nil
 }
 

@@ -22,7 +22,8 @@ const (
 
 // Rules 维护用户级 AGENTS.md 的自动规则区。
 type Rules struct {
-	HomeDir string
+	HomeDir  string
+	Observer func(WriteEvent)
 }
 
 func NewRules(home string) *Rules {
@@ -45,6 +46,11 @@ func (r *Rules) BackupsDir() string {
 
 // Add 在自动规则区追加一条规则。已存在的 ID 不会被覆盖。
 func (r *Rules) Add(ctx context.Context, name, text string) (string, error) {
+	return r.AddWithSource(ctx, name, text, "")
+}
+
+// AddWithSource 与 Add 相同，并记录写入来源。
+func (r *Rules) AddWithSource(ctx context.Context, name, text, source string) (string, error) {
 	if r == nil || strings.TrimSpace(r.HomeDir) == "" {
 		return "", errors.New("用户目录不能为空")
 	}
@@ -86,6 +92,9 @@ func (r *Rules) Add(ctx context.Context, name, text string) (string, error) {
 	})
 	if err != nil {
 		return "", err
+	}
+	if r.Observer != nil {
+		r.Observer(WriteEvent{Scope: "user_agents", Action: "rule_added", Name: name, Path: path, Source: source})
 	}
 	return path, nil
 }

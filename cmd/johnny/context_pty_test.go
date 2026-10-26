@@ -52,6 +52,8 @@ func runContextTurns(t *testing.T, p *terminalProcess, count int) int {
 	for turn := 1; turn <= count; turn++ {
 		p.write(t, fmt.Sprintf("turn-%d\r", turn))
 		end = p.expect(t, end, fmt.Sprintf("DONE-%d", turn))
+		// 等界面回到空闲态再发送下一轮，避免高负载下输入落在收尾阶段被忽略。
+		end = p.expect(t, end, "空闲")
 	}
 	return end
 }

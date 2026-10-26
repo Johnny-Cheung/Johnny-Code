@@ -102,6 +102,15 @@ func startTerminalMode(t *testing.T, serverURL, mode string, extraEnv ...string)
 	}
 	cmd.Env = append(cmd.Env, "JOHNNY_TUI_TEST_HELPER=1", "JOHNNY_TUI_TEST_CONFIG="+path,
 		"JOHNNY_TUI_TEST_MODE="+mode, "HOME="+home, "TERM=xterm-256color")
+	hasAutoMemory := false
+	for _, entry := range extraEnv {
+		if strings.HasPrefix(entry, "JOHNNY_MEMORY_AUTO=") {
+			hasAutoMemory = true
+		}
+	}
+	if !hasAutoMemory {
+		cmd.Env = append(cmd.Env, "JOHNNY_MEMORY_AUTO=off")
+	}
 	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}

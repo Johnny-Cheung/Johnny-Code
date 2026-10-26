@@ -86,9 +86,9 @@ func (w noticeWriter) Write(data []byte) (int, error) {
 // 与内置命令同名的 Skill 不作为独立命令展示，但仍可用 /skill <name>。
 func slashCommands(skills *skill.Store) []tui.SlashCommand {
 	reserved := map[string]bool{
-		"skills": true, "skill": true, "permissions": true, "context": true, "compact": true, "exit": true,
+		"skills": true, "skill": true, "permissions": true, "context": true, "compact": true, "memory": true, "remember": true, "exit": true,
 	}
-	commands := make([]tui.SlashCommand, 0, 5)
+	commands := make([]tui.SlashCommand, 0, 7)
 	for _, item := range skills.Skills() {
 		if reserved[item.Name] {
 			continue
@@ -106,6 +106,8 @@ func slashCommands(skills *skill.Store) []tui.SlashCommand {
 		tui.SlashCommand{Command: "permissions", Description: "查看固定权限名单和项目规则", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "context", Description: "查看上下文估算、预算、摘要和存档", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "compact", Description: "手动压缩较早的已完成轮次", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "memory", Description: "查看用户级和项目级记忆索引", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "remember", Description: "让模型起草或更新项目 AGENTS，确认后写入", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "exit", Description: "退出当前会话", Source: "内置", Builtin: true},
 	)
 }

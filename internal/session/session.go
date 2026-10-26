@@ -59,6 +59,17 @@ type PermissionPath struct {
 	Kind string `json:"kind"`
 }
 
+// MemoryRecord 记录一次长期记忆或用户规则写入。它只保存定位信息，
+// 不保存记忆正文或工具输出。
+type MemoryRecord struct {
+	Scope  string `json:"scope"`
+	Action string `json:"action"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Source string `json:"source,omitempty"`
+	Rule   bool   `json:"rule,omitempty"`
+}
+
 func clonePermissionPrefixes(prefixes [][]string) [][]string {
 	if len(prefixes) == 0 {
 		return nil
@@ -217,6 +228,25 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 	})
 }
 
+// RecordMemory writes one memory or user-rule write record.
+func (r *Recorder) RecordMemory(record MemoryRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errRecorderClosed
+	}
+	return r.write(memoryEvent{
+		Type:   "memory_write",
+		Time:   r.timestamp(),
+		Scope:  record.Scope,
+		Action: record.Action,
+		Name:   record.Name,
+		Path:   record.Path,
+		Source: record.Source,
+		Rule:   record.Rule,
+	})
+}
+
 // Close closes the underlying file. It is safe to call more than once.
 func (r *Recorder) Close() error {
 	r.mu.Lock()
@@ -329,6 +359,17 @@ type permissionEvent struct {
 	Reason     string           `json:"reason,omitempty"`
 	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
 	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
+}
+
+type memoryEvent struct {
+	Type   string    `json:"type"`
+	Time   time.Time `json:"time"`
+	Scope  string    `json:"scope"`
+	Action string    `json:"action"`
+	Name   string    `json:"name"`
+	Path   string    `json:"path"`
+	Source string    `json:"source,omitempty"`
+	Rule   bool      `json:"rule,omitempty"`
 }
 
 type responseRecord struct {

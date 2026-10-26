@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/memory"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
@@ -26,6 +28,10 @@ const contextUsage = `用法：
   /context                   查看上下文估算、预算、摘要和存档
   /compact                   手动压缩较早的已完成轮次`
 
+const memoryUsage = `用法：
+  /memory                    查看用户级和项目级 MEMORY.md 索引
+  /remember [内容]           让模型起草或更新项目 AGENTS，确认后写入`
+
 // localCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
 // Compact 为 true 时由调用方执行一次手动上下文压缩。
 type localCommandResult struct {
@@ -39,11 +45,17 @@ type contextController struct {
 	compact func(context.Context) (string, error)
 }
 
+type memoryController struct {
+	store    *memory.Store
+	writable bool
+}
+
 type localCommandHandler struct {
 	rules   *tool.ProjectRules
 	skills  *skill.Store
 	reload  func() error
 	context *contextController
+	memory  *memoryController
 }
 
 func newLocalCommandHandler(rules *tool.ProjectRules, skills *skill.Store, reload func() error, controllers ...*contextController) *localCommandHandler {
@@ -54,11 +66,18 @@ func newLocalCommandHandler(rules *tool.ProjectRules, skills *skill.Store, reloa
 	return &localCommandHandler{rules: rules, skills: skills, reload: reload, context: contextController}
 }
 
+func newLocalCommandHandlerWithMemory(rules *tool.ProjectRules, skills *skill.Store, reload func() error, contextController *contextController, memoryController *memoryController) *localCommandHandler {
+	return &localCommandHandler{rules: rules, skills: skills, reload: reload, context: contextController, memory: memoryController}
+}
+
 func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
 	if result, handled := handleSkillCommand(line, h.skills, h.reload); handled {
 		return result, true
 	}
 	if result, handled := handleContextCommand(line, h.context); handled {
+		return result, true
+	}
+	if result, handled := handleMemoryCommand(line, h.memory); handled {
 		return result, true
 	}
 	if text, handled := handleLocalCommand(line, h.rules); handled {
@@ -68,6 +87,74 @@ func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
 		return result, true
 	}
 	return localCommandResult{}, false
+}
+
+func handleMemoryCommand(line string, controller *memoryController) (localCommandResult, bool) {
+	line = strings.TrimSpace(line)
+	switch {
+	case line == "/memory":
+		if controller == nil || controller.store == nil {
+			return localCommandResult{Output: "当前会话未启用长期记忆。"}, true
+		}
+		return localCommandResult{Output: memorySummary(controller.store)}, true
+	case strings.HasPrefix(line, "/memory "):
+		return localCommandResult{Output: memoryUsage}, true
+	case line == "/remember" || strings.HasPrefix(line, "/remember "):
+		if controller == nil || controller.store == nil {
+			return localCommandResult{Output: "当前会话未启用长期记忆。"}, true
+		}
+		if !controller.writable {
+			return localCommandResult{Output: "当前只读模式不允许更新项目 AGENTS。"}, true
+		}
+		text := strings.TrimSpace(strings.TrimPrefix(line, "/remember"))
+		if text == "" {
+			return localCommandResult{Prompt: rememberProjectPrompt("")}, true
+		}
+		return localCommandResult{Prompt: rememberProjectPrompt(text)}, true
+	}
+	return localCommandResult{}, false
+}
+
+func memorySummary(store *memory.Store) string {
+	if store == nil {
+		return "当前会话未启用长期记忆。"
+	}
+	var builder strings.Builder
+	for _, scope := range []memory.Scope{memory.ScopeUser, memory.ScopeProject} {
+		label := "用户"
+		if scope == memory.ScopeProject {
+			label = "项目"
+		}
+		path, err := store.IndexPath(scope)
+		if err != nil {
+			fmt.Fprintf(&builder, "%s记忆索引：不可用（%s）\n\n", label, err)
+			continue
+		}
+		fmt.Fprintf(&builder, "%s记忆索引：%s\n", label, path)
+		data, err := os.ReadFile(path)
+		switch {
+		case os.IsNotExist(err):
+			builder.WriteString("（尚未创建）\n\n")
+		case err != nil:
+			fmt.Fprintf(&builder, "（读取失败：%s）\n\n", err)
+		default:
+			builder.Write(data)
+			if len(data) > 0 && data[len(data)-1] != '\n' {
+				builder.WriteByte('\n')
+			}
+			builder.WriteByte('\n')
+		}
+	}
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func rememberProjectPrompt(extra string) string {
+	base := `请更新项目 AGENTS.md。先读取现有 AGENTS.md，保留手写内容；只整理项目规则、约定、命令和禁区，不整理项目事实。只提出必要的新增或修改，先展示拟修改内容，不要直接写入，等我确认后再写。不要修改用户 AGENTS 或 memory。`
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return base
+	}
+	return base + "\n\n补充内容：\n" + extra
 }
 
 func handleContextCommand(line string, controller *contextController) (localCommandResult, bool) {

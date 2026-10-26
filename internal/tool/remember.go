@@ -101,7 +101,7 @@ func (r *RememberTool) Execute(ctx context.Context, raw json.RawMessage) (Result
 		if strings.TrimSpace(args.Evidence) == "" {
 			return Result{}, invalidArguments("写入用户 AGENTS 需要 evidence 提供用户原话", nil)
 		}
-		path, err := r.rules.Add(ctx, name, description)
+		path, err := r.rules.AddWithSource(ctx, name, description, r.source)
 		if err != nil {
 			return Result{}, executionError("写入用户 AGENTS 失败", err)
 		}

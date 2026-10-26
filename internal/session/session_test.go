@@ -802,3 +802,27 @@ func TestRecorderReturnsCloseFailure(t *testing.T) {
 		t.Fatalf("second Close() error = %v, want nil", err)
 	}
 }
+
+func TestRecordMemory(t *testing.T) {
+	recorder := newTestRecorder(t)
+	if err := recorder.RecordMemory(MemoryRecord{
+		Scope: "project", Action: "created", Name: "go-test",
+		Path: "/tmp/memory/go-test.md", Source: "session-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lines := readJSONLines(t, recorder.Path())
+	if len(lines) != 2 {
+		t.Fatalf("记忆记录数量错误：%d", len(lines))
+	}
+	object := parseObject(t, lines[1])
+	for key, want := range map[string]string{
+		"type": "memory_write", "scope": "project", "action": "created",
+		"name": "go-test", "path": "/tmp/memory/go-test.md", "source": "session-1",
+	} {
+		var got string
+		if err := json.Unmarshal(object[key], &got); err != nil || got != want {
+			t.Fatalf("%s = %q (%v)，want %q", key, got, err, want)
+		}
+	}
+}

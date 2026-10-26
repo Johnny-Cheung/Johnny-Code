@@ -24,6 +24,10 @@ type Tools interface {
 // 运行时只在会话启动和压缩后调用，写入路径不会触发前缀重建。
 type PinnedContext func() (string, string)
 
+// MemoryReviewFunc 在轮末异步审查本轮对话。返回值仅供下一轮提示，
+// 失败不应影响主任务。
+type MemoryReviewFunc func(context.Context, int, []model.Message) (string, error)
+
 type Options struct {
 	Client          model.Client
 	Tools           Tools
@@ -37,6 +41,8 @@ type Options struct {
 	ContextView *contextview.Manager
 	// Pinned 为 nil 时不注入长期规则和记忆索引。
 	Pinned PinnedContext
+	// MemoryReview 为 nil 时不启用轮末记忆审查。
+	MemoryReview MemoryReviewFunc
 }
 
 type Status string

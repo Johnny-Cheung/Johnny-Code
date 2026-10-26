@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode"
 	"unicode/utf8"
@@ -179,6 +180,12 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
 	}
+	var memoryReview agent.MemoryReviewFunc
+	if mode != permissionReadOnly && !strings.EqualFold(os.Getenv("JOHNNY_MEMORY_AUTO"), "off") &&
+		memoryContext.Store != nil && memoryContext.Rules != nil && memoryContext.Agents != nil {
+		reviewer := memory.NewReviewer(client, cfg.Model, sessionID, memoryContext.Store, memoryContext.Rules, memoryContext.Agents, mode.label())
+		memoryReview = reviewer.Review
+	}
 
 	view := contextview.NewManager(contextview.Config{
 		Budget:    contextview.NewBudget(contextCfg.Window, contextCfg.OutputTokens),
@@ -194,6 +201,22 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
 	logs := openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
 	defer logs.close()
+	if memoryContext.Store != nil {
+		memoryContext.Store.Observer = func(event memory.WriteEvent) {
+			logs.recordMemory(session.MemoryRecord{
+				Scope: event.Scope, Action: event.Action, Name: event.Name,
+				Path: event.Path, Source: event.Source, Rule: event.Scope == "user_agents",
+			})
+		}
+	}
+	if memoryContext.Rules != nil {
+		memoryContext.Rules.Observer = func(event memory.WriteEvent) {
+			logs.recordMemory(session.MemoryRecord{
+				Scope: event.Scope, Action: event.Action, Name: event.Name,
+				Path: event.Path, Source: event.Source, Rule: true,
+			})
+		}
+	}
 	if gate != nil {
 		gate.SetAudit(logs.recordPermission)
 	}
@@ -210,6 +233,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		MaxOutputTokens: contextCfg.OutputTokens,
 		ContextView:     view,
 		Pinned:          memoryContext.Load,
+		MemoryReview:    memoryReview,
 	})
 	compact := func(ctx context.Context, emit func(agent.Event) error) (string, error) {
 		return conversation.Compact(ctx, func(event agent.Event) error {
@@ -236,13 +260,14 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 			return compact(ctx, nil)
 		},
 	}
-	localCommand := newLocalCommandHandler(rules, skills, func() error {
+	memoryCommands := &memoryController{store: memoryContext.Store, writable: mode != permissionReadOnly}
+	localCommand := newLocalCommandHandlerWithMemory(rules, skills, func() error {
 		if err := skills.Reload(); err != nil {
 			return err
 		}
 		conversation.SetSystemPrompt(systemPrompt(runtime.WorkDir, mode, skills))
 		return nil
-	}, contextCommands).Handle
+	}, contextCommands, memoryCommands).Handle
 
 	if !interactive {
 		printPermissionNotice(stderr, mode)
@@ -652,6 +677,7 @@ type eventRecorder interface {
 }
 
 type sessionLogger struct {
+	mu       sync.Mutex
 	recorder eventRecorder
 	stderr   io.Writer
 	metadata *session.Metadata
@@ -672,7 +698,7 @@ func newSessionLogger(recorder eventRecorder, stderr io.Writer) *sessionLogger {
 	return logger
 }
 
-func (l *sessionLogger) ensure() {
+func (l *sessionLogger) ensureLocked() {
 	if l == nil || l.recorder != nil || l.metadata == nil || l.disabled {
 		return
 	}
@@ -693,7 +719,9 @@ func (l *sessionLogger) record(event agent.Event) {
 	if l == nil {
 		return
 	}
-	l.ensure()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ensureLocked()
 	if l.recorder == nil {
 		return
 	}
@@ -711,7 +739,9 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 	if l == nil {
 		return
 	}
-	l.ensure()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ensureLocked()
 	if l.recorder == nil {
 		return
 	}
@@ -735,6 +765,30 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 	}
 }
 
+func (l *sessionLogger) recordMemory(record session.MemoryRecord) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ensureLocked()
+	if l.recorder == nil {
+		return
+	}
+	recorder, ok := l.recorder.(interface {
+		RecordMemory(session.MemoryRecord) error
+	})
+	if !ok {
+		return
+	}
+	if err := recorder.RecordMemory(record); err != nil {
+		l.warn("写入记忆记录", err)
+		_ = l.recorder.Close()
+		l.recorder = nil
+		l.disabled = true
+	}
+}
+
 func clonePermissionPrefixes(prefixes [][]string) [][]string {
 	if len(prefixes) == 0 {
 		return nil
@@ -747,10 +801,17 @@ func clonePermissionPrefixes(prefixes [][]string) [][]string {
 }
 
 func (l *sessionLogger) close() {
-	if l == nil || l.recorder == nil {
+	if l == nil {
 		return
 	}
-	if err := l.recorder.Close(); err != nil {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.recorder == nil {
+		return
+	}
+	recorder := l.recorder
+	l.recorder = nil
+	if err := recorder.Close(); err != nil {
 		l.warn("关闭", err)
 	}
 }
@@ -824,6 +885,8 @@ func printHelp(output io.Writer) {
   /skills 查看已加载 Skill；/skills reload 重新扫描；/skill <name> [参数] 显式使用。
   /context 查看上下文估算、预算、摘要、缓存指标和工具输出存档。
   /compact 手动压缩较早的已完成轮次；自动压缩在接近窗口上限时触发。
+  /memory 查看用户级和项目级 MEMORY.md 索引。
+  /remember [内容] 让模型起草或更新项目 AGENTS，确认后写入。
   Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
   Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
   TUI 审批只有允许本次、拒绝本次、批准并记录；等待审批时 Ctrl+C 取消本轮。
@@ -831,6 +894,8 @@ func printHelp(output io.Writer) {
 上下文预算：
   JOHNNY_CONTEXT_WINDOW 模型上下文窗口，默认 1000000
   JOHNNY_MAX_OUTPUT_TOKENS 每次请求输出预留，默认 4096
+  JOHNNY_MEMORY_AUTO=off 关闭轮末自动记忆审查
+  用户级 ~/.johnny/AGENTS.md 和项目根 AGENTS.md 在会话启动和压缩后加载
   单次工具结果模型可见预览最多 32 KiB；bash 大输出保存到 .johnny/artifacts/<会话ID>/
 配置文件：%s
 `, agent.DefaultMaxTurns, path)

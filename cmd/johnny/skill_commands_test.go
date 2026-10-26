@@ -133,7 +133,7 @@ func TestSlashCommandsProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := slashCommands(store)
-	if len(commands) != 8 {
+	if len(commands) != 10 {
 		t.Fatalf("菜单条目数量错误：%+v", commands)
 	}
 	if commands[0].Command != "go-test" || commands[0].Source != "项目" || commands[0].Builtin {
@@ -148,7 +148,7 @@ func TestSlashCommandsProvider(t *testing.T) {
 			t.Fatalf("内置命令 %q 不应重复：%+v", name, commands)
 		}
 	}
-	builtins := []string{"skills", "skills reload", "skill", "permissions", "context", "compact", "exit"}
+	builtins := []string{"skills", "skills reload", "skill", "permissions", "context", "compact", "memory", "remember", "exit"}
 	start := len(commands) - len(builtins)
 	for index, want := range builtins {
 		got := commands[start+index]

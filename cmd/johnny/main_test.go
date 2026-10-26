@@ -31,6 +31,7 @@ func useConfigPath(t *testing.T, path string) {
 	configFileBase64 = base64.StdEncoding.EncodeToString([]byte(path))
 	t.Cleanup(func() { configFileBase64 = previous })
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("JOHNNY_MEMORY_AUTO", "off")
 	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API"} {
 		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
