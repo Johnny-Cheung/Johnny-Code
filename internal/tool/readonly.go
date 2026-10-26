@@ -48,6 +48,8 @@ func (r *ReadOnly) Definitions() []model.ToolDefinition {
 			definitions[i].Description += " 只读模式可以加载已发现的 Skill。"
 		case "memory":
 			definitions[i].Description += " 只读模式可以查询长期记忆。"
+		case "remember":
+			definitions[i].Description += " 只读模式下此工具会被拒绝。"
 		case "write", "edit":
 			definitions[i].Description += " 只读模式下此工具会被拒绝。"
 		}
@@ -85,6 +87,8 @@ func (r *ReadOnly) Execute(ctx context.Context, call model.ToolCall) (Result, er
 	case "memory":
 		// 记忆查询只读，不修改文件。
 		return r.base.Execute(ctx, call)
+	case "remember":
+		return r.deny("只读模式不允许写入长期记忆；如需写入请切换到放行模式或默认模式")
 	default:
 		// 已注册但未显式授权的工具默认拒绝，避免以后新增工具意外绕过只读策略。
 		return r.deny(fmt.Sprintf("只读模式未授权工具 %q", call.Name))

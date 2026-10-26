@@ -145,8 +145,8 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	printSkillNotice(stderr, skills)
 	memoryContext := memory.NewContext(runtime.WorkDir)
 	var registry *tool.Registry
-	if memoryContext.Store != nil {
-		registry, err = tool.NewDefaultRegistryWithSkillAndMemory(runtime, skills, memoryContext.Store)
+	if memoryContext.Store != nil && memoryContext.Rules != nil {
+		registry, err = tool.NewDefaultRegistryWithMemory(runtime, skills, memoryContext.Store, memoryContext.Rules, sessionID)
 	} else {
 		registry, err = tool.NewDefaultRegistryWithSkill(runtime, skills)
 	}

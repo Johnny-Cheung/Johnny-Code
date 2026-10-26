@@ -1,17 +1,27 @@
 package memory
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // Context 组合 AGENTS 规则和两层记忆索引，供 Agent 在固定前缀中加载。
 type Context struct {
 	Agents  *Agents
 	Store   *Store
+	Rules   *Rules
 	Warning string
 }
 
 func NewContext(workDir string) *Context {
 	context := &Context{Agents: NewAgents(workDir)}
-	store, err := NewStore(workDir)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		context.Warning = "长期记忆初始化失败：" + err.Error()
+		return context
+	}
+	context.Rules = NewRules(home)
+	store, err := NewStoreAt(home, workDir)
 	if err != nil {
 		context.Warning = "长期记忆初始化失败：" + err.Error()
 		return context

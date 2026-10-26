@@ -65,6 +65,8 @@ func (d *Default) Definitions() []model.ToolDefinition {
 			definitions[i].Description += " 默认模式自动加载已发现的 Skill。"
 		case "memory":
 			definitions[i].Description += " 默认模式自动查询长期记忆。"
+		case "remember":
+			definitions[i].Description += " 默认模式写入长期记忆需要审批。"
 		}
 	}
 	return definitions
@@ -97,6 +99,27 @@ func (d *Default) Execute(ctx context.Context, call model.ToolCall) (Result, err
 		return d.base.Execute(ctx, call)
 	case "memory":
 		// 记忆查询只读，不触发审批。
+		return d.base.Execute(ctx, call)
+	case "remember":
+		var args rememberArguments
+		if err := json.Unmarshal(arguments, &args); err != nil {
+			return Result{}, invalidArguments("remember 参数格式无效", err)
+		}
+		request := ApprovalRequest{
+			ToolCallID: call.ID,
+			Tool:       "remember",
+			WorkDir:    d.runtime.WorkDir,
+			Target:     args.Name,
+			Reason:     "写入长期记忆需要审批",
+			Detail:     fmt.Sprintf("目标：%s；描述：%s", args.Target, args.Description),
+		}
+		decision, err := d.approve(ctx, request)
+		if err != nil {
+			return Result{}, err
+		}
+		if !decision.Allow {
+			return d.deny(approvalDeniedMessage(request, decision))
+		}
 		return d.base.Execute(ctx, call)
 	default:
 		return d.deny(fmt.Sprintf("默认模式未授权工具 %q", call.Name))

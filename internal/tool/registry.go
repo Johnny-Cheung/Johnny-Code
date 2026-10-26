@@ -107,6 +107,35 @@ func NewDefaultRegistryWithSkillAndMemory(runtime Runtime, skills *skill.Store, 
 	)
 }
 
+// NewDefaultRegistryWithMemory 注册 skill、只读 memory 和写入 remember 工具。
+func NewDefaultRegistryWithMemory(runtime Runtime, skills *skill.Store, store *memory.Store, rules *memory.Rules, source string) (*Registry, error) {
+	skillTool, err := NewSkillTool(skills)
+	if err != nil {
+		return nil, err
+	}
+	memoryTool, err := NewMemoryTool(store)
+	if err != nil {
+		return nil, err
+	}
+	rememberTool, err := NewRememberTool(store, rules, source)
+	if err != nil {
+		return nil, err
+	}
+	runtime = normalizeRuntime(runtime)
+	if strings.TrimSpace(runtime.WorkDir) == "" {
+		return nil, errorsForRegistry("工具运行时工作目录不能为空")
+	}
+	return NewRegistry(
+		NewBash(runtime),
+		NewRead(runtime),
+		NewEdit(runtime),
+		NewWrite(runtime),
+		skillTool,
+		memoryTool,
+		rememberTool,
+	)
+}
+
 func (r *Registry) Get(name string) (Tool, bool) {
 	if r == nil {
 		return nil, false
