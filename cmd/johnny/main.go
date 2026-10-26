@@ -143,7 +143,13 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	}
 	skills := skill.Discover(runtime.WorkDir)
 	printSkillNotice(stderr, skills)
-	registry, err := tool.NewDefaultRegistryWithSkill(runtime, skills)
+	memoryContext := memory.NewContext(runtime.WorkDir)
+	var registry *tool.Registry
+	if memoryContext.Store != nil {
+		registry, err = tool.NewDefaultRegistryWithSkillAndMemory(runtime, skills, memoryContext.Store)
+	} else {
+		registry, err = tool.NewDefaultRegistryWithSkill(runtime, skills)
+	}
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
@@ -193,7 +199,6 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	}
 
 	display := newRenderer(output, stderr)
-	agents := memory.NewAgents(runtime.WorkDir)
 	conversation := agent.NewConversation(agent.Options{
 		Client:          client,
 		Tools:           tools,
@@ -204,7 +209,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		RequestTimeout:  agent.DefaultRequestTimeout,
 		MaxOutputTokens: contextCfg.OutputTokens,
 		ContextView:     view,
-		Pinned:          agents.Load,
+		Pinned:          memoryContext.Load,
 	})
 	compact := func(ctx context.Context, emit func(agent.Event) error) (string, error) {
 		return conversation.Compact(ctx, func(event agent.Event) error {

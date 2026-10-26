@@ -63,6 +63,8 @@ func (d *Default) Definitions() []model.ToolDefinition {
 			definitions[i].Description += " 默认模式按分段检查用户级查询白名单或已记录的项目命令前缀；受控的 cd && 简单命令链、|| 和 ; 可按规则执行，只读模式支持固定查询两段管道，其他命令需要审批。"
 		case "skill":
 			definitions[i].Description += " 默认模式自动加载已发现的 Skill。"
+		case "memory":
+			definitions[i].Description += " 默认模式自动查询长期记忆。"
 		}
 	}
 	return definitions
@@ -92,6 +94,9 @@ func (d *Default) Execute(ctx context.Context, call model.ToolCall) (Result, err
 		return d.executeBash(ctx, call, arguments)
 	case "skill":
 		// Skill 只读取启动时已加载的本地指导，不接受路径参数，不触发审批。
+		return d.base.Execute(ctx, call)
+	case "memory":
+		// 记忆查询只读，不触发审批。
 		return d.base.Execute(ctx, call)
 	default:
 		return d.deny(fmt.Sprintf("默认模式未授权工具 %q", call.Name))

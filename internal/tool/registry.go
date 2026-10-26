@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/memory"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 )
@@ -79,6 +80,30 @@ func NewDefaultRegistryWithSkill(runtime Runtime, skills *skill.Store) (*Registr
 		NewEdit(runtime),
 		NewWrite(runtime),
 		skillTool,
+	)
+}
+
+// NewDefaultRegistryWithSkillAndMemory 在 skill 之外注册只读 memory 工具。
+func NewDefaultRegistryWithSkillAndMemory(runtime Runtime, skills *skill.Store, store *memory.Store) (*Registry, error) {
+	skillTool, err := NewSkillTool(skills)
+	if err != nil {
+		return nil, err
+	}
+	memoryTool, err := NewMemoryTool(store)
+	if err != nil {
+		return nil, err
+	}
+	runtime = normalizeRuntime(runtime)
+	if strings.TrimSpace(runtime.WorkDir) == "" {
+		return nil, errorsForRegistry("工具运行时工作目录不能为空")
+	}
+	return NewRegistry(
+		NewBash(runtime),
+		NewRead(runtime),
+		NewEdit(runtime),
+		NewWrite(runtime),
+		skillTool,
+		memoryTool,
 	)
 }
 
