@@ -19,7 +19,7 @@ func (c *Conversation) ContextStats() contextview.Stats {
 	if c.options.Tools != nil {
 		definitions = c.options.Tools.Definitions()
 	}
-	return c.view.Stats(c.options.System, definitions)
+	return c.view.Stats(c.system(), definitions)
 }
 
 // Compact 手动压缩已完成的历史。它不受自动压缩的 thrashing 熔断影响。
@@ -37,6 +37,7 @@ func (c *Conversation) Compact(ctx context.Context, emit func(Event) error) (str
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = DefaultRequestTimeout
 	}
+	opts.System = c.system()
 	definitions := opts.Tools.Definitions()
 	before := c.view.Estimate(opts.System, definitions)
 	if input, _ := c.view.BuildSummaryInput(contextview.DefaultRetainTurns); len(input) == 0 {
@@ -55,6 +56,10 @@ func (c *Conversation) Compact(ctx context.Context, emit func(Event) error) (str
 	if err := c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, true, notify); err != nil {
 		return "", err
 	}
+	if err := c.refreshPinned(notify); err != nil {
+		return "", err
+	}
+	opts.System = c.system()
 	after := c.view.Estimate(opts.System, definitions)
 	if after >= before {
 		return "没有可压缩的历史。", nil

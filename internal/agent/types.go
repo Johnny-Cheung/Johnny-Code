@@ -20,6 +20,10 @@ type Tools interface {
 	Execute(context.Context, model.ToolCall) (tool.Result, error)
 }
 
+// PinnedContext 返回固定注入的规则和记忆索引，以及不阻断任务的警告。
+// 运行时只在会话启动和压缩后调用，写入路径不会触发前缀重建。
+type PinnedContext func() (string, string)
+
 type Options struct {
 	Client          model.Client
 	Tools           Tools
@@ -31,6 +35,8 @@ type Options struct {
 	MaxOutputTokens int
 	// ContextView 为 nil 时使用默认窗口创建请求视图，便于直接使用 Agent 的调用方。
 	ContextView *contextview.Manager
+	// Pinned 为 nil 时不注入长期规则和记忆索引。
+	Pinned PinnedContext
 }
 
 type Status string

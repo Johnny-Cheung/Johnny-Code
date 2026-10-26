@@ -15,11 +15,13 @@ import (
 // Conversation 保存当前进程内的消息历史，按顺序处理用户输入，不读取旧日志。
 // 同一个 Conversation 不支持并发调用 Run。
 type Conversation struct {
-	options  Options
-	messages []model.Message
-	seen     map[string]bool
-	userTurn int
-	view     *contextview.Manager
+	options       Options
+	messages      []model.Message
+	seen          map[string]bool
+	userTurn      int
+	view          *contextview.Manager
+	pinnedText    string
+	pinnedWarning string
 }
 
 func NewConversation(opts Options) *Conversation {
@@ -31,15 +33,59 @@ func NewConversation(opts Options) *Conversation {
 		}
 		view = contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(contextview.DefaultWindow, maxOutput)})
 	}
-	return &Conversation{options: opts, seen: make(map[string]bool), view: view}
+	conversation := &Conversation{options: opts, seen: make(map[string]bool), view: view}
+	if opts.Pinned != nil {
+		conversation.pinnedText, conversation.pinnedWarning = opts.Pinned()
+	}
+	return conversation
 }
 
-// SetSystemPrompt 替换后续模型请求的系统提示。调用方必须保证不与 Run 并发。
+// SetSystemPrompt 替换后续模型请求的基础系统提示。固定规则和记忆索引不受影响。
+// 调用方必须保证不与 Run 并发。
 func (c *Conversation) SetSystemPrompt(system string) {
 	if c == nil {
 		return
 	}
 	c.options.System = system
+}
+
+// system 返回本次请求实际使用的系统提示：基础提示 + 固定规则和记忆索引。
+func (c *Conversation) system() string {
+	if c == nil {
+		return ""
+	}
+	base := strings.TrimRight(c.options.System, "\n")
+	pinned := strings.TrimSpace(c.pinnedText)
+	if pinned == "" {
+		return base
+	}
+	if base == "" {
+		return pinned
+	}
+	return base + "\n\n" + pinned
+}
+
+// refreshPinned 在压缩后重新读取固定上下文。写入路径不会调用它。
+func (c *Conversation) refreshPinned(notify func(Event) error) error {
+	if c == nil || c.options.Pinned == nil {
+		return nil
+	}
+	text, warning := c.options.Pinned()
+	changed := text != c.pinnedText
+	c.pinnedText = text
+	c.pinnedWarning = warning
+	if warning != "" && notify != nil {
+		if err := notify(Event{Type: EventNotice, Notice: warning}); err != nil {
+			return err
+		}
+		c.pinnedWarning = ""
+	}
+	if changed && notify != nil {
+		if err := notify(Event{Type: EventNotice, Notice: "长期规则和记忆索引已重新加载。"}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Run 处理一个独立用户任务；每次调用都从新会话开始。
@@ -69,6 +115,7 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	if c.view == nil {
 		c.view = contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(contextview.DefaultWindow, opts.MaxOutputTokens)})
 	}
+	opts.System = c.system()
 	definitions := opts.Tools.Definitions()
 	c.userTurn++
 	result.UserTurn = c.userTurn
@@ -108,10 +155,20 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	if err = notify(Event{Type: EventStart, Message: &user}); err != nil {
 		return result, err
 	}
+	if c.pinnedWarning != "" {
+		if err = notify(Event{Type: EventNotice, Notice: c.pinnedWarning}); err != nil {
+			return result, err
+		}
+		c.pinnedWarning = ""
+	}
 	if c.view.NeedsTurnCompaction(opts.System, definitions) {
 		if err = c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, false, notify); err != nil {
 			return result, err
 		}
+		if err = c.refreshPinned(notify); err != nil {
+			return result, err
+		}
+		opts.System = c.system()
 	}
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		if err = ctx.Err(); err != nil {
@@ -121,6 +178,10 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 			if err = c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, false, notify); err != nil {
 				return result, err
 			}
+			if err = c.refreshPinned(notify); err != nil {
+				return result, err
+			}
+			opts.System = c.system()
 		}
 		if err = notify(Event{Type: EventRequestStart, Turn: turn}); err != nil {
 			return result, err

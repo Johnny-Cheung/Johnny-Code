@@ -20,6 +20,7 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/config"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/memory"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
@@ -192,6 +193,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	}
 
 	display := newRenderer(output, stderr)
+	agents := memory.NewAgents(runtime.WorkDir)
 	conversation := agent.NewConversation(agent.Options{
 		Client:          client,
 		Tools:           tools,
@@ -202,6 +204,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		RequestTimeout:  agent.DefaultRequestTimeout,
 		MaxOutputTokens: contextCfg.OutputTokens,
 		ContextView:     view,
+		Pinned:          agents.Load,
 	})
 	compact := func(ctx context.Context, emit func(agent.Event) error) (string, error) {
 		return conversation.Compact(ctx, func(event agent.Event) error {
