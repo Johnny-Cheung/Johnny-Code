@@ -99,8 +99,9 @@ v0.11 将增加 AGENTS 规则和跨会话记忆，设计已确认，尚未实现
 
 - 用户级 AGENTS 与项目级 AGENTS：少量规则，每次会话固定注入；
 - 用户级 memory 与项目级 memory：一条一个 Markdown 文件，`MEMORY.md` 索引常驻，正文按需读取；
-- 显式 `remember` 工具处理用户明确要求，轮末旁路审查负责隐式学习；
-- 项目 AGENTS 由用户维护，模型只提议；memory 由模型维护，用户可审计。
+- `/memory` 查看两个记忆索引；`/remember` 让模型起草或更新项目 AGENTS，确认后写入；
+- 显式 `remember` 工具和轮末旁路审查维护 memory；固定前缀只在新会话或压缩后重建；
+- 项目 AGENTS 由用户维护，memory 由模型维护、用户可审计。
 
 详见 [v0.11 设计文档](docs/versions/v0.11.md)。
 
