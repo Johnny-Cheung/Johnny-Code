@@ -262,5 +262,6 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.9：MCP（暂缓）](docs/versions/v0.9.md)
 - [v0.10：上下文治理（已确认冻结）](docs/versions/v0.10.md)
 - [v0.11：长期记忆（已确认冻结）](docs/versions/v0.11.md)
+- [v0.12：SubAgent（讨论中）](docs/versions/v0.12.md)
 
-> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；随后进入 v0.12 SubAgent。
+> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 于 2026-10-27 进入讨论。
