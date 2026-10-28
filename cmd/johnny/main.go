@@ -903,6 +903,8 @@ func (l *sessionLogger) close() {
 	}
 	recorder := l.recorder
 	l.recorder = nil
+	// 关闭后不再重建同一会话文件：迟到的记录只丢弃，不打印误导性的创建失败警告。
+	l.disabled = true
 	if err := recorder.Close(); err != nil {
 		l.warn("关闭", err)
 	}

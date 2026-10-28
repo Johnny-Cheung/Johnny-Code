@@ -123,7 +123,7 @@ func (m *Manager) prepareLocked(request tool.SpawnRequest, step *wfStep, slot in
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t := &task{info: info, conv: conv, prompt: prompt, ctx: ctx, cancel: cancel, step: step, slot: slot}
+	t := &task{info: info, conv: conv, prompt: prompt, ctx: ctx, cancel: cancel, done: make(chan struct{}), step: step, slot: slot}
 	if step != nil {
 		t.wf = m.wf
 	}
@@ -165,6 +165,10 @@ func (m *Manager) dispatch() {
 func (m *Manager) discardLocked(t *task) {
 	t.cancel()
 	m.claims.Release(t.info.ID)
+	if t.done != nil {
+		close(t.done)
+		t.done = nil
+	}
 	_ = t.conv.Close()
 }
 

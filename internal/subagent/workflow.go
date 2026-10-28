@@ -196,14 +196,49 @@ func (m *Manager) EndWorkflow(reason string) (string, error) {
 	}
 	title := m.wf.title
 	m.cancelWorkflowTasksLocked()
+	waiting := m.workflowDoneLocked()
 	view, skipped := m.finishWorkflowLocked(WorkflowEndedEarly, oneLine(reason))
 	m.mu.Unlock()
+	// 等被取消的任务真正释放文件范围和并发名额，主 Agent 紧接着重新开始时才不会撞上
+	// 刚被取消的占用。绝不能在持锁时等待；超时则照常返回并说明仍在停止。
+	stopped := waitAll(waiting, endWorkflowWait)
 	m.emit(Event{Type: EventWorkflowEnded, Workflow: view})
 	text := fmt.Sprintf("工作流「%s」已提前结束，运行中的任务已取消。", title)
+	if !stopped {
+		text += "部分任务仍在停止中，它们的文件范围会在真正退出后释放。"
+	}
 	if len(skipped) > 0 {
 		text += "没有执行的步骤：" + joinInts(skipped) + "。"
 	}
 	return text, nil
+}
+
+// endWorkflowWait 是提前结束时等待被取消任务释放范围的上限。
+const endWorkflowWait = 10 * time.Second
+
+// workflowDoneLocked 返回当前工作流运行中任务的完成信号。
+func (m *Manager) workflowDoneLocked() []chan struct{} {
+	var waiting []chan struct{}
+	for _, t := range m.tasks {
+		if t.step != nil && t.done != nil {
+			waiting = append(waiting, t.done)
+		}
+	}
+	return waiting
+}
+
+// waitAll 等待全部信号关闭或超时，返回是否全部结束。
+func waitAll(channels []chan struct{}, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for _, ch := range channels {
+		select {
+		case <-ch:
+		case <-deadline.C:
+			return false
+		}
+	}
+	return true
 }
 
 // cancelWorkflowTasksLocked 取消当前工作流的运行中任务并丢弃排队的任务；单个委派的任务不受影响。

@@ -117,6 +117,8 @@ type task struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	waiting int
+	// done 在任务释放文件范围之后关闭，供主动结束工作流时等待。
+	done chan struct{}
 	// wf、step、slot 仅工作流任务有值：所属工作流、步骤，以及任务在这一步里的序号。
 	wf   *workflow
 	step *wfStep

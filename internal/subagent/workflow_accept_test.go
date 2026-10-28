@@ -105,3 +105,47 @@ func TestWorkflowTasksRequestApprovalTogetherWithOrigin(t *testing.T) {
 		t.Fatalf("两个任务的报告应合并成一条：%d", h.parent.InboxLen())
 	}
 }
+
+func TestCloseFinishesWorkflowSynchronously(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	newScriptedChildren(h)
+	h.startWorkflow("一", "二")
+	h.manager.Close()
+	ended := h.eventsOf(EventWorkflowEnded)
+	if len(ended) != 1 || ended[0].Workflow == nil || ended[0].Workflow.Status != WorkflowCanceled {
+		t.Fatalf("关闭时应同步交付工作流结束事件，日志关闭前就能写完记录：%+v", ended)
+	}
+}
+
+func TestEndWorkflowWaitsForClaimsRelease(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	release := make(chan struct{})
+	h.respond = func(ctx context.Context, _ model.Request) (model.Response, error) {
+		select {
+		case <-release:
+			return textResponse("完成"), nil
+		case <-ctx.Done():
+			return model.Response{}, ctx.Err()
+		}
+	}
+	h.startWorkflow("一", "二")
+	step := []tool.SpawnRequest{writeRequest(h, "写 pkg", "pkg")}
+	if _, err := h.manager.RunWorkflowStep(context.Background(), 1, step); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("任务启动", func() bool { return len(h.eventsOf(EventStarted)) == 1 })
+	if _, err := h.manager.EndWorkflow("换方案"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.manager.claims.Owners()) != 0 || h.manager.Running() != 0 {
+		t.Fatal("提前结束返回时应已释放文件范围和名额")
+	}
+	if _, err := h.manager.StartWorkflow("新的", outline("甲")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.manager.RunWorkflowStep(context.Background(), 1, step); err != nil {
+		t.Fatalf("紧接着重新写同一路径不应撞上刚被取消的任务：%v", err)
+	}
+	h.manager.CancelAll()
+	h.manager.Wait()
+}

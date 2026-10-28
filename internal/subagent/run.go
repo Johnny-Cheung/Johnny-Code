@@ -133,6 +133,10 @@ func (m *Manager) finish(t *task, sink EventSink) {
 	delete(m.tasks, t.info.ID)
 	m.mu.Unlock()
 	m.claims.Release(t.info.ID)
+	// 文件范围和名额都已释放，等在这里的 EndWorkflow 可以继续了。
+	if t.done != nil {
+		close(t.done)
+	}
 	t.cancel()
 	_ = t.conv.Close()
 	if sink != nil {
@@ -202,9 +206,16 @@ func (m *Manager) CancelAll() int {
 		m.discardLocked(t)
 	}
 	view, _ := m.finishWorkflowLocked(WorkflowCanceled, "")
+	// Close 在等待全部任务之前调用这里，已经不在界面的事件循环上；同步交付保证
+	// 工作流结束记录在日志关闭之前写完。界面里调用时仍异步，避免与 Send 互相等待。
+	closed := m.closed
 	m.mu.Unlock()
 	if view != nil {
-		m.emitAsync(Event{Type: EventWorkflowEnded, Workflow: view})
+		if closed {
+			m.emit(Event{Type: EventWorkflowEnded, Workflow: view})
+		} else {
+			m.emitAsync(Event{Type: EventWorkflowEnded, Workflow: view})
+		}
 	}
 	return count
 }
