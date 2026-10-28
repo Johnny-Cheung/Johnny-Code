@@ -38,6 +38,32 @@ type Metadata struct {
 	API            string
 	Model          string
 	PermissionMode string
+	// 以下字段仅子 Agent 的会话记录使用，把它与父会话和子任务关联起来。
+	ParentID    string
+	SubagentID  string
+	Kind        string
+	Access      string
+	Paths       []string
+	Description string
+}
+
+// SubagentRecord 是父会话中一次子任务的起止记录。它只保存定位和结果摘要，
+// 不保存子任务的过程；过程在子任务自己的会话记录里。
+type SubagentRecord struct {
+	Phase        string // start 或 end
+	ID           string
+	Description  string
+	Kind         string
+	Access       string
+	Paths        []string
+	ChildSession string
+	Status       string
+	Requests     int
+	DurationMS   int64
+	Partial      bool
+	Truncated    bool
+	Injected     bool
+	Error        string
 }
 
 // PermissionRecord is one approval decision. It is deliberately separate from
@@ -134,6 +160,12 @@ func New(meta Metadata) (*Recorder, error) {
 		API:            meta.API,
 		Model:          meta.Model,
 		PermissionMode: meta.PermissionMode,
+		ParentID:       meta.ParentID,
+		SubagentID:     meta.SubagentID,
+		Kind:           meta.Kind,
+		Access:         meta.Access,
+		Paths:          meta.Paths,
+		Description:    meta.Description,
 	}
 	if err := recorder.write(metaRecord); err != nil {
 		_ = recorder.Close()
@@ -251,6 +283,32 @@ func (r *Recorder) RecordMemory(record MemoryRecord) error {
 	})
 }
 
+// RecordSubagent writes the start or end of one background subagent.
+func (r *Recorder) RecordSubagent(record SubagentRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errRecorderClosed
+	}
+	return r.write(subagentEvent{
+		Type:         "subagent_" + record.Phase,
+		Time:         r.timestamp(),
+		ID:           record.ID,
+		Description:  record.Description,
+		Kind:         record.Kind,
+		Access:       record.Access,
+		Paths:        record.Paths,
+		ChildSession: record.ChildSession,
+		Status:       record.Status,
+		Requests:     record.Requests,
+		DurationMS:   record.DurationMS,
+		Partial:      record.Partial,
+		Truncated:    record.Truncated,
+		Injected:     record.Injected,
+		Error:        record.Error,
+	})
+}
+
 // Close closes the underlying file. It is safe to call more than once.
 func (r *Recorder) Close() error {
 	r.mu.Lock()
@@ -313,6 +371,30 @@ type metaEvent struct {
 	API            string    `json:"api"`
 	Model          string    `json:"model"`
 	PermissionMode string    `json:"permission_mode,omitempty"`
+	ParentID       string    `json:"parent_id,omitempty"`
+	SubagentID     string    `json:"subagent_id,omitempty"`
+	Kind           string    `json:"kind,omitempty"`
+	Access         string    `json:"access,omitempty"`
+	Paths          []string  `json:"paths,omitempty"`
+	Description    string    `json:"description,omitempty"`
+}
+
+type subagentEvent struct {
+	Type         string    `json:"type"`
+	Time         time.Time `json:"time"`
+	ID           string    `json:"subagent_id"`
+	Description  string    `json:"description"`
+	Kind         string    `json:"kind"`
+	Access       string    `json:"access"`
+	Paths        []string  `json:"paths,omitempty"`
+	ChildSession string    `json:"child_session,omitempty"`
+	Status       string    `json:"status,omitempty"`
+	Requests     int       `json:"requests,omitempty"`
+	DurationMS   int64     `json:"duration_ms,omitempty"`
+	Partial      bool      `json:"partial,omitempty"`
+	Truncated    bool      `json:"truncated,omitempty"`
+	Injected     bool      `json:"injected,omitempty"`
+	Error        string    `json:"error,omitempty"`
 }
 
 type eventRecord struct {

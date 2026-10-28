@@ -43,8 +43,9 @@ func (m *Manager) Spawn(_ context.Context, request tool.SpawnRequest) (string, e
 		return "", err
 	}
 	info := Info{
-		ID: id, Description: strings.Join(strings.Fields(request.Description), " "),
-		Kind: request.Kind, Access: request.Access, Paths: append([]string(nil), request.Paths...),
+		ID: id, SessionID: fmt.Sprintf("%s-sub-%s", m.cfg.SessionID, id),
+		Description: strings.Join(strings.Fields(request.Description), " "),
+		Kind:        request.Kind, Access: request.Access, Paths: append([]string(nil), request.Paths...),
 		Started: time.Now(), State: StateRunning,
 	}
 	if request.Access == tool.SpawnWrite {
@@ -74,7 +75,7 @@ func (m *Manager) newConversation(info Info, request tool.SpawnRequest) (*agent.
 	if err != nil {
 		return nil, "", err
 	}
-	session := fmt.Sprintf("%s-sub-%s", m.cfg.SessionID, info.ID)
+	session := info.SessionID
 	if info.Kind == tool.SpawnFork {
 		child, err := m.parent.Fork(agent.ForkOptions{
 			Tools: tools, SessionID: session, MaxTurns: m.cfg.MaxRequests, RequestTimeout: m.cfg.RequestTimeout,

@@ -31,7 +31,9 @@ const (
 
 // Info 描述一个子任务，用于界面状态区和日志。
 type Info struct {
-	ID          string
+	ID string
+	// SessionID 是子任务会话记录和工具输出存档共用的 ID。
+	SessionID   string
 	Description string
 	Kind        tool.SpawnKind
 	Access      tool.SpawnAccess

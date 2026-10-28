@@ -864,3 +864,47 @@ func TestRecordPermissionKeepsSubagentOrigin(t *testing.T) {
 		t.Fatalf("主 Agent 的审批不应带来源：%s", lines[2])
 	}
 }
+
+func TestSubagentSessionMetadataAndParentRecords(t *testing.T) {
+	testHome(t)
+	child, err := New(Metadata{
+		ID: "parent-sub-ab12", WorkDir: "/workspace/project", API: "anthropic-messages", Model: "claude-test", PermissionMode: "default",
+		ParentID: "parent", SubagentID: "ab12", Kind: "fresh", Access: "write", Paths: []string{"/workspace/project/pkg"}, Description: "重构 pkg",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	meta := parseObject(t, readJSONLines(t, child.Path())[0])
+	for key, want := range map[string]string{"parent_id": "parent", "subagent_id": "ab12", "kind": "fresh", "access": "write", "description": "重构 pkg"} {
+		if stringField(t, meta, key) != want {
+			t.Fatalf("子会话元数据 %s 错误：%s", key, meta[key])
+		}
+	}
+	var paths []string
+	if err := json.Unmarshal(field(t, meta, "paths"), &paths); err != nil || len(paths) != 1 || paths[0] != "/workspace/project/pkg" {
+		t.Fatalf("子会话范围未记录：%v %v", paths, err)
+	}
+
+	parent := newTestRecorder(t)
+	if err := parent.RecordSubagent(SubagentRecord{Phase: "start", ID: "ab12", Description: "重构 pkg", Kind: "fresh", Access: "write", Paths: []string{"/workspace/project/pkg"}, ChildSession: "parent-sub-ab12"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.RecordSubagent(SubagentRecord{Phase: "end", ID: "ab12", Description: "重构 pkg", Kind: "fresh", Access: "write", Status: "max_turns", Requests: 30, DurationMS: 1500, Partial: true, Truncated: true, Injected: true}); err != nil {
+		t.Fatal(err)
+	}
+	lines := readJSONLines(t, parent.Path())
+	start, end := parseObject(t, lines[1]), parseObject(t, lines[2])
+	if stringField(t, start, "type") != "subagent_start" || stringField(t, start, "child_session") != "parent-sub-ab12" {
+		t.Fatalf("起始记录错误：%s", lines[1])
+	}
+	if stringField(t, end, "type") != "subagent_end" || stringField(t, end, "status") != "max_turns" || intField(t, end, "requests") != 30 || intField(t, end, "duration_ms") != 1500 {
+		t.Fatalf("结束记录错误：%s", lines[2])
+	}
+	for _, key := range []string{"partial", "truncated", "injected"} {
+		if string(field(t, end, key)) != "true" {
+			t.Fatalf("结束记录缺少 %s：%s", key, lines[2])
+		}
+	}
+	assertRecordTime(t, end)
+}
