@@ -338,3 +338,17 @@ func TestWakeSafetyValveStopsAfterFiveRoundsUntilUserInput(t *testing.T) {
 		t.Fatalf("用户输入应重置唤醒计数：busy=%v blocked=%v rounds=%d", m.busy, m.wakeBlocked, m.wakeRounds)
 	}
 }
+
+func TestCanceledTurnDoesNotImmediatelyWakeAgain(t *testing.T) {
+	m, control := subagentModel(t)
+	control.pending = 1
+	m.options.RunWake = func(context.Context, func(Event) error, func(string)) (agent.Result, error) {
+		t.Error("用户取消本轮后不应立刻自动唤醒")
+		return agent.Result{}, nil
+	}
+	m.busy, m.cancel = true, func() {}
+	m.Update(delivery{done: true, err: context.Canceled})
+	if m.busy || !m.wakeBlocked {
+		t.Fatalf("取消后应回到空闲并暂停自动唤醒：busy=%v blocked=%v", m.busy, m.wakeBlocked)
+	}
+}

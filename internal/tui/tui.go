@@ -907,6 +907,8 @@ func (m *terminalModel) finishTurn(item delivery) tea.Cmd {
 	switch {
 	case errors.Is(item.err, context.Canceled):
 		m.status = "已取消，可继续输入"
+		// 用户刚取消，不要立刻因为收件箱里已有的结果再次唤醒；结果在下次输入时一起送达。
+		m.wakeBlocked = true
 		appendBodyLine(&body, "已取消本轮；已完成的操作和上下文已保留。", m.contentWidth())
 	case item.err != nil:
 		m.status = "本轮停止，可继续输入"

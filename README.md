@@ -1,6 +1,6 @@
 # Johnny-Code
 
-使用 Go 逐步搭建的 Coding Agent CLI。v0.10 在 v0.8 基础上增加上下文治理：完整历史与每次请求视图分离，单次工具结果模型可见预览最多 32 KiB，bash 大输出保存到 `.johnny/artifacts/<会话ID>/`，每轮结束按节省量压缩工具结果，接近模型窗口时保留最近 5 个已完成轮次并生成九段式摘要；`/context` 查看预算、缓存和摘要，`/compact` 手动压缩。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。v0.10 已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 方案已于 2026-10-28 确认，实现待开始。
+使用 Go 逐步搭建的 Coding Agent CLI。v0.12 在 v0.11 基础上增加后台子 Agent：主 Agent 通过 `task` 工具把边界清晰的任务委派给 `fresh`（干净上下文）或 `fork`（带主对话历史快照）子 Agent，子任务在后台并行运行，主 Agent 不等待；结果在主 Agent 下一次请求前自动注入，主 Agent 空闲时自动唤醒汇总；写入类子任务必须声明文件范围，审批来源清楚，`Ctrl+C` 一起取消。v0.10 在 v0.8 基础上增加上下文治理：完整历史与每次请求视图分离，单次工具结果模型可见预览最多 32 KiB，bash 大输出保存到 `.johnny/artifacts/<会话ID>/`，每轮结束按节省量压缩工具结果，接近模型窗口时保留最近 5 个已完成轮次并生成九段式摘要；`/context` 查看预算、缓存和摘要，`/compact` 手动压缩。v0.8 在 v0.7 权限体系上增加本地 Skills：从项目级和用户级目录发现 `SKILL.md`，系统提示只注入名称和描述，模型按需通过 `skill` 工具加载正文，也可以用 `/skill` 或独立 `/skill-name` 显式调用；Skill 只提供任务指导，不授予权限。v0.7 提供默认、只读、放行三种权限模式：默认模式自动执行路径白名单内的文件操作和固定查询命令，其余操作通过 TUI 逐次审批；支持项目命令前缀白名单、项目路径白名单和固定危险后缀黑名单。CLI 只支持在终端运行 `johnny` 进入 TUI，参数任务、管道和重定向会被拒绝。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions，可在任意目录启动并切换模型。v0.4 与 v0.5 已通过用户联合验收；v0.6 已通过用户验收；v0.8 已于 2026-10-25 确认冻结；v0.7 已实现，验收与权限收口后置；开发阶段 `johnny` 默认进入放行模式，`--permission-mode default` 仍可启用逐次审批。v0.10 已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 已于 2026-10-28 实现，待用户验收。
 
 ## 安装和更新
 
@@ -43,10 +43,11 @@ TUI 操作：
 | 菜单中 `Esc` | 关闭菜单；清空输入后重新输入 `/` 可再次打开 |
 | 中文等输入法 | 组合文本和候选窗口跟随输入框中的真实光标位置 |
 | 任务执行中 | 输入框上方实时逐条显示工具名、路径或命令和执行状态 |
+| 有后台子任务时 | 输入框上方常驻显示每个子任务的 ID、描述、耗时和状态（运行中 / 等待审批）；结束时打印一行成功、失败或取消提示，不显示子任务的过程 |
 | 本轮结束按 `Ctrl+O` | 展开最近一次工具过程；默认折叠为一行摘要 |
-| 任务中 `Ctrl+C` | 取消本轮，等待当前操作停止后继续输入；上下文和已完成修改保留 |
-| 审批等待中 `↑`/`↓`、`k`/`j`、`Enter` | 选择“允许本次 / 拒绝本次 / 批准并记录”；默认焦点在拒绝 |
-| 审批等待中 `Ctrl+C` | 取消本轮，不执行待审批操作 |
+| 任务中 `Ctrl+C` | 取消本轮和全部子任务，等待当前操作停止后继续输入；上下文和已完成修改保留 |
+| 审批等待中 `↑`/`↓`、`k`/`j`、`Enter` | 选择“允许本次 / 拒绝本次 / 批准并记录”；默认焦点在拒绝；主 Agent 空闲时也能响应子任务的审批，来自子任务的请求标明来源，多个请求按先进先出排队 |
+| 审批等待中 `Ctrl+C` | 取消本轮和全部子任务，丢弃全部待审批请求，不执行待审批操作 |
 | `/permissions` | 查看固定白名单、危险后缀黑名单和项目规则；支持 `remove-command`、`remove-path`、`clear` |
 | `/context` | 查看上下文估算、窗口预算、缓存指标、摘要和工具输出存档 |
 | `/compact` | 手动压缩较早的已完成轮次；压缩期间 `Ctrl+C` 取消 |
@@ -55,8 +56,8 @@ TUI 操作：
 | `/skills` | 查看已加载、被项目级覆盖、未加载和未注入提示的 Skill |
 | `/skills reload` | 重新扫描项目级和用户级 Skill 目录，并更新后续轮次的系统提示 |
 | `/skill <name> [参数]` | 显式使用某个 Skill；正文直接进入本轮任务，终端只显示原始命令 |
-| 空闲时 `Ctrl+C` | 清空输入，保留会话 |
-| `/exit`、空输入 `Ctrl+D` | 正常退出 |
+| 空闲时 `Ctrl+C` | 输入框有内容时清空输入，保留会话；输入框为空且有子任务运行时取消全部子任务 |
+| `/exit`、空输入 `Ctrl+D` | 正常退出；有子任务在运行时提示“N 个子任务将被取消”，取消并等它们停止后退出 |
 
 权限模式：
 
@@ -108,6 +109,23 @@ v0.11 增加 AGENTS 规则和跨会话记忆：
 - 项目 AGENTS 由用户维护，memory 由模型维护、用户可审计。
 
 详见 [v0.11 设计文档](docs/versions/v0.11.md)。
+
+## SubAgent（后台子任务）
+
+主 Agent 用 `task` 工具委派任务；用户只和主 Agent 对话，用自然语言说“让子 Agent 去查一下……”即可，`fresh` 还是 `fork` 由主 Agent 判断。`task` 只在终端 TUI 入口注册，参数任务等非终端路径不提供。
+
+- `kind=fresh`：干净上下文，只看到 `prompt`、AGENTS、记忆索引和 Skill 元数据；`kind=fork`：复制主对话请求视图（含摘要）的快照，截到派出之前最后一个完整消息边界；主对话超过可用输入预算的 50% 时拒绝 fork，提示改用 `fresh`。
+- `access=read`（默认）：不论父权限模式一律只读包装；`access=write`：沿用父权限策略（默认模式走审批，放行模式直接执行），必须用 `paths` 声明负责的文件或目录。父会话为只读模式时拒绝写入类子任务。
+- 同一条消息里的多个 `task` 调用依次启动，同时最多 3 个；每个子任务最多 30 次模型请求、20 分钟，单次请求超时沿用 5 分钟。没有 wait 或 poll 工具，主 Agent 派出后继续其他工作或结束本轮。
+- 结果自动回来：主 Agent 仍在运行时，报告（最多 8 KiB，包装为“仅作数据”的数据块，一次注入合并最多 24 KiB）在下一次模型请求前注入当轮；主 Agent 空闲、输入框为空时自动唤醒它汇总，同时完成的多个结果合并为一次唤醒；用户正在输入时不抢占。同一次用户输入之后连续自动唤醒最多 5 轮。被取消的子任务不注入。
+- 状态：`completed`、`canceled`、`request_timeout`、`max_turns`、`max_tokens`、`refusal`、`failed`，以及 `time_limit`（20 分钟总时长）；`max_turns`、`max_tokens`、`time_limit` 标注为部分结果，最后一次响应里未执行的工具调用不进入报告。
+- 文件范围：运行中的写入类子任务占用其 `paths`，范围不能重叠；子任务的 `write`/`edit` 只能落在自己的范围内，主 Agent 的 `write`/`edit` 遇到被占用路径会被拒绝并说明占用者；子任务结束（成功、失败或取消）立即释放。`bash` 不受限，这是防误写的护栏，不是安全边界。
+- 子 Agent 工具：`bash`、`read`、`write`、`edit`、`skill`、只读 `memory`，受访问级别约束；没有 `remember`、没有 `task`（只有一层）；不写长期记忆，不触发轮末记忆审查。主 Agent 的轮末记忆审查也会排除子任务报告，唤醒轮不审查。
+- 审批：子任务需要审批时暂停等待，审批面板标明“来源：子任务 ID 描述”，审计记录带 `origin` 字段；“批准并记录”写入同一份项目规则，对主 Agent 和其他子任务同样生效。子 Agent 的输出不能代表用户同意，也不能改变权限。
+- 取消与退出：忙碌时 `Ctrl+C` 取消主 Agent 当前轮和全部子任务；空闲时输入框有内容先清空，为空则取消全部子任务；`/exit` 或 `Ctrl+D` 提示后取消并等待停止；收到 SIGINT、SIGTERM 或挂断信号同样取消全部子任务。没有单独停止某个子任务的入口。
+- 日志：每个子 Agent 写独立 JSONL `~/.johnny/sessions/<主会话ID>-sub-<子任务ID>.jsonl`，元数据含 `parent_id`、`subagent_id`、`kind`、`access`、`paths`、`description`；主会话 JSONL 记录 `subagent_start`、`subagent_end` 和 `inject` 事件（`sources` 标明来源）。子任务的工具输出存档在子任务结束时清理。
+
+详见 [v0.12 设计文档](docs/versions/v0.12.md)。
 
 ## Skills
 
@@ -235,9 +253,9 @@ go build ./...
 bash -n scripts/install.sh
 ```
 
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；上下文估算、32 KiB 预览、轮内预览预算、bash 存档与清理、轮级压缩、摘要前缀替换、90%/95% 触发、摘要失败降级、上下文超限和 thrashing 熔断；终端模拟大输出、存档、手动压缩和自动摘要；长期记忆的 AGENTS 加载、条目格式、project-id、索引预算、用户/项目存储、`remember` 工具、用户规则、轮末审查、会话事件、`/memory`、`/remember` 和 PTY 记忆流程；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；`/context`、`/compact`、上下文配置解析和摘要事件日志；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
+测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实 Key。覆盖三种协议、模型切换、流式事件与完整消息、工具消息转换、结束原因、用量、错误和取消；工具注册、文件读写、编辑、Bash 取消超时、后台进程清理与输出限制；Agent 多工具串行执行、错误回传、请求预算和每次请求超时；上下文估算、32 KiB 预览、轮内预览预算、bash 存档与清理、轮级压缩、摘要前缀替换、90%/95% 触发、摘要失败降级、上下文超限和 thrashing 熔断；终端模拟大输出、存档、手动压缩和自动摘要；长期记忆的 AGENTS 加载、条目格式、project-id、索引预算、用户/项目存储、`remember` 工具、用户规则、轮末审查、会话事件、`/memory`、`/remember` 和 PTY 记忆流程；默认模式的 12 个只读查询、`&&`/`||`/`;` 控制运算符、只读查询管道、路径和危险规则、项目规则信任哈希、TUI 三选项审批与入口拒绝；Skill 目录发现、frontmatter 校验、项目覆盖用户、数量与元数据预算、`skill` 工具权限放行、`/skills` 重载、`/skill` 本地展开、斜杠菜单过滤/选择/补全/关闭、独立 `/skill-name` 命令、PTY 自动与显式调用；`/context`、`/compact`、上下文配置解析和摘要事件日志；子任务的收件箱注入与合并上限、空闲唤醒入口、fork 起点截断与拒绝过长上下文、三种协议接受注入后的消息历史、`task` 参数校验、写入文件范围登记与双向拦截、子任务并发上限与时长/请求次数限额、报告截断与数据声明、取消与 bash 进程清理、审批来源与等待状态、审批先进先出队列、唤醒保险阀、Ctrl+C 与退出语义，以及 PTY 终端中的子任务后台运行、自动唤醒、输入时不抢占、默认模式下子任务审批和退出取消；调试记录、批量审批审计与写入失败降级；以及跨目录配置复用、安装、更新、PATH 幂等与碰撞保护。三种协议的循环集成测试使用真实文件工具，并核对 Replay 和工具结果 ID。
 
-统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/contextview` 负责预算和 token 估算、工具结果预览与存档、请求视图、轮级压缩、摘要前缀替换和 thrashing 保护；`internal/agent` 负责本轮消息历史、模型与工具调度、摘要请求、固定前缀和轮末记忆审查及结束判断；`internal/memory` 负责 AGENTS 加载、用户/项目记忆、project-id、索引、用户规则、显式写入和旁路审查；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，斜杠菜单在 `internal/tui/slash_menu.go`，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
+统一模型层位于 `internal/model`，独立工具层位于 `internal/tool`。`internal/contextview` 负责预算和 token 估算、工具结果预览与存档、请求视图、轮级压缩、摘要前缀替换和 thrashing 保护；`internal/agent` 负责本轮消息历史、模型与工具调度、摘要请求、固定前缀和轮末记忆审查及结束判断；`internal/memory` 负责 AGENTS 加载、用户/项目记忆、project-id、索引、用户规则、显式写入和旁路审查；`internal/session` 负责只写不读的 JSONL 调试记录；`internal/skill` 负责本地 Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载；`internal/subagent` 负责后台子任务的登记、并发与时长限额、fresh/fork 子会话、受限工具集合、报告格式化和统一取消；`internal/tool/task.go`、`filescope.go`、`origin.go` 分别是 `task` 工具、写入文件范围守卫和审批来源。`internal/tui` 使用 Bubble Tea v2、Bubbles textarea 和 Lip Gloss v2 管理终端事件、输入、状态、审批面板与滚动输出，斜杠菜单在 `internal/tui/slash_menu.go`，Markdown 由 glamour v2 渲染，目录树由 `internal/tui/tree.go` 按列识别和排版；输入框使用真实终端光标，中文输入法组合文本会出现在输入位置。CLI 负责将有界显示数据与 Agent 事件衔接。工具开始状态更新后等待一个渲染周期并检查终端输出错误，再继续执行；界面输出失败会取消任务。系统提示要求目录树等对齐文本使用 text 围栏代码块，渲染层同时兼容无围栏或语言标注不合适的目录树。只读模式由 `internal/tool/readonly.go` 包装工具，工作目录边界在 `internal/tool/scope.go`，受限查询执行器在 `internal/tool/restricted_bash.go`；默认模式在 `internal/tool/default.go` 和 `internal/tool/bash_chain.go`，审批接口在 `approval.go`，项目规则在 `project_rules.go`，固定白名单和危险后缀分别在 `permission_whitelist.go`、`permission_blacklist.go`；`skill` 工具在 `internal/tool/skill.go`。它仍是工具策略，不是系统沙箱。
 
 手动验证工具：
 
@@ -262,7 +280,7 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.9：MCP（暂缓）](docs/versions/v0.9.md)
 - [v0.10：上下文治理（已确认冻结）](docs/versions/v0.10.md)
 - [v0.11：长期记忆（已确认冻结）](docs/versions/v0.11.md)
-- [v0.12：SubAgent（方案已确认，实现待开始）](docs/versions/v0.12.md)
+- [v0.12：SubAgent（已实现，待用户验收）](docs/versions/v0.12.md)
 - [v0.13：Agent Team（待讨论）](docs/versions/v0.13.md)
 
-> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 方案已于 2026-10-28 确认，实现待开始；多 Agent 协作拆为 v0.13 Agent Team，待讨论。
+> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 已于 2026-10-28 实现，待用户验收；多 Agent 协作拆为 v0.13 Agent Team，待讨论。

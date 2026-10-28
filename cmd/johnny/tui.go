@@ -36,7 +36,7 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 	var tuiCompact func(context.Context, func(string)) (string, error)
 	if compact != nil {
 		tuiCompact = func(runCtx context.Context, notice func(string)) (string, error) {
-			logs.stderr = noticeWriter{notice: notice}
+			logs.setStderr(noticeWriter{notice: notice})
 			return compact(runCtx, func(event agent.Event) error {
 				switch event.Type {
 				case agent.EventNotice:
@@ -54,13 +54,13 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 	}
 	// 运行中的日志提示进入 UI 队列，避免直接写 stderr 破坏正在重绘的输入区。
 	// Run 等待所有任务退出后才返回，此时关闭日志的警告可回到普通 stderr。
-	defer func() { logs.stderr = stderr }()
+	defer func() { logs.setStderr(stderr) }()
 	var tuiSubagents tui.SubagentControl
 	var tuiWake func(context.Context, func(tui.Event) error, func(string)) (agent.Result, error)
 	if children != nil {
 		tuiSubagents = children
 		tuiWake = func(turnCtx context.Context, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
-			logs.stderr = noticeWriter{notice: notice}
+			logs.setStderr(noticeWriter{notice: notice})
 			return conversation.RunInbox(turnCtx, func(event agent.Event) error {
 				logs.record(event)
 				if displayEvent, ok := terminalEvent(event); ok {
@@ -75,7 +75,7 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands, RunCompact: tuiCompact,
 		Subagents: tuiSubagents, RunWake: tuiWake,
 		RunTurn: func(turnCtx context.Context, prompt string, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
-			logs.stderr = noticeWriter{notice: notice}
+			logs.setStderr(noticeWriter{notice: notice})
 			return conversation.Run(turnCtx, prompt, func(event agent.Event) error {
 				logs.record(event)
 				if displayEvent, ok := terminalEvent(event); ok {

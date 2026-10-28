@@ -858,6 +858,17 @@ func clonePermissionPrefixes(prefixes [][]string) [][]string {
 	return cloned
 }
 
+// setStderr 切换警告输出。界面运行期间警告进入界面队列；子任务的后台 goroutine
+// 也可能同时写警告，因此需要加锁。
+func (l *sessionLogger) setStderr(w io.Writer) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.stderr = w
+	l.mu.Unlock()
+}
+
 func (l *sessionLogger) close() {
 	if l == nil {
 		return
