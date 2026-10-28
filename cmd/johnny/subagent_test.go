@@ -170,12 +170,12 @@ func TestNonTerminalEntryDoesNotRegisterTaskTool(t *testing.T) {
 		names = append(names, item.Name)
 	}
 	for _, name := range names {
-		if name == "task" {
-			t.Fatalf("非终端入口不应注册 task：%v", names)
+		if name == "task" || name == "workflow" {
+			t.Fatalf("非终端入口不应注册 task 和 workflow：%v", names)
 		}
 	}
-	if strings.Contains(string(body.System), "委派子任务") {
-		t.Fatal("非终端入口的系统提示不应包含委派指引")
+	if strings.Contains(string(body.System), "委派子任务") || strings.Contains(string(body.System), "分步工作流") {
+		t.Fatal("非终端入口的系统提示不应包含委派和工作流指引")
 	}
 }
 
