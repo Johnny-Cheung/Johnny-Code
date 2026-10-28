@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	MaxConcurrent      = 3
+	MaxConcurrent      = 5
 	DefaultMaxRequests = 30
 	DefaultTimeLimit   = 20 * time.Minute
 )
@@ -25,6 +25,7 @@ const (
 type State string
 
 const (
+	StateQueued          State = "queued"
 	StateRunning         State = "running"
 	StateWaitingApproval State = "waiting_approval"
 )
@@ -103,6 +104,7 @@ type task struct {
 }
 
 // Manager 登记、限额和取消子任务，并把结果放进父会话的收件箱。
+// tasks 是正在运行的任务（占用名额），queue 是等待名额的任务，两者的文件范围都已登记。
 type Manager struct {
 	cfg    Config
 	claims *tool.FileClaims
@@ -110,6 +112,7 @@ type Manager struct {
 	mu     sync.Mutex
 	parent *agent.Conversation
 	tasks  map[string]*task
+	queue  []*task
 	used   map[string]bool
 	closed bool
 	wg     sync.WaitGroup

@@ -66,6 +66,7 @@ func (m *Manager) run(t *task) {
 		m.parentConversation().Enqueue(agent.InboxItem{Source: "subagent:" + t.info.ID, Text: ended.Report})
 	}
 	m.emit(ended)
+	m.dispatch()
 }
 
 // reportBody 组合子任务报告正文：正常结束就是最后一段文字，否则先写明原因再附已有输出。
@@ -132,33 +133,43 @@ func (m *Manager) setWaiting(origin tool.Origin, waiting bool) {
 	}
 }
 
-// Running 返回运行中（含等待审批）的子任务数。
+// Running 返回未结束的子任务数，包含等待审批和排队中的任务。
 func (m *Manager) Running() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.tasks)
+	return len(m.tasks) + len(m.queue)
 }
 
-// Snapshot 返回运行中子任务的当前状态，按启动时间排序。
+// Snapshot 返回未结束子任务的当前状态：运行中的按启动时间排序，排队中的按入队顺序排在后面。
 func (m *Manager) Snapshot() []Info {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	infos := make([]Info, 0, len(m.tasks))
+	infos := make([]Info, 0, len(m.tasks)+len(m.queue))
 	for _, t := range m.tasks {
 		infos = append(infos, t.info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Started.Before(infos[j].Started) })
+	for _, t := range m.queue {
+		infos = append(infos, t.info)
+	}
 	return infos
 }
 
-// CancelAll 取消所有运行中的子任务并返回数量。不等待它们停止；被取消的子任务不注入结果。
+// CancelAll 取消所有运行中的子任务、丢弃排队中的任务，返回数量。不等待它们停止；被取消的子任务不注入结果。
+// 排队中的任务从未启动，不产生启动或结束事件。
 func (m *Manager) CancelAll() int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	queued := m.queue
+	m.queue = nil
 	for _, t := range m.tasks {
 		t.cancel()
 	}
-	return len(m.tasks)
+	count := len(m.tasks) + len(queued)
+	for _, t := range queued {
+		m.discardLocked(t)
+	}
+	m.mu.Unlock()
+	return count
 }
 
 // Wait 等待所有子任务的 goroutine 退出。

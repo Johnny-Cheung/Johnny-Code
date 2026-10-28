@@ -83,11 +83,11 @@ func TestSpawnEnforcesConcurrencyLimit(t *testing.T) {
 			t.Fatalf("第 %d 个子任务应成功：%v", i+1, err)
 		}
 	}
-	if _, err := h.manager.Spawn(context.Background(), freshReadRequest("多余")); err == nil || !strings.Contains(err.Error(), "最多 3 个") {
-		t.Fatalf("第 4 个应被拒绝并说明上限：%v", err)
+	if _, err := h.manager.Spawn(context.Background(), freshReadRequest("多余")); err == nil || !strings.Contains(err.Error(), "最多 5 个") {
+		t.Fatalf("超出上限的任务应被拒绝并说明上限：%v", err)
 	}
 	close(release)
-	h.waitEnded(3)
+	h.waitEnded(MaxConcurrent)
 	if _, err := h.manager.Spawn(context.Background(), freshReadRequest("再来")); err != nil {
 		t.Fatalf("有任务结束后应可再派出：%v", err)
 	}

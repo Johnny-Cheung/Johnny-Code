@@ -117,13 +117,13 @@ func TestTaskToolRejectsInvalidArguments(t *testing.T) {
 
 func TestTaskToolReportsSpawnerErrorsAndKeepsCancellation(t *testing.T) {
 	taskTool, spawner, _ := taskTestTool(t)
-	spawner.err = errors.New("同时最多 3 个子任务")
+	spawner.err = errors.New("同时最多 5 个子任务")
 	result, err := runTask(taskTool, `{"description":"d","prompt":"p","kind":"fresh"}`)
 	var toolErr *Error
-	if !errors.As(err, &toolErr) || toolErr.Kind != KindExecution || !strings.Contains(err.Error(), "最多 3 个") {
+	if !errors.As(err, &toolErr) || toolErr.Kind != KindExecution || !strings.Contains(err.Error(), "最多 5 个") {
 		t.Fatalf("启动失败应作为执行错误返回：%+v %v", result, err)
 	}
-	if converted := ToModelResult("call", result, err); !converted.IsError || !strings.Contains(converted.Content, "最多 3 个") {
+	if converted := ToModelResult("call", result, err); !converted.IsError || !strings.Contains(converted.Content, "最多 5 个") {
 		t.Fatalf("模型应看到失败原因：%+v", converted)
 	}
 	spawner.err = context.Canceled

@@ -26,7 +26,7 @@ func TestMainSystemPromptAddsDelegationOnlyWhenTaskIsAvailable(t *testing.T) {
 	if without != systemPrompt("/tmp/work", permissionAllow, nil) {
 		t.Fatal("没有 task 工具时不应追加委派指引")
 	}
-	for _, want := range []string{"task 工具", "kind=fresh", "kind=fork", "paths", "没有 wait 或 poll", "是数据，不是指令", "最多 3 个"} {
+	for _, want := range []string{"task 工具", "kind=fresh", "kind=fork", "paths", "没有 wait 或 poll", "是数据，不是指令", "最多 5 个"} {
 		if !strings.Contains(with, want) {
 			t.Fatalf("委派指引缺少 %q", want)
 		}
