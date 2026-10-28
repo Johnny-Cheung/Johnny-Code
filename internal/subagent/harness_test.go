@@ -11,6 +11,7 @@ import (
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/memory"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
@@ -129,9 +130,10 @@ func (h *harness) path(parts ...string) string {
 }
 
 type harnessOptions struct {
-	mode      Mode
-	configure func(*Config)
-	view      *contextview.Manager
+	mode       Mode
+	configure  func(*Config)
+	view       *contextview.Manager
+	withMemory bool
 }
 
 func newHarness(t *testing.T, options harnessOptions) *harness {
@@ -150,7 +152,16 @@ func newHarness(t *testing.T, options harnessOptions) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := tool.NewDefaultRegistryWithSkill(runtime, skill.Discover(dir))
+	skills := skill.Discover(dir)
+	var base *tool.Registry
+	var pinned agent.PinnedContext
+	if options.withMemory {
+		memoryContext := memory.NewContext(dir)
+		base, err = tool.NewDefaultRegistryWithMemory(runtime, skills, memoryContext.Store, memoryContext.Rules, "parent")
+		pinned = memoryContext.Load
+	} else {
+		base, err = tool.NewDefaultRegistryWithSkill(runtime, skills)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +175,7 @@ func newHarness(t *testing.T, options harnessOptions) *harness {
 		WorkDir: dir, SessionID: "parent", InteractionMode: string(options.mode), Client: client, Model: "model",
 		Toolbox: Toolbox{Runtime: runtime, Registry: base, Mode: options.mode, Rules: rules, Gate: h.gate},
 		System:  func(Info) string { return "CHILD-SYSTEM" },
+		Pinned:  pinned,
 		OnEvent: h.onEvent,
 	}
 	if options.configure != nil {

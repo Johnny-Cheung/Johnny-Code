@@ -3,11 +3,13 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -194,5 +196,46 @@ func TestTerminalPTYSubagentApprovalShowsOriginWhileMainIsIdle(t *testing.T) {
 		if !strings.Contains(parent, want) {
 			t.Fatalf("主会话记录缺少 %s：%s", want, parent)
 		}
+	}
+}
+
+func TestTerminalPTYRegistersEightToolsIncludingTask(t *testing.T) {
+	var mu sync.Mutex
+	var first struct {
+		System json.RawMessage `json:"system"`
+		Tools  []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	captured := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		if !captured {
+			captured = true
+			_ = json.Unmarshal(data, &first)
+		}
+		mu.Unlock()
+		terminalAnswer(w, "OK")
+	}))
+	defer server.Close()
+	p := startTerminalMode(t, server.URL, "allow")
+	p.write(t, "你好\r")
+	p.expect(t, 0, "OK")
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+
+	mu.Lock()
+	defer mu.Unlock()
+	names := make([]string, 0, len(first.Tools))
+	for _, item := range first.Tools {
+		names = append(names, item.Name)
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "bash,edit,memory,read,remember,skill,task,write" {
+		t.Fatalf("TUI 入口应提供 8 个工具：%v", names)
+	}
+	if !strings.Contains(string(first.System), "委派子任务") {
+		t.Fatal("TUI 入口的系统提示应包含委派指引")
 	}
 }

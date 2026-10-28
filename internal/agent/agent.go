@@ -185,6 +185,7 @@ func (c *Conversation) run(ctx context.Context, prompt string, sources []string,
 		return nil
 	}
 	var pending []model.ToolCall
+	injected := make(map[int]bool)
 	defer func() {
 		// 保留已执行结果，未执行调用补显式错误结果，避免下一轮带着悬空 ID。
 		for _, call := range pending {
@@ -203,8 +204,9 @@ func (c *Conversation) run(ctx context.Context, prompt string, sources []string,
 			err = endErr
 			result.Status = StatusFailed
 		}
-		if err == nil {
-			c.startMemoryReview(ctx, c.userTurn, c.messages[turnStart:])
+		// 唤醒轮由子任务结果触发，没有用户表达可供审查。
+		if err == nil && len(sources) == 0 {
+			c.startMemoryReview(ctx, c.userTurn, withoutMessages(c.messages[turnStart:], turnStart, injected))
 		}
 	}()
 	user := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: prompt}}}
@@ -235,7 +237,11 @@ func (c *Conversation) run(ctx context.Context, prompt string, sources []string,
 		if err = ctx.Err(); err != nil {
 			return result, err
 		}
-		if err = c.injectInbox(turn, notify); err != nil {
+		index, injectErr := c.injectInbox(turn, notify)
+		if index >= 0 {
+			injected[index] = true
+		}
+		if err = injectErr; err != nil {
 			return result, err
 		}
 		if c.view.NeedsRequestCompaction(opts.System, definitions) {

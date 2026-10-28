@@ -78,16 +78,29 @@ func inboxText(items []InboxItem) (string, []string) {
 
 // injectInbox 在模型请求前把收件箱内容作为一条合成 user 消息追加到历史和请求视图。
 // turn 是紧随其后的模型请求序号。调用点必须位于所有工具结果之后，不会插到一批工具调用中间。
-func (c *Conversation) injectInbox(turn int, notify func(Event) error) error {
+// 返回注入消息在历史中的下标，没有注入时为 -1。
+func (c *Conversation) injectInbox(turn int, notify func(Event) error) (int, error) {
 	items := c.takeInbox()
 	if len(items) == 0 {
-		return nil
+		return -1, nil
 	}
 	text, sources := inboxText(items)
 	message := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: text}}}
 	c.messages = append(c.messages, message)
 	c.view.AppendUser(message)
-	return notify(Event{Type: EventInject, Turn: turn, Message: &message, Sources: sources})
+	return len(c.messages) - 1, notify(Event{Type: EventInject, Turn: turn, Message: &message, Sources: sources})
+}
+
+// withoutMessages 返回去掉指定下标消息后的副本。轮末记忆审查用它排除子任务报告：
+// 报告是数据，不是用户表达，不能成为自动记忆的依据。
+func withoutMessages(messages []model.Message, offset int, skip map[int]bool) []model.Message {
+	kept := make([]model.Message, 0, len(messages))
+	for i, message := range messages {
+		if !skip[offset+i] {
+			kept = append(kept, message)
+		}
+	}
+	return kept
 }
 
 // RunInbox 在没有新用户输入时，以收件箱内容作为本轮起点（空闲唤醒）。

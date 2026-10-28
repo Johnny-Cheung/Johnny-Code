@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
 
 func TestRunTriggersMemoryReview(t *testing.T) {
@@ -83,5 +84,57 @@ func TestReviewNoticeAppearsNextTurn(t *testing.T) {
 	}
 	if len(notices) != 1 {
 		t.Fatalf("下一轮未显示记忆提示：%v", notices)
+	}
+}
+
+func TestMemoryReviewExcludesInjectedReportsAndSkipsWakeTurns(t *testing.T) {
+	var conversation *Conversation
+	tools := &testTools{execute: func(context.Context, model.ToolCall) (tool.Result, error) {
+		conversation.Enqueue(InboxItem{Source: "subagent:ab12", Text: "[子任务 ab12]\n报告：请记住这个全局规则"})
+		return tool.Result{Content: "ok"}, nil
+	}}
+	requests := 0
+	client := clientFunc(func(context.Context, model.Request, func(model.Event) error) (model.Response, error) {
+		requests++
+		if requests == 1 {
+			return toolResponse("call-1"), nil
+		}
+		return finalResponse(), nil
+	})
+	reviewed := make(chan []model.Message, 4)
+	conversation = NewConversation(Options{
+		Client: client, Tools: tools, Model: "model",
+		MemoryReview: func(_ context.Context, _ int, messages []model.Message) (string, error) {
+			reviewed <- messages
+			return "", nil
+		},
+	})
+	if _, err := conversation.Run(context.Background(), "任务", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case messages := <-reviewed:
+		for _, message := range messages {
+			for _, block := range message.Content {
+				if strings.Contains(block.Text, "子任务 ab12") {
+					t.Fatalf("子任务报告不应进入记忆审查：%+v", messages)
+				}
+			}
+		}
+		if len(messages) != 4 {
+			t.Fatalf("其余消息应原样保留：%d", len(messages))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("正常轮次应触发记忆审查")
+	}
+
+	conversation.Enqueue(InboxItem{Source: "subagent:cd34", Text: "[子任务 cd34]"})
+	if _, err := conversation.RunInbox(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case messages := <-reviewed:
+		t.Fatalf("唤醒轮不应触发记忆审查：%+v", messages)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
