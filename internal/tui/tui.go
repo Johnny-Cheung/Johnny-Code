@@ -147,6 +147,9 @@ type terminalModel struct {
 	subTick       bool
 	wakeRounds    int
 	wakeBlocked   bool
+	workflow      *WorkflowNotice
+	// workflowFloor 是已结束的工作流的最大快照版本，更旧的快照不能让它重新出现。
+	workflowFloor uint64
 }
 
 // Run 在退出前取消并等待所有任务。即使库因终端错误提前恢复终端，也不会留下
@@ -1151,10 +1154,7 @@ func (m *terminalModel) View() tea.View {
 			reserve = 2
 		}
 		available := max(0, maxDynamic-reserve)
-		subs := m.subagentLines(width)
-		if len(subs) > available {
-			subs = subs[:available]
-		}
+		subs := m.taskAreaLines(width, m.areaHeightLimit(available))
 		available -= len(subs)
 		panel := m.progressLines(width)
 		var parts []string
@@ -1178,7 +1178,7 @@ func (m *terminalModel) View() tea.View {
 		}
 		if len(parts) < maxDynamic {
 			hint := "Ctrl+C 取消本轮"
-			if len(m.subs) > 0 {
+			if m.hasTasks() {
 				hint = "Ctrl+C 取消本轮和子任务"
 			}
 			parts = append(parts, muted.Render(ansi.Truncate(hint, width, "…")))
@@ -1194,14 +1194,7 @@ func (m *terminalModel) View() tea.View {
 	border := muted.Render(strings.Repeat("─", width))
 	hasBorder := m.height >= len(lines)+2
 	menu := m.slashView(width, m.slashMaxRows(len(lines)))
-	subs := m.subagentLines(width)
-	if room := m.height - len(lines) - 3; len(subs) > max(0, room) {
-		subs = subs[:max(0, room)]
-	}
 	var parts []string
-	for _, line := range subs {
-		parts = append(parts, muted.Render(line))
-	}
 	if len(menu) > 0 {
 		parts = append(parts, menu...)
 	}
@@ -1211,6 +1204,10 @@ func (m *terminalModel) View() tea.View {
 	parts = append(parts, lines...)
 	if hasBorder {
 		parts = append(parts, border)
+	}
+	// 任务区放在输入框下边线之下，与主 Agent 的对话记录分开；页脚仍在最后一行。
+	for _, line := range m.taskAreaLines(width, m.areaHeightLimit(m.height-len(parts)-1)) {
+		parts = append(parts, muted.Render(line))
 	}
 	if m.height >= len(parts)+1 {
 		hint := m.status
@@ -1228,7 +1225,7 @@ func (m *terminalModel) View() tea.View {
 		if hasBorder {
 			cursor.Position.Y++
 		}
-		cursor.Position.Y += len(menu) + len(subs)
+		cursor.Position.Y += len(menu)
 		cursor.Position.X = min(cursor.Position.X, width-1)
 		cursor.Position.Y = min(cursor.Position.Y, max(0, len(parts)-1))
 		result.Cursor = cursor

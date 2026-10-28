@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // 子任务通知的类型。
@@ -29,6 +28,11 @@ type SubagentNotice struct {
 	Description string
 	Started     time.Time
 	Waiting     bool
+	// Step 大于 0 表示任务属于工作流的这一步：不进入单个子任务行，也不逐个打印结束提示。
+	// SubagentStepEnd 的 Step 是刚结束的步骤序号。
+	Step int
+	// Workflow 是通知发生时进行中工作流的快照，没有时为 nil。工作流结束通知带最终状态。
+	Workflow *WorkflowNotice
 	// 以下字段仅 SubagentEnd 有值。
 	Status   agent.Status
 	Error    string
@@ -59,9 +63,13 @@ type subagentView struct {
 }
 
 func (m *terminalModel) applySubagent(notice SubagentNotice) tea.Cmd {
+	m.applyWorkflowSnapshot(notice.Workflow)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	switch notice.Kind {
 	case SubagentStart:
-		m.subs = append(m.subs, subagentView{id: notice.ID, description: notice.Description, started: notice.Started})
+		if notice.Step == 0 {
+			m.subs = append(m.subs, subagentView{id: notice.ID, description: notice.Description, started: notice.Started})
+		}
 		return m.scheduleSubagentTick()
 	case SubagentState:
 		for i := range m.subs {
@@ -77,14 +85,38 @@ func (m *terminalModel) applySubagent(notice SubagentNotice) tea.Cmd {
 			}
 		}
 		m.pruneApprovals()
-		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		if notice.Step > 0 {
+			return nil
+		}
 		return tea.Println(muted.Render(wrap(subagentEndLine(notice), m.contentWidth())))
+	case SubagentWorkflow:
+		return m.scheduleSubagentTick()
+	case SubagentStepEnd:
+		if line := stepEndLine(notice.Workflow, notice.Step); line != "" {
+			return tea.Println(muted.Render(wrap(line, m.contentWidth())))
+		}
+	case SubagentWorkflowEnd:
+		final := notice.Workflow
+		if final == nil {
+			final = m.workflow
+		}
+		if m.workflow != nil {
+			m.workflowFloor = max(m.workflowFloor, m.workflow.Version)
+		}
+		if final != nil {
+			m.workflowFloor = max(m.workflowFloor, final.Version)
+		}
+		m.workflow = nil
+		m.pruneApprovals()
+		if line := workflowEndLine(final); line != "" {
+			return tea.Println(muted.Render(wrap(line, m.contentWidth())))
+		}
 	}
 	return nil
 }
 
 func (m *terminalModel) scheduleSubagentTick() tea.Cmd {
-	if m.subTick || len(m.subs) == 0 {
+	if m.subTick || !m.hasTasks() {
 		return nil
 	}
 	m.subTick = true
@@ -133,20 +165,6 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
 }
 
-// subagentLines 是常驻子任务区：每个运行中的子任务一行。
-func (m *terminalModel) subagentLines(width int) []string {
-	lines := make([]string, 0, len(m.subs))
-	for _, sub := range m.subs {
-		state := "运行中"
-		if sub.waiting {
-			state = "等待审批"
-		}
-		line := fmt.Sprintf("◆ %s %s · %s · %s", safeText(sub.id), oneLine(sub.description), formatElapsed(time.Since(sub.started)), state)
-		lines = append(lines, ansi.Truncate(line, width, "…"))
-	}
-	return lines
-}
-
 // cancelSubagents 取消所有运行中的子任务并返回数量。
 func (m *terminalModel) cancelSubagents() int {
 	if m.options.Subagents == nil {
@@ -188,12 +206,16 @@ func (m *terminalModel) maybeWake() tea.Cmd {
 	if m.input.Value() != "" || control.PendingResults() == 0 {
 		return nil
 	}
-	if m.wakeRounds >= maxWakeRounds {
+	// 工作流进行期间，步骤结束的唤醒不计入连续唤醒次数：步数本身有上限。
+	counted := m.workflow == nil
+	if counted && m.wakeRounds >= maxWakeRounds {
 		m.wakeBlocked = true
 		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 		return tea.Println(muted.Render(wrap(fmt.Sprintf("子任务结果已连续唤醒 %d 次，不再自动唤醒；结果会在你下次输入时一起送达。", maxWakeRounds), m.contentWidth())))
 	}
-	m.wakeRounds++
+	if counted {
+		m.wakeRounds++
+	}
 	m.beginTurnState("子任务完成，主 Agent 正在汇总…")
 	run := m.options.RunWake
 	m.launchTurn(func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {

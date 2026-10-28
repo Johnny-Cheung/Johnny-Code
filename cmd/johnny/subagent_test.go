@@ -19,6 +19,7 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/subagent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tui"
 )
 
 func TestMainSystemPromptAddsDelegationOnlyWhenTaskIsAvailable(t *testing.T) {
@@ -269,5 +270,41 @@ func TestWorkflowEventsReachParentLogAndChildMetadata(t *testing.T) {
 		if !strings.Contains(string(parent), want) {
 			t.Fatalf("父会话记录缺少 %s：%s", want, parent)
 		}
+	}
+}
+
+func TestSubagentNoticeCarriesWorkflowSnapshotAndStep(t *testing.T) {
+	started := time.Now()
+	view := &subagent.WorkflowView{Version: 7, Title: "重构", Status: subagent.WorkflowActive, Started: started, Steps: []subagent.StepView{
+		{No: 1, Title: "调研", State: subagent.StepDone, Total: 2, Finished: 2, Counts: subagent.StepCounts{Completed: 2}},
+		{No: 2, Title: "实现", State: subagent.StepRunning, Total: 3, Finished: 1, Queued: 1, Active: []subagent.Info{
+			{ID: "ab12", Description: "改造 parser", Started: started, State: subagent.StateWaitingApproval, Step: 2},
+		}},
+	}}
+	notice, ok := subagentNotice(subagent.Event{Type: subagent.EventStarted, Info: subagent.Info{ID: "ab12", Description: "改造 parser", Step: 2}, Workflow: view})
+	if !ok || notice.Kind != tui.SubagentStart || notice.Step != 2 || notice.Workflow == nil || notice.Workflow.Version != 7 {
+		t.Fatalf("任务事件应带所属步骤和工作流快照：%+v", notice)
+	}
+	step := notice.Workflow.Steps[1]
+	if step.State != "running" || step.Queued != 1 || len(step.Active) != 1 || !step.Active[0].Waiting || notice.Workflow.Steps[0].Completed != 2 {
+		t.Fatalf("快照转换错误：%+v", notice.Workflow.Steps)
+	}
+	cases := map[subagent.EventType]string{
+		subagent.EventWorkflowStarted: tui.SubagentWorkflow,
+		subagent.EventStepStarted:     tui.SubagentWorkflow,
+		subagent.EventStepEnded:       tui.SubagentStepEnd,
+		subagent.EventWorkflowEnded:   tui.SubagentWorkflowEnd,
+	}
+	for kind, want := range cases {
+		got, ok := subagentNotice(subagent.Event{Type: kind, Step: 1, Workflow: view})
+		if !ok || got.Kind != want {
+			t.Fatalf("%s 应转成 %s：%+v", kind, want, got)
+		}
+	}
+	if got, _ := subagentNotice(subagent.Event{Type: subagent.EventStepEnded, Step: 2, Workflow: view}); got.Step != 2 {
+		t.Fatalf("步骤结束通知应带步骤序号：%+v", got)
+	}
+	if plain, _ := subagentNotice(subagent.Event{Type: subagent.EventStarted, Info: subagent.Info{ID: "x"}}); plain.Workflow != nil || plain.Step != 0 {
+		t.Fatalf("单个委派的任务不带工作流：%+v", plain)
 	}
 }

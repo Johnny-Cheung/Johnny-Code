@@ -175,7 +175,10 @@ func (c *terminalSubagents) Subscribe(listener func(tui.SubagentNotice)) func() 
 }
 
 func subagentNotice(event subagent.Event) (tui.SubagentNotice, bool) {
-	notice := tui.SubagentNotice{ID: event.Info.ID, Description: event.Info.Description, Started: event.Info.Started}
+	notice := tui.SubagentNotice{
+		ID: event.Info.ID, Description: event.Info.Description, Started: event.Info.Started,
+		Step: event.Info.Step, Workflow: workflowNotice(event.Workflow),
+	}
 	switch event.Type {
 	case subagent.EventStarted:
 		notice.Kind = tui.SubagentStart
@@ -188,10 +191,37 @@ func subagentNotice(event subagent.Event) (tui.SubagentNotice, bool) {
 		notice.Error = event.Error
 		notice.Partial = event.Partial
 		notice.Duration = event.Duration
+	case subagent.EventWorkflowStarted, subagent.EventStepStarted:
+		notice.Kind = tui.SubagentWorkflow
+	case subagent.EventStepEnded:
+		notice.Kind, notice.Step = tui.SubagentStepEnd, event.Step
+	case subagent.EventWorkflowEnded:
+		notice.Kind = tui.SubagentWorkflowEnd
 	default:
 		return tui.SubagentNotice{}, false
 	}
 	return notice, true
+}
+
+// workflowNotice 把工作流快照转成界面使用的类型。
+func workflowNotice(view *subagent.WorkflowView) *tui.WorkflowNotice {
+	if view == nil {
+		return nil
+	}
+	notice := &tui.WorkflowNotice{Version: view.Version, Title: view.Title, Status: string(view.Status), Reason: view.Reason, Started: view.Started}
+	for _, step := range view.Steps {
+		item := tui.WorkflowStepNotice{
+			No: step.No, Title: step.Title, State: string(step.State), Total: step.Total, Finished: step.Finished,
+			Completed: step.Counts.Completed, Partial: step.Counts.Partial, Failed: step.Counts.Failed, Queued: step.Queued,
+		}
+		for _, info := range step.Active {
+			item.Active = append(item.Active, tui.WorkflowTaskNotice{
+				ID: info.ID, Description: info.Description, Started: info.Started, Waiting: info.State == subagent.StateWaitingApproval,
+			})
+		}
+		notice.Steps = append(notice.Steps, item)
+	}
+	return notice
 }
 
 // workflowRecord 把工作流事件转成父会话记录；不是工作流事件时返回 false。
