@@ -826,3 +826,23 @@ func TestRecordMemory(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordInjectedInboxMessageWithSources(t *testing.T) {
+	recorder := newTestRecorder(t)
+	message := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: "[子任务 ab12 状态：completed]"}}}
+	if err := recorder.Record(agent.Event{Type: agent.EventInject, UserTurn: 2, Turn: 3, Message: &message, Sources: []string{"subagent:ab12"}}); err != nil {
+		t.Fatal(err)
+	}
+	lines := readJSONLines(t, recorder.Path())
+	object := parseObject(t, lines[len(lines)-1])
+	if stringField(t, object, "type") != "inject" || intField(t, object, "user_turn") != 2 || intField(t, object, "turn") != 3 {
+		t.Fatalf("注入记录基础字段错误：%s", lines[len(lines)-1])
+	}
+	var sources []string
+	if err := json.Unmarshal(field(t, object, "sources"), &sources); err != nil || len(sources) != 1 || sources[0] != "subagent:ab12" {
+		t.Fatalf("注入来源未记录：%v %v", sources, err)
+	}
+	if !strings.Contains(string(field(t, object, "message")), "子任务 ab12") {
+		t.Fatal("注入记录应包含消息正文")
+	}
+}

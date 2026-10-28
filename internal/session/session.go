@@ -179,6 +179,7 @@ func (r *Recorder) Record(event agent.Event) error {
 		Time:     r.timestamp(),
 		UserTurn: event.UserTurn,
 		Turn:     event.Turn,
+		Sources:  event.Sources,
 		Error:    event.Error,
 	}
 
@@ -323,6 +324,7 @@ type eventRecord struct {
 	Artifact string            `json:"artifact,omitempty"`
 	Notice   string            `json:"notice,omitempty"`
 	Summary  *summaryRecord    `json:"summary,omitempty"`
+	Sources  []string          `json:"sources,omitempty"`
 	Status   agent.Status      `json:"status,omitempty"`
 	Error    string            `json:"error,omitempty"`
 }
