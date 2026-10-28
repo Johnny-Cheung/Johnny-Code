@@ -55,6 +55,19 @@ func (c *FileClaims) Claim(owner, label string, paths []string) error {
 	return nil
 }
 
+// OverlappingPaths 返回两组路径中第一对重叠的路径：相同、互相包含都算重叠。
+// 批量启动任务前用它预检，好在启动任何任务之前给出明确的错误。
+func OverlappingPaths(a, b []string) (string, string, bool) {
+	for _, mine := range a {
+		for _, theirs := range b {
+			if pathWithin(theirs, mine) || pathWithin(mine, theirs) {
+				return mine, theirs, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // Release 释放 owner 的全部范围。重复释放无副作用。
 func (c *FileClaims) Release(owner string) {
 	if c == nil {

@@ -38,6 +38,7 @@ func formatReport(id, description string, status agent.Status, body string, limi
 	}
 	label := strings.Join(strings.Fields(description), " ")
 	text, _ := truncateReport(strings.TrimSpace(body), limit)
+	text = escapeMarkers(text)
 	return fmt.Sprintf("[子任务 %s %s 状态：%s，部分结果：%s]\n%s\n%s", id, label, status, partial, text, reportTrailer)
 }
 
@@ -48,6 +49,33 @@ func truncateReport(body string, limit int) (string, bool) {
 	}
 	cut := strings.ToValidUTF8(body[:limit], "")
 	return cut + fmt.Sprintf("\n…（报告已截断，原长 %d 字节）", len(body)), true
+}
+
+// 运行时生成的块标记。报告正文里出现同样形状的行时会被转义，
+// 使正文无法伪造进度块、数据声明或另一条子任务报告。
+var markerPrefixes = []string{"[以上是子任务输出", "[子任务 ", "[工作流进度", "[workflow", "下一步：", "所有 "}
+
+// escapeMarkers 把正文中以块标记开头的行的方括号换成全角，
+// 正文原意保留，但不会再和运行时下发的块同形。
+func escapeMarkers(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		for _, prefix := range markerPrefixes {
+			if !strings.HasPrefix(trimmed, prefix) {
+				continue
+			}
+			index := len(line) - len(trimmed)
+			if strings.HasPrefix(prefix, "[") {
+				lines[i] = line[:index] + "［" + trimmed[1:]
+			} else {
+				// “下一步：”“所有 …”不是块标记，转义第一个字符即可让正文与运行时指令不同形。
+				lines[i] = line[:index] + "\u200b" + trimmed
+			}
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // messageText 取 assistant 消息中的文本块，忽略工具调用和思考内容。

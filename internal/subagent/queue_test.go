@@ -42,7 +42,7 @@ func TestSpawnAllQueuesBeyondCapacityAndRefillsInOrder(t *testing.T) {
 	tokens := make(chan struct{})
 	blockUntilReleased(h, tokens, &started, &mu)
 
-	ids, err := h.manager.spawnAll(readRequests(MaxConcurrent + 3))
+	ids, err := h.enqueueBatch(readRequests(MaxConcurrent + 3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,14 +88,14 @@ func TestSpawnAllRollsBackWholeBatchOnFailure(t *testing.T) {
 		{Description: "写 A", Prompt: "写", Kind: tool.SpawnFresh, Access: tool.SpawnWrite, Paths: []string{h.path("pkg")}},
 		{Description: "写 B", Prompt: "写", Kind: tool.SpawnFresh, Access: tool.SpawnWrite, Paths: []string{h.path("pkg", "sub")}},
 	}
-	if _, err := h.manager.spawnAll(overlapping); err == nil {
+	if _, err := h.enqueueBatch(overlapping); err == nil {
 		t.Fatal("范围重叠应整批拒绝")
 	}
 	missingPaths := []tool.SpawnRequest{
 		{Description: "写 A", Prompt: "写", Kind: tool.SpawnFresh, Access: tool.SpawnWrite, Paths: []string{h.path("pkg")}},
 		{Description: "缺范围", Prompt: "写", Kind: tool.SpawnFresh, Access: tool.SpawnWrite},
 	}
-	if _, err := h.manager.spawnAll(missingPaths); err == nil {
+	if _, err := h.enqueueBatch(missingPaths); err == nil {
 		t.Fatal("参数无效应整批拒绝")
 	}
 	if h.manager.Running() != 0 || len(h.manager.claims.Owners()) != 0 || len(h.eventsOf(EventStarted)) != 0 {
@@ -112,7 +112,7 @@ func TestCancelAllDropsQueuedTasksWithoutEvents(t *testing.T) {
 	requests := append(readRequests(MaxConcurrent), tool.SpawnRequest{
 		Description: "排队的写入", Prompt: "写", Kind: tool.SpawnFresh, Access: tool.SpawnWrite, Paths: []string{h.path("pkg")},
 	})
-	if _, err := h.manager.spawnAll(requests); err != nil {
+	if _, err := h.enqueueBatch(requests); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor("名额内的任务启动", func() bool { return len(h.eventsOf(EventStarted)) == MaxConcurrent })
@@ -141,7 +141,7 @@ func TestSpawnIsRejectedWhileTasksAreQueued(t *testing.T) {
 	var mu sync.Mutex
 	var started []string
 	blockUntilReleased(h, make(chan struct{}), &started, &mu)
-	if _, err := h.manager.spawnAll(readRequests(MaxConcurrent + 1)); err != nil {
+	if _, err := h.enqueueBatch(readRequests(MaxConcurrent + 1)); err != nil {
 		t.Fatal(err)
 	}
 	_, err := h.manager.Spawn(context.Background(), freshReadRequest("插队"))

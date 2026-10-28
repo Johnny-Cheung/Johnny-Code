@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
@@ -164,6 +165,11 @@ func resolveSpawnPaths(scope workspaceScope, label string, paths []string) ([]st
 	seen := make(map[string]bool, len(paths))
 	resolved := make([]string, 0, len(paths))
 	for _, path := range paths {
+		// 路径会原样进入子 Agent 的系统提示和子任务指令，控制字符（尤其换行）
+		// 能伪造出独立的一行规则。
+		if strings.IndexFunc(path, unicode.IsControl) >= 0 {
+			return nil, invalidArguments(fmt.Sprintf("%s 的 paths 不能包含控制字符：%q", label, path), nil)
+		}
 		absolute, err := scope.resolve(path)
 		if err != nil {
 			if errors.Is(err, errPathOutsideWorkspace) {

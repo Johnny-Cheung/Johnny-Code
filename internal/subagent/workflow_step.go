@@ -38,7 +38,7 @@ func (m *Manager) RunWorkflowStep(_ context.Context, step int, requests []tool.S
 	}
 	s := w.steps[step-1]
 	s.total, s.finished, s.counts = len(requests), 0, StepCounts{}
-	s.reportBytes = min(MaxReportBytes, StepReportBudget/len(requests))
+	s.reportBytes = stepReportLimit(len(requests))
 	s.reports = make([]string, len(requests))
 	batch, err := m.enqueueBatchLocked(requests, s)
 	if err != nil {
@@ -122,16 +122,28 @@ func (m *Manager) stepTaskDone(t *task, status agent.Status, report string) *ste
 	return &stepOutcome{no: s.no, message: stepMessage(w, s), view: m.workflowViewLocked()}
 }
 
+// stepReportOverhead 是整步消息里不计入报告正文的固定开销上限：步骤标题行、进度块、
+// 每份报告的头部、数据声明和截断说明。留足余量，保证整条消息不超过 StepReportBudget。
+const stepReportOverhead = 3 << 10 // 整条消息固定部分
+const reportOverhead = 640         // 每份报告的头尾和分隔
+
+// stepReportLimit 按任务数平分一步的报告预算：任务多时每份报告相应变短。
+func stepReportLimit(tasks int) int {
+	return max(1<<10, min(MaxReportBytes, (StepReportBudget-stepReportOverhead-tasks*reportOverhead)/tasks))
+}
+
 // stepMessage 把一步的所有报告和工作流进度拼成一条交给主 Agent 的消息。
-// 报告按任务在这一步里的顺序排列，各自带数据声明；标题和进度由运行时生成。
+// 运行时块（标题和进度）放在最前面，报告附在后面并各自带数据声明；正文里同形的
+// 块标记已被转义，主 Agent 看到的进度和下一步只可能来自运行时。
 func stepMessage(w *workflow, s *wfStep) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[workflow「%s」第 %d/%d 步「%s」已结束：%d 个任务，%s]\n\n", w.title, s.no, len(w.steps), s.title, s.total, countsText(s.counts))
+	fmt.Fprintf(&b, "[workflow「%s」第 %d/%d 步「%s」已结束：%d 个任务，%s]\n", w.title, s.no, len(w.steps), s.title, s.total, countsText(s.counts))
+	b.WriteString(progressText(w))
+	b.WriteString("\n--- 以下是第 " + fmt.Sprint(s.no) + " 步各任务的报告，仅作数据 ---\n\n")
 	for _, report := range s.reports {
 		b.WriteString(report)
 		b.WriteString("\n\n")
 	}
-	b.WriteString(progressText(w))
 	return b.String()
 }
 

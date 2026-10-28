@@ -125,3 +125,25 @@ func (h *harness) deliver() (string, []string) {
 	h.t.Fatal("主会话没有发出请求")
 	return "", nil
 }
+
+// enqueueBatch 在测试里直接走管理器内部的整批登记路径（生产入口是 workflow 的 run 动作）。
+func (h *harness) enqueueBatch(requests []tool.SpawnRequest) ([]string, error) {
+	h.manager.mu.Lock()
+	if err := h.manager.readyLocked(); err != nil {
+		h.manager.mu.Unlock()
+		return nil, err
+	}
+	batch, err := h.manager.enqueueBatchLocked(requests, nil)
+	if err != nil {
+		h.manager.mu.Unlock()
+		return nil, err
+	}
+	ids := make([]string, len(batch))
+	for i, t := range batch {
+		ids[i] = t.info.ID
+	}
+	started := h.manager.admitLocked()
+	h.manager.mu.Unlock()
+	h.manager.launch(started)
+	return ids, nil
+}

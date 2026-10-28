@@ -41,39 +41,25 @@ func (m *Manager) Spawn(_ context.Context, request tool.SpawnRequest) (string, e
 	return t.info.ID, nil
 }
 
-// spawnAll 原子地登记一批子任务：任何一个校验、范围登记或会话创建失败，整批回滚，不启动任何任务。
-// 通过后按先进先出放进队列，有空闲名额的先启动，其余排队等待。
-func (m *Manager) spawnAll(requests []tool.SpawnRequest) ([]string, error) {
-	for _, request := range requests {
-		if err := m.validateRequest(request); err != nil {
-			return nil, err
-		}
-	}
-	m.mu.Lock()
-	if err := m.readyLocked(); err != nil {
-		m.mu.Unlock()
-		return nil, err
-	}
-	batch, err := m.enqueueBatchLocked(requests, nil)
-	if err != nil {
-		m.mu.Unlock()
-		return nil, err
-	}
-	ids := make([]string, len(batch))
-	for i, t := range batch {
-		ids[i] = t.info.ID
-	}
-	started := m.admitLocked()
-	m.mu.Unlock()
-	m.launch(started)
-	return ids, nil
-}
-
 // enqueueBatchLocked 准备一批任务并放进队列尾部，任何一个失败则整批回滚。
 // step 不为 nil 时这批任务属于工作流的这一步。调用方随后调用 admitLocked 启动能跑的任务。
 func (m *Manager) enqueueBatchLocked(requests []tool.SpawnRequest, step *wfStep) ([]*task, error) {
 	batch := make([]*task, 0, len(requests))
 	for i, request := range requests {
+		// 批内先预检写入范围：同批任务互相重叠时给出批次的说法，不点名刚被回滚、
+		// 永远不会结束的“子任务”，避免模型以为有别的任务占着目录而去等待。
+		for j, earlier := range requests[:i] {
+			if request.Access != tool.SpawnWrite || earlier.Access != tool.SpawnWrite {
+				continue
+			}
+			if mine, theirs, overlap := tool.OverlappingPaths(request.Paths, earlier.Paths); overlap {
+				for _, prepared := range batch {
+					m.discardLocked(prepared)
+				}
+				return nil, fmt.Errorf("本批任务的路径重叠：tasks[%d]（%s）的 %s 与 tasks[%d]（%s）的 %s 重叠；整批未启动，请改为互不重叠、互不包含的路径",
+					j+1, earlier.Description, theirs, i+1, request.Description, mine)
+			}
+		}
 		t, err := m.prepareLocked(request, step, i)
 		if err != nil {
 			for _, prepared := range batch {
