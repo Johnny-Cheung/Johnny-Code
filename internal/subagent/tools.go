@@ -38,6 +38,7 @@ var freshWriteTools = []string{"bash", "read", "write", "edit", "skill", "memory
 
 var forkDenied = map[string]string{
 	"task":     "子任务不能再派出子任务，请直接完成任务并在最终回复中汇报。",
+	"workflow": "子任务不能使用工作流，请直接完成任务并在最终回复中汇报。",
 	"remember": "子任务不能写入长期记忆，值得记住的内容请写进最终报告，由主 Agent 决定。",
 }
 

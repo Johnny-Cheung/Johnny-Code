@@ -52,6 +52,8 @@ func (r *ReadOnly) Definitions() []model.ToolDefinition {
 			definitions[i].Description += " 只读模式下此工具会被拒绝。"
 		case "task":
 			definitions[i].Description += " 只读模式只能派出 access=read 的子任务。"
+		case "workflow":
+			definitions[i].Description += " 只读模式只能启动 access=read 的任务。"
 		case "write", "edit":
 			definitions[i].Description += " 只读模式下此工具会被拒绝。"
 		}
@@ -89,7 +91,7 @@ func (r *ReadOnly) Execute(ctx context.Context, call model.ToolCall) (Result, er
 	case "memory":
 		// 记忆查询只读，不修改文件。
 		return r.base.Execute(ctx, call)
-	case "task":
+	case "task", "workflow":
 		// 子任务由 Spawner 按父模式限制访问级别，子任务内的工具调用各自受只读包装约束。
 		return r.base.Execute(ctx, call)
 	case "remember":

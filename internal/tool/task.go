@@ -109,16 +109,22 @@ func (t *TaskTool) Execute(ctx context.Context, raw json.RawMessage) (Result, er
 }
 
 func (t *TaskTool) request(args taskArguments) (SpawnRequest, error) {
+	return parseSpawnRequest(t.scope, "task", args)
+}
+
+// parseSpawnRequest 校验一个子任务的参数并解析文件范围。label 用于错误信息，
+// task 工具传 "task"，workflow 工具传 "tasks[序号]"。
+func parseSpawnRequest(scope workspaceScope, label string, args taskArguments) (SpawnRequest, error) {
 	description := strings.TrimSpace(args.Description)
 	if description == "" {
-		return SpawnRequest{}, invalidArguments("task 缺少 description 参数", nil)
+		return SpawnRequest{}, invalidArguments(label+" 缺少 description 参数", nil)
 	}
 	if utf8.RuneCountInString(description) > maxTaskDescriptionRunes {
-		return SpawnRequest{}, invalidArguments(fmt.Sprintf("task 的 description 不能超过 %d 个字符", maxTaskDescriptionRunes), nil)
+		return SpawnRequest{}, invalidArguments(fmt.Sprintf("%s 的 description 不能超过 %d 个字符", label, maxTaskDescriptionRunes), nil)
 	}
 	prompt := strings.TrimSpace(args.Prompt)
 	if prompt == "" {
-		return SpawnRequest{}, invalidArguments("task 缺少 prompt 参数", nil)
+		return SpawnRequest{}, invalidArguments(label+" 缺少 prompt 参数", nil)
 	}
 	request := SpawnRequest{Description: description, Prompt: prompt}
 	switch SpawnKind(strings.TrimSpace(args.Kind)) {
@@ -127,7 +133,7 @@ func (t *TaskTool) request(args taskArguments) (SpawnRequest, error) {
 	case SpawnFork:
 		request.Kind = SpawnFork
 	default:
-		return SpawnRequest{}, invalidArguments("task 的 kind 必须是 fresh 或 fork", nil)
+		return SpawnRequest{}, invalidArguments(label+" 的 kind 必须是 fresh 或 fork", nil)
 	}
 	switch SpawnAccess(strings.TrimSpace(args.Access)) {
 	case "", SpawnRead:
@@ -135,15 +141,15 @@ func (t *TaskTool) request(args taskArguments) (SpawnRequest, error) {
 	case SpawnWrite:
 		request.Access = SpawnWrite
 	default:
-		return SpawnRequest{}, invalidArguments("task 的 access 必须是 read 或 write", nil)
+		return SpawnRequest{}, invalidArguments(label+" 的 access 必须是 read 或 write", nil)
 	}
 	if request.Access == SpawnRead {
 		if len(args.Paths) > 0 {
-			return SpawnRequest{}, invalidArguments("task 的 paths 只在 access=write 时使用；read 子任务不限制读取范围", nil)
+			return SpawnRequest{}, invalidArguments(label+" 的 paths 只在 access=write 时使用；read 子任务不限制读取范围", nil)
 		}
 		return request, nil
 	}
-	paths, err := t.resolvePaths(args.Paths)
+	paths, err := resolveSpawnPaths(scope, label, args.Paths)
 	if err != nil {
 		return SpawnRequest{}, err
 	}
@@ -151,19 +157,19 @@ func (t *TaskTool) request(args taskArguments) (SpawnRequest, error) {
 	return request, nil
 }
 
-func (t *TaskTool) resolvePaths(paths []string) ([]string, error) {
+func resolveSpawnPaths(scope workspaceScope, label string, paths []string) ([]string, error) {
 	if len(paths) == 0 {
-		return nil, invalidArguments("task 的 access=write 必须用 paths 声明负责的文件或目录", nil)
+		return nil, invalidArguments(label+" 的 access=write 必须用 paths 声明负责的文件或目录", nil)
 	}
 	seen := make(map[string]bool, len(paths))
 	resolved := make([]string, 0, len(paths))
 	for _, path := range paths {
-		absolute, err := t.scope.resolve(path)
+		absolute, err := scope.resolve(path)
 		if err != nil {
 			if errors.Is(err, errPathOutsideWorkspace) {
-				return nil, invalidArguments(fmt.Sprintf("task 的 paths 必须在工作目录内：%s", path), err)
+				return nil, invalidArguments(fmt.Sprintf("%s 的 paths 必须在工作目录内：%s", label, path), err)
 			}
-			return nil, invalidArguments(fmt.Sprintf("task 的 paths 无效：%s", path), err)
+			return nil, invalidArguments(fmt.Sprintf("%s 的 paths 无效：%s", label, path), err)
 		}
 		if !seen[absolute] {
 			seen[absolute] = true

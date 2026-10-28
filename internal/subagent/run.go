@@ -11,10 +11,26 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
 
+// emit 同步交付事件。事件没有自带工作流快照时，附上进行中工作流的当前快照。
+// 调用时不能持有 m.mu：界面的回调可能阻塞到界面读取事件为止。
 func (m *Manager) emit(event Event) {
-	if m.cfg.OnEvent != nil {
-		m.cfg.OnEvent(event)
+	if m.cfg.OnEvent == nil {
+		return
 	}
+	if event.Workflow == nil {
+		m.mu.Lock()
+		if m.wf != nil && m.wf.status == WorkflowActive {
+			event.Workflow = m.workflowViewLocked()
+		}
+		m.mu.Unlock()
+	}
+	m.cfg.OnEvent(event)
+}
+
+// emitAsync 在新的 goroutine 里交付事件。界面在自己的事件循环里调用 CancelAll，
+// 同步交付会等界面读取事件而界面在等 CancelAll 返回，造成死锁。
+func (m *Manager) emitAsync(event Event) {
+	go m.emit(event)
 }
 
 // run 在后台执行一个子任务。结束时先释放文件范围，再把结果放进父会话的收件箱，
@@ -58,12 +74,29 @@ func (m *Manager) run(t *task) {
 	if err != nil {
 		ended.Error = err.Error()
 	}
+	var outcome *stepOutcome
 	if status != agent.StatusCanceled {
 		body := reportBody(status, err, lastText)
-		_, ended.Truncated = truncateReport(body)
-		ended.Report = FormatReport(t.info.ID, t.info.Description, status, body)
-		ended.Injected = true
-		m.parentConversation().Enqueue(agent.InboxItem{Source: "subagent:" + t.info.ID, Text: ended.Report})
+		limit := MaxReportBytes
+		if t.step != nil {
+			limit = t.step.reportBytes
+		}
+		_, ended.Truncated = truncateReport(body, limit)
+		ended.Report = formatReport(t.info.ID, t.info.Description, status, body, limit)
+		if t.step == nil {
+			ended.Injected = true
+			m.parentConversation().Enqueue(agent.InboxItem{Source: "subagent:" + t.info.ID, Text: ended.Report})
+		} else {
+			// 工作流任务的报告随整步一起送回，任务自身不单独注入。
+			outcome = m.stepTaskDone(t, status, ended.Report)
+		}
+	}
+	if outcome != nil {
+		m.parentConversation().Enqueue(agent.InboxItem{Source: fmt.Sprintf("workflow:step-%d", outcome.no), Text: outcome.message})
+		m.emit(Event{Type: EventStepEnded, Step: outcome.no, Workflow: outcome.view})
+		if outcome.view.Status == WorkflowCompleted {
+			m.emit(Event{Type: EventWorkflowEnded, Workflow: outcome.view})
+		}
 	}
 	m.emit(ended)
 	m.dispatch()
@@ -168,7 +201,11 @@ func (m *Manager) CancelAll() int {
 	for _, t := range queued {
 		m.discardLocked(t)
 	}
+	view, _ := m.finishWorkflowLocked(WorkflowCanceled, "")
 	m.mu.Unlock()
+	if view != nil {
+		m.emitAsync(Event{Type: EventWorkflowEnded, Workflow: view})
+	}
 	return count
 }
 

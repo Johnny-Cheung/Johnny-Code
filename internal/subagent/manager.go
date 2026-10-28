@@ -41,6 +41,10 @@ type Info struct {
 	Paths       []string
 	Started     time.Time
 	State       State
+	// Step 是任务所属的工作流步骤序号（从 1 开始），单个委派的任务为 0。
+	Step int
+	// ReportBytes 是工作流任务的报告正文上限，单个委派的任务为 0。
+	ReportBytes int
 }
 
 type EventType string
@@ -49,6 +53,12 @@ const (
 	EventStarted EventType = "started"
 	EventState   EventType = "state"
 	EventEnded   EventType = "ended"
+
+	// 以下事件只在工作流中出现，Workflow 字段带当时的完整状态。
+	EventWorkflowStarted EventType = "workflow_started"
+	EventStepStarted     EventType = "step_started"
+	EventStepEnded       EventType = "step_ended"
+	EventWorkflowEnded   EventType = "workflow_ended"
 )
 
 // Event 由 Manager 在子任务启动、状态变化和结束时同步交付。
@@ -56,7 +66,13 @@ const (
 type Event struct {
 	Type EventType
 	Info Info
-	// 以下字段仅 EventEnded 有值。Injected 为 false 表示结果没有进入主对话（被取消）。
+	// Step 是工作流步骤事件的步骤序号。
+	Step int
+	// Workflow 是事件发生时工作流的完整状态，没有进行中的工作流时为 nil。
+	// 工作流结束事件带最终状态。
+	Workflow *WorkflowView
+	// 以下字段仅 EventEnded 有值。Injected 为 false 表示结果没有随任务单独进入主对话：被取消，
+	// 或者是工作流任务（报告随整步一起送回，见 EventStepEnded）。
 	Status    agent.Status
 	Error     string
 	Partial   bool
@@ -101,6 +117,10 @@ type task struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	waiting int
+	// wf、step、slot 仅工作流任务有值：所属工作流、步骤，以及任务在这一步里的序号。
+	wf   *workflow
+	step *wfStep
+	slot int
 }
 
 // Manager 登记、限额和取消子任务，并把结果放进父会话的收件箱。
@@ -113,9 +133,12 @@ type Manager struct {
 	parent *agent.Conversation
 	tasks  map[string]*task
 	queue  []*task
-	used   map[string]bool
-	closed bool
-	wg     sync.WaitGroup
+	// wf 是最近一个工作流，结束后保留状态，用于给出明确的错误提示。
+	wf        *workflow
+	wfVersion uint64
+	used      map[string]bool
+	closed    bool
+	wg        sync.WaitGroup
 }
 
 func NewManager(cfg Config) (*Manager, error) {

@@ -27,21 +27,26 @@ func IsPartial(status agent.Status) bool {
 
 // FormatReport 把子任务的最终报告包装成注入主对话的数据块。
 func FormatReport(id, description string, status agent.Status, body string) string {
+	return formatReport(id, description, status, body, MaxReportBytes)
+}
+
+// formatReport 与 FormatReport 相同，但正文按 limit 字节截断。工作流一步内任务多时每份报告更短。
+func formatReport(id, description string, status agent.Status, body string, limit int) string {
 	partial := "否"
 	if IsPartial(status) {
 		partial = "是"
 	}
 	label := strings.Join(strings.Fields(description), " ")
-	text, _ := truncateReport(strings.TrimSpace(body))
+	text, _ := truncateReport(strings.TrimSpace(body), limit)
 	return fmt.Sprintf("[子任务 %s %s 状态：%s，部分结果：%s]\n%s\n%s", id, label, status, partial, text, reportTrailer)
 }
 
 // truncateReport 按字节上限截断，保持 UTF-8 完整，并说明原长度。
-func truncateReport(body string) (string, bool) {
-	if len(body) <= MaxReportBytes {
+func truncateReport(body string, limit int) (string, bool) {
+	if len(body) <= limit {
 		return body, false
 	}
-	cut := strings.ToValidUTF8(body[:MaxReportBytes], "")
+	cut := strings.ToValidUTF8(body[:limit], "")
 	return cut + fmt.Sprintf("\n…（报告已截断，原长 %d 字节）", len(body)), true
 }
 

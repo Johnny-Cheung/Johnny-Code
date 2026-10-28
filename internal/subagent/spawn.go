@@ -29,7 +29,7 @@ func (m *Manager) Spawn(_ context.Context, request tool.SpawnRequest) (string, e
 		m.mu.Unlock()
 		return "", fmt.Errorf("同时最多 %d 个子任务，当前已有 %d 个在运行、%d 个在排队；请等其中一个完成后再派出，或直接自己完成", MaxConcurrent, running, queued)
 	}
-	t, err := m.prepareLocked(request)
+	t, err := m.prepareLocked(request, nil, 0)
 	if err != nil {
 		m.mu.Unlock()
 		return "", err
@@ -54,27 +54,37 @@ func (m *Manager) spawnAll(requests []tool.SpawnRequest) ([]string, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	batch := make([]*task, 0, len(requests))
-	for _, request := range requests {
-		t, err := m.prepareLocked(request)
-		if err != nil {
-			for _, prepared := range batch {
-				m.discardLocked(prepared)
-			}
-			m.mu.Unlock()
-			return nil, err
-		}
-		batch = append(batch, t)
+	batch, err := m.enqueueBatchLocked(requests, nil)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
 	}
 	ids := make([]string, len(batch))
 	for i, t := range batch {
 		ids[i] = t.info.ID
 	}
-	m.queue = append(m.queue, batch...)
 	started := m.admitLocked()
 	m.mu.Unlock()
 	m.launch(started)
 	return ids, nil
+}
+
+// enqueueBatchLocked 准备一批任务并放进队列尾部，任何一个失败则整批回滚。
+// step 不为 nil 时这批任务属于工作流的这一步。调用方随后调用 admitLocked 启动能跑的任务。
+func (m *Manager) enqueueBatchLocked(requests []tool.SpawnRequest, step *wfStep) ([]*task, error) {
+	batch := make([]*task, 0, len(requests))
+	for i, request := range requests {
+		t, err := m.prepareLocked(request, step, i)
+		if err != nil {
+			for _, prepared := range batch {
+				m.discardLocked(prepared)
+			}
+			return nil, err
+		}
+		batch = append(batch, t)
+	}
+	m.queue = append(m.queue, batch...)
+	return batch, nil
 }
 
 func (m *Manager) validateRequest(request tool.SpawnRequest) error {
@@ -102,7 +112,7 @@ func (m *Manager) readyLocked() error {
 
 // prepareLocked 为一个子任务分配 ID、登记文件范围并创建子会话，但不启动。
 // 失败时已登记的范围会被释放。fork 的快照在这里取，排队的任务也使用派出时的对话。
-func (m *Manager) prepareLocked(request tool.SpawnRequest) (*task, error) {
+func (m *Manager) prepareLocked(request tool.SpawnRequest, step *wfStep, slot int) (*task, error) {
 	id, err := m.newIDLocked()
 	if err != nil {
 		return nil, err
@@ -112,6 +122,9 @@ func (m *Manager) prepareLocked(request tool.SpawnRequest) (*task, error) {
 		Description: strings.Join(strings.Fields(request.Description), " "),
 		Kind:        request.Kind, Access: request.Access, Paths: append([]string(nil), request.Paths...),
 		State: StateQueued,
+	}
+	if step != nil {
+		info.Step, info.ReportBytes = step.no, step.reportBytes
 	}
 	if request.Access == tool.SpawnWrite {
 		if err := m.claims.Claim(id, info.Description, info.Paths); err != nil {
@@ -124,7 +137,11 @@ func (m *Manager) prepareLocked(request tool.SpawnRequest) (*task, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &task{info: info, conv: conv, prompt: prompt, ctx: ctx, cancel: cancel}, nil
+	t := &task{info: info, conv: conv, prompt: prompt, ctx: ctx, cancel: cancel, step: step, slot: slot}
+	if step != nil {
+		t.wf = m.wf
+	}
+	return t, nil
 }
 
 // admitLocked 按先进先出把排队的任务补进空出的名额，返回需要在释放锁之后启动的任务。
@@ -203,7 +220,16 @@ func forkDirective(info Info, prompt string) string {
 		scope = "你只能读取文件和执行只读查询命令，不能修改文件。"
 	}
 	return fmt.Sprintf("[子任务指令]\n你现在是从以上对话派生出的后台子任务 %s，与主对话并行运行。不要继续或总结主对话，也不要向用户提问，只完成下面的任务。"+
-		"你看到的是派出那一刻的对话快照，之后主对话的进展你看不到。%s你不能使用 task 和 remember。\n"+
-		"你的最终回复就是交给主 Agent 的报告：写清结论、涉及的文件、执行过的命令和未解决项；不要建议用户重启或切换权限模式。\n\n任务：\n%s",
-		info.ID, scope, prompt)
+		"你看到的是派出那一刻的对话快照，之后主对话的进展你看不到。%s你不能使用 task、workflow 和 remember。\n"+
+		"你的最终回复就是交给主 Agent 的报告：写清结论、涉及的文件、执行过的命令和未解决项；不要建议用户重启或切换权限模式。%s\n\n任务：\n%s",
+		info.ID, scope, ReportLengthHint(info), prompt)
+}
+
+// ReportLengthHint 提醒工作流里的子 Agent：报告会和同一步其他任务的报告一起交给主 Agent，需要精简。
+// 单个委派的任务没有这个限制，返回空字符串。
+func ReportLengthHint(info Info) string {
+	if info.ReportBytes <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("你的报告会和同一步其他任务的报告一起交给主 Agent，请控制在约 %d 字以内，只写结论、改动的文件和未解决项。", info.ReportBytes/3)
 }

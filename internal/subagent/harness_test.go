@@ -189,7 +189,11 @@ func newHarness(t *testing.T, options harnessOptions) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, err := base.With(taskTool)
+	workflowTool, err := tool.NewWorkflowTool(runtime, h.manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := base.With(taskTool, workflowTool)
 	if err != nil {
 		t.Fatal(err)
 	}
