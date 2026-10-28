@@ -5,10 +5,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/subagent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tui"
 )
 
 // delegationPrompt 是主 Agent 的委派指引，只在注册了 task 工具的 TUI 入口追加。
@@ -139,4 +141,45 @@ func (s *subagentEvents) publish(event subagent.Event) {
 	if listener != nil {
 		listener(event)
 	}
+}
+
+// terminalSubagents 把子任务管理器和主会话适配给 TUI。
+type terminalSubagents struct {
+	manager      *subagent.Manager
+	conversation *agent.Conversation
+	hub          *subagentEvents
+}
+
+func (c *terminalSubagents) Running() int        { return c.manager.Running() }
+func (c *terminalSubagents) CancelAll() int      { return c.manager.CancelAll() }
+func (c *terminalSubagents) Wait()               { c.manager.Wait() }
+func (c *terminalSubagents) PendingResults() int { return c.conversation.InboxLen() }
+
+func (c *terminalSubagents) Subscribe(listener func(tui.SubagentNotice)) func() {
+	c.hub.set(func(event subagent.Event) {
+		if notice, ok := subagentNotice(event); ok {
+			listener(notice)
+		}
+	})
+	return func() { c.hub.set(nil) }
+}
+
+func subagentNotice(event subagent.Event) (tui.SubagentNotice, bool) {
+	notice := tui.SubagentNotice{ID: event.Info.ID, Description: event.Info.Description, Started: event.Info.Started}
+	switch event.Type {
+	case subagent.EventStarted:
+		notice.Kind = tui.SubagentStart
+	case subagent.EventState:
+		notice.Kind = tui.SubagentState
+		notice.Waiting = event.Info.State == subagent.StateWaitingApproval
+	case subagent.EventEnded:
+		notice.Kind = tui.SubagentEnd
+		notice.Status = event.Status
+		notice.Error = event.Error
+		notice.Partial = event.Partial
+		notice.Duration = event.Duration
+	default:
+		return tui.SubagentNotice{}, false
+	}
+	return notice, true
 }

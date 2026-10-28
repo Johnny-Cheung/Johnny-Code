@@ -21,7 +21,7 @@ func useTUI(input io.Reader, output io.Writer) bool {
 	return inOK && outOK && term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
-func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store) int {
+func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store, children *terminalSubagents) int {
 	var tuiLocalCommand func(string) (tui.LocalCommandResult, bool)
 	if localCommand != nil {
 		tuiLocalCommand = func(line string) (tui.LocalCommandResult, bool) {
@@ -55,9 +55,25 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 	// 运行中的日志提示进入 UI 队列，避免直接写 stderr 破坏正在重绘的输入区。
 	// Run 等待所有任务退出后才返回，此时关闭日志的警告可回到普通 stderr。
 	defer func() { logs.stderr = stderr }()
+	var tuiSubagents tui.SubagentControl
+	var tuiWake func(context.Context, func(tui.Event) error, func(string)) (agent.Result, error)
+	if children != nil {
+		tuiSubagents = children
+		tuiWake = func(turnCtx context.Context, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
+			logs.stderr = noticeWriter{notice: notice}
+			return conversation.RunInbox(turnCtx, func(event agent.Event) error {
+				logs.record(event)
+				if displayEvent, ok := terminalEvent(event); ok {
+					return emit(displayEvent)
+				}
+				return nil
+			})
+		}
+	}
 	err := tui.Run(ctx, tui.Options{
 		Input: input, Output: output, Model: modelName, WorkDir: workDir, Version: version, Mode: permissionLabel,
 		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands, RunCompact: tuiCompact,
+		Subagents: tuiSubagents, RunWake: tuiWake,
 		RunTurn: func(turnCtx context.Context, prompt string, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
 			logs.stderr = noticeWriter{notice: notice}
 			return conversation.Run(turnCtx, prompt, func(event agent.Event) error {

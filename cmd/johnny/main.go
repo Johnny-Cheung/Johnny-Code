@@ -322,7 +322,11 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
 	if useTUI(input, output) {
-		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand, compact, skills)
+		var children *terminalSubagents
+		if manager != nil {
+			children = &terminalSubagents{manager: manager, conversation: conversation, hub: subagentHub}
+		}
+		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand, compact, skills, children)
 	}
 	printPermissionNotice(stderr, mode)
 	return runInteractive(ctx, conversation, input, logs, display, stderr, localCommand, contextCommands.compact)
@@ -628,9 +632,11 @@ func toolKey(call *model.ToolCall) string {
 		return ""
 	}
 	var args struct {
-		Path    string `json:"path"`
-		Command string `json:"command"`
-		Name    string `json:"name"`
+		Path        string `json:"path"`
+		Command     string `json:"command"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Kind        string `json:"kind"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return ""
@@ -640,6 +646,9 @@ func toolKey(call *model.ToolCall) string {
 	}
 	if args.Path != "" {
 		return args.Path
+	}
+	if call.Name == "task" && args.Description != "" {
+		return args.Description + "（" + args.Kind + "）"
 	}
 	return args.Name
 }
