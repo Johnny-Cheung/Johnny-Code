@@ -17,9 +17,13 @@ const (
 	SubagentEnd   = "end"
 )
 
-// maxWakeRounds 是同一次用户输入之后连续自动唤醒主 Agent 的上限，防止主 Agent
-// 反复派出子任务、反复被唤醒。
+// maxWakeRounds 是同一次用户输入之后，普通子任务结果连续自动唤醒主 Agent 的上限，
+// 防止主 Agent 反复派出子任务、反复被唤醒。
 const maxWakeRounds = 5
+
+// maxStepWakes 是同一次用户输入之后，步骤结束连续自动唤醒主 Agent 的上限。
+// 一个工作流最多 10 步，留出两倍余量；连续起多个新工作流的循环最终也会被这里拦住。
+const maxStepWakes = 20
 
 // SubagentNotice 是子任务状态变化的有界展示数据，不含子任务的过程细节。
 type SubagentNotice struct {
@@ -92,6 +96,7 @@ func (m *terminalModel) applySubagent(notice SubagentNotice) tea.Cmd {
 	case SubagentWorkflow:
 		return m.scheduleSubagentTick()
 	case SubagentStepEnd:
+		m.stepWake = true
 		if line := stepEndLine(notice.Workflow, notice.Step); line != "" {
 			return tea.Println(muted.Render(wrap(line, m.contentWidth())))
 		}
@@ -206,16 +211,19 @@ func (m *terminalModel) maybeWake() tea.Cmd {
 	if m.input.Value() != "" || control.PendingResults() == 0 {
 		return nil
 	}
-	// 工作流进行期间，步骤结束的唤醒不计入连续唤醒次数：步数本身有上限。
-	counted := m.workflow == nil
-	if counted && m.wakeRounds >= maxWakeRounds {
+	// 步骤结束的唤醒单独计数并使用更宽的上限：单个工作流的每一步都要唤醒，
+	// 但连续起新工作流或反复派发，最终仍会撞上上限。
+	limit, count, label := maxWakeRounds, &m.wakeRounds, "子任务结果"
+	if m.stepWake {
+		limit, count, label = maxStepWakes, &m.stepWakes, "工作流步骤结果"
+	}
+	if *count >= limit {
 		m.wakeBlocked = true
 		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-		return tea.Println(muted.Render(wrap(fmt.Sprintf("子任务结果已连续唤醒 %d 次，不再自动唤醒；结果会在你下次输入时一起送达。", maxWakeRounds), m.contentWidth())))
+		return tea.Println(muted.Render(wrap(fmt.Sprintf("%s已连续唤醒 %d 次，不再自动唤醒；结果会在你下次输入时一起送达。", label, limit), m.contentWidth())))
 	}
-	if counted {
-		m.wakeRounds++
-	}
+	*count++
+	m.stepWake = false
 	m.beginTurnState("子任务完成，主 Agent 正在汇总…")
 	run := m.options.RunWake
 	m.launchTurn(func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {

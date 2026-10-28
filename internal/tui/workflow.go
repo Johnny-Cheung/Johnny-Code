@@ -99,9 +99,12 @@ func (m *terminalModel) applyWorkflowSnapshot(w *WorkflowNotice) {
 
 func (m *terminalModel) hasTasks() bool { return len(m.subs) > 0 || m.workflow != nil }
 
+// areaEntry 是任务区的一行。text 是主体（标题、描述），tail 是行尾状态（步骤进度、耗时、状态）；
+// 放不下时先截断 text，保证尾部的进度和状态不被挤掉。
 type areaEntry struct {
 	rank int
 	text string
+	tail string
 	done bool
 }
 
@@ -113,15 +116,19 @@ const (
 	rankDone
 )
 
-func taskLine(task WorkflowTaskNotice) string {
+func taskEntry(task WorkflowTaskNotice) areaEntry {
 	state := "运行中"
 	if task.Waiting {
 		state = "等待审批"
 	}
-	return fmt.Sprintf("    ◆ %s %s · %s · %s", safeText(task.ID), oneLine(task.Description), formatElapsed(time.Since(task.Started)), state)
+	return areaEntry{
+		rank: rankTask,
+		text: fmt.Sprintf("    ◆ %s %s", safeText(task.ID), oneLine(task.Description)),
+		tail: fmt.Sprintf(" · %s · %s", formatElapsed(time.Since(task.Started)), state),
+	}
 }
 
-func stepLine(step WorkflowStepNotice) string {
+func stepEntry(step WorkflowStepNotice) areaEntry {
 	mark := "○"
 	switch step.State {
 	case stepDone:
@@ -129,14 +136,15 @@ func stepLine(step WorkflowStepNotice) string {
 	case stepRunning:
 		mark = "◆"
 	}
-	line := fmt.Sprintf("%s %d %s", mark, step.No, oneLine(step.Title))
+	entry := areaEntry{rank: rankPending, text: fmt.Sprintf("%s %d %s", mark, step.No, oneLine(step.Title)), done: step.State == stepDone}
 	if step.State == stepRunning {
-		line += fmt.Sprintf("    %d/%d 个任务完成", step.Finished, step.Total)
+		entry.rank = rankCurrent
+		entry.tail = fmt.Sprintf("    %d/%d 个任务完成", step.Finished, step.Total)
 		if step.Queued > 0 {
-			line += fmt.Sprintf(" · %d 个排队", step.Queued)
+			entry.tail += fmt.Sprintf(" · %d 个排队", step.Queued)
 		}
 	}
-	return line
+	return entry
 }
 
 // areaEntries 按显示顺序列出任务区的所有行，每行带保留优先级。
@@ -144,19 +152,16 @@ func (m *terminalModel) areaEntries() []areaEntry {
 	var entries []areaEntry
 	if w := m.workflow; w != nil {
 		cur := w.current()
-		entries = append(entries, areaEntry{rank: rankHeader, text: fmt.Sprintf("workflow %s  %d/%d", oneLine(w.Title), cur+1, len(w.Steps))})
+		entries = append(entries, areaEntry{rank: rankHeader, text: "workflow " + oneLine(w.Title), tail: fmt.Sprintf("  %d/%d", cur+1, len(w.Steps))})
 		for i, step := range w.Steps {
-			rank := rankPending
-			switch {
-			case i == cur:
-				rank = rankCurrent
-			case step.State == stepDone:
-				rank = rankDone
+			entry := stepEntry(step)
+			if step.State == stepDone {
+				entry.rank = rankDone
 			}
-			entries = append(entries, areaEntry{rank: rank, text: stepLine(step), done: step.State == stepDone})
+			entries = append(entries, entry)
 			if i == cur {
 				for _, task := range step.Active {
-					entries = append(entries, areaEntry{rank: rankTask, text: taskLine(task)})
+					entries = append(entries, taskEntry(task))
 				}
 			}
 		}
@@ -166,8 +171,11 @@ func (m *terminalModel) areaEntries() []areaEntry {
 		if sub.waiting {
 			state = "等待审批"
 		}
-		line := fmt.Sprintf("◆ %s %s · %s · %s", safeText(sub.id), oneLine(sub.description), formatElapsed(time.Since(sub.started)), state)
-		entries = append(entries, areaEntry{rank: rankTask, text: line})
+		entries = append(entries, areaEntry{
+			rank: rankTask,
+			text: fmt.Sprintf("◆ %s %s", safeText(sub.id), oneLine(sub.description)),
+			tail: fmt.Sprintf(" · %s · %s", formatElapsed(time.Since(sub.started)), state),
+		})
 	}
 	return entries
 }

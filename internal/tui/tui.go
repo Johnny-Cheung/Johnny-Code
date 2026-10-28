@@ -146,8 +146,11 @@ type terminalModel struct {
 	subs          []subagentView
 	subTick       bool
 	wakeRounds    int
-	wakeBlocked   bool
-	workflow      *WorkflowNotice
+	// stepWakes 是同一次用户输入之后由步骤结束触发的唤醒次数，上限比普通唤醒宽。
+	stepWakes   int
+	stepWake    bool
+	wakeBlocked bool
+	workflow    *WorkflowNotice
 	// workflowFloor 是已结束的工作流的最大快照版本，更旧的快照不能让它重新出现。
 	workflowFloor uint64
 }
@@ -458,7 +461,7 @@ func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
 	m.beginTurnState("正在等待模型回复…")
 	m.history = append(m.history, display)
 	m.historyIndex, m.draft = len(m.history), ""
-	m.wakeRounds, m.wakeBlocked = 0, false
+	m.wakeRounds, m.stepWakes, m.stepWake, m.wakeBlocked = 0, 0, false, false
 	run := m.options.RunTurn
 	m.launchTurn(func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {
 		return run(ctx, prompt, emit, notice)
@@ -1111,12 +1114,17 @@ func (m *terminalModel) approvalLines(width int) []string {
 	if waiting := len(m.approvalQueue); waiting > 0 {
 		lines = append(lines, fmt.Sprintf("另有 %d 个请求在等待", waiting))
 	}
+	// Ctrl+C 在这里会取消本轮、全部子任务和整个工作流，提示要把实际动作说清楚。
 	cancelHint := "取消全部子任务"
 	switch {
+	case m.busy && m.workflow != nil:
+		cancelHint = "取消本轮和整个工作流"
 	case m.busy && len(m.subs) > 0:
 		cancelHint = "取消本轮和子任务"
 	case m.busy:
 		cancelHint = "取消本轮"
+	case m.workflow != nil:
+		cancelHint = "取消整个工作流"
 	}
 	lines = append(lines, "↑↓ 选择 · Enter 确认 · Ctrl+C "+cancelHint)
 	for index, value := range lines {

@@ -33,9 +33,18 @@ func (m *terminalModel) taskAreaLines(width, limit int) []string {
 	}
 	lines := make([]string, len(entries))
 	for i, entry := range entries {
-		lines[i] = ansi.Truncate(entry.text, width, "…")
+		lines[i] = renderAreaEntry(entry, width)
 	}
 	return lines
+}
+
+// renderAreaEntry 先截断主体、保留行尾状态：标题很长或终端很窄时，用户最先需要看到的
+// 是这一步做到哪了、这个任务还要多久以及是否在等审批。
+func renderAreaEntry(entry areaEntry, width int) string {
+	tail := ansi.Truncate(entry.tail, max(0, width/2), "…")
+	room := max(0, width-len(tail))
+	text := ansi.Truncate(entry.text, room, "…")
+	return text + tail
 }
 
 // collapseDone 把已完成的步骤折叠成一行。

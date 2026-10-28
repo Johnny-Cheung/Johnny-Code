@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -220,7 +221,7 @@ func TestStepAndWorkflowEndLines(t *testing.T) {
 	}
 }
 
-func TestWorkflowWakesDoNotCountTowardSafetyValve(t *testing.T) {
+func TestStepWakesUseTheirOwnLimitAndResetOnUserInput(t *testing.T) {
 	m, control := subagentModel(t)
 	rounds := 0
 	m.options.RunWake = func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {
@@ -245,13 +246,146 @@ func TestWorkflowWakesDoNotCountTowardSafetyValve(t *testing.T) {
 		control.mu.Unlock()
 		m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentStepEnd, Step: 1, Workflow: sampleWorkflow(uint64(10 + i))}})
 		if !m.busy || m.wakeBlocked {
-			t.Fatalf("工作流进行期间第 %d 次步骤唤醒不应被保险阀拦住：busy=%v blocked=%v", i+1, m.busy, m.wakeBlocked)
+			t.Fatalf("工作流期间第 %d 次步骤唤醒不应被普通上限拦住：busy=%v blocked=%v", i+1, m.busy, m.wakeBlocked)
+		}
+		finish()
+	}
+	if m.stepWakes != maxWakeRounds+3 || m.wakeRounds != 0 {
+		t.Fatalf("步骤唤醒应单独计数：stepWakes=%d wakeRounds=%d", m.stepWakes, m.wakeRounds)
+	}
+}
+
+func TestWorkflowWakesEventuallyHitTheirLimitAcrossWorkflows(t *testing.T) {
+	m, control := subagentModel(t)
+	m.options.RunTurn = func(context.Context, string, func(Event) error, func(string)) (agent.Result, error) {
+		return agent.Result{}, nil
+	}
+	m.options.RunWake = func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {
+		control.mu.Lock()
+		control.pending = 0
+		control.mu.Unlock()
+		return agent.Result{}, nil
+	}
+	finish := func() {
+		select {
+		case item := <-m.events:
+			m.Update(item)
+		case <-time.After(time.Second):
+			t.Fatal("轮次没有结束")
+		}
+	}
+	for i := 0; i < maxStepWakes; i++ {
+		version := uint64(100 + i)
+		sendWorkflow(m, sampleWorkflow(version))
+		control.mu.Lock()
+		control.pending = 1
+		control.mu.Unlock()
+		m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentStepEnd, Step: 1, Workflow: sampleWorkflow(version)}})
+		if !m.busy {
+			t.Fatalf("第 %d 次唤醒应发生", i+1)
+		}
+		end := sampleWorkflow(version + 1)
+		end.Status = workflowCompleted
+		m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentWorkflowEnd, Workflow: end}})
+		finish()
+	}
+	sendWorkflow(m, sampleWorkflow(999))
+	control.mu.Lock()
+	control.pending = 1
+	control.mu.Unlock()
+	if _, cmd := m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentStepEnd, Step: 1, Workflow: sampleWorkflow(999)}}); m.busy || !m.wakeBlocked || cmd == nil {
+		t.Fatalf("连续工作流的步骤唤醒达到上限后应停止：busy=%v blocked=%v", m.busy, m.wakeBlocked)
+	}
+	m.input.SetValue("继续")
+	m.Update(keyPress(tea.KeyEnter))
+	if m.stepWakes != 0 || m.wakeBlocked || !m.busy {
+		t.Fatalf("用户输入应重置步骤唤醒计数：stepWakes=%d blocked=%v", m.stepWakes, m.wakeBlocked)
+	}
+}
+
+func TestPlainWakesStayLimitedWhileWorkflowIsShown(t *testing.T) {
+	m, control := subagentModel(t)
+	m.options.RunWake = func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {
+		control.mu.Lock()
+		control.pending = 0
+		control.mu.Unlock()
+		return agent.Result{}, nil
+	}
+	finish := func() {
+		select {
+		case item := <-m.events:
+			m.Update(item)
+		case <-time.After(time.Second):
+			t.Fatal("轮次没有结束")
+		}
+	}
+	sendWorkflow(m, sampleWorkflow(1))
+	for i := 0; i < maxWakeRounds; i++ {
+		control.mu.Lock()
+		control.pending = 1
+		control.mu.Unlock()
+		m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentEnd, ID: "ab12", Status: agent.StatusCompleted}})
+		if !m.busy {
+			t.Fatalf("第 %d 次普通唤醒应发生", i+1)
 		}
 		finish()
 	}
 	control.mu.Lock()
-	defer control.mu.Unlock()
-	if m.wakeRounds != 0 || rounds != maxWakeRounds+3 {
-		t.Fatalf("步骤唤醒不应计数：wakeRounds=%d rounds=%d", m.wakeRounds, rounds)
+	control.pending = 1
+	control.mu.Unlock()
+	m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentEnd, ID: "cd34", Status: agent.StatusCompleted}})
+	if m.busy || !m.wakeBlocked {
+		t.Fatalf("工作流显示期间普通唤醒仍只允许 %d 次：busy=%v blocked=%v", maxWakeRounds, m.busy, m.wakeBlocked)
+	}
+}
+
+func TestApprovalHintNamesWorkflowCancellation(t *testing.T) {
+	cases := []struct {
+		busy     bool
+		workflow bool
+		subs     int
+		want     string
+	}{
+		{busy: true, workflow: true, want: "Ctrl+C 取消本轮和整个工作流"},
+		{busy: true, subs: 1, want: "Ctrl+C 取消本轮和子任务"},
+		{busy: true, want: "Ctrl+C 取消本轮"},
+		{workflow: true, want: "Ctrl+C 取消整个工作流"},
+		{want: "Ctrl+C 取消全部子任务"},
+	}
+	for _, item := range cases {
+		m, _ := subagentModel(t)
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		m.busy = item.busy
+		if item.workflow {
+			sendWorkflow(m, sampleWorkflow(1))
+		}
+		for i := 0; i < item.subs; i++ {
+			m.applySubagent(startNotice("ab12", "查日志"))
+		}
+		m.beginApproval(&approvalDelivery{ctx: context.Background(), request: tool.ApprovalRequest{Tool: "bash", Target: "x", Origin: tool.Origin{ID: "ab12"}}, response: make(chan tool.ApprovalDecision, 1)})
+		if view := m.View().Content; !strings.Contains(view, item.want) {
+			t.Fatalf("审批面板应按实际动作提示 %q：%q", item.want, view)
+		}
+	}
+}
+
+func TestLongTitlesAreTruncatedBeforeStatus(t *testing.T) {
+	w := &WorkflowNotice{Version: 1, Title: strings.Repeat("很长的标题", 12), Status: workflowActive, Started: time.Now(), Steps: []WorkflowStepNotice{
+		{No: 1, Title: strings.Repeat("步骤名", 20), State: stepRunning, Total: 5, Finished: 3,
+			Active: []WorkflowTaskNotice{{ID: "a1b2", Description: strings.Repeat("描述", 30), Started: time.Now(), Waiting: true}}},
+	}}
+	m := workflowModel(t, 60, 30)
+	sendWorkflow(m, w)
+	lines := m.taskAreaLines(60, 10)
+	text := strings.Join(lines, "\n")
+	for _, want := range []string{"1/1", "3/5 个任务完成", "等待审批"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("窄终端下应保留行尾状态 %q：\n%s", want, text)
+		}
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > 60 {
+			t.Fatalf("行宽超出终端：%q", line)
+		}
 	}
 }
