@@ -26,6 +26,9 @@ type Conversation struct {
 
 	reviewMu      sync.Mutex
 	reviewNotices []string
+
+	inboxMu sync.Mutex
+	inbox   []InboxItem
 }
 
 func NewConversation(opts Options) *Conversation {
@@ -140,7 +143,12 @@ func Run(ctx context.Context, opts Options, prompt string, emit func(Event) erro
 }
 
 // Run 在已有历史上处理下一轮输入，每轮独立计算模型请求次数。
-func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) error) (result Result, err error) {
+func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) error) (Result, error) {
+	return c.run(ctx, prompt, nil, emit)
+}
+
+// run 的 sources 非空表示起点消息来自收件箱（唤醒轮），而不是用户输入。
+func (c *Conversation) run(ctx context.Context, prompt string, sources []string, emit func(Event) error) (result Result, err error) {
 	result.Status = StatusFailed
 	if c == nil {
 		return result, fmt.Errorf("会话不能为空")
@@ -202,7 +210,7 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	user := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: prompt}}}
 	c.messages = append(c.messages, user)
 	c.view.BeginTurn(c.userTurn, user)
-	if err = notify(Event{Type: EventStart, Message: &user}); err != nil {
+	if err = notify(Event{Type: EventStart, Message: &user, Sources: sources}); err != nil {
 		return result, err
 	}
 	if c.pinnedWarning != "" {
@@ -225,6 +233,9 @@ func (c *Conversation) Run(ctx context.Context, prompt string, emit func(Event) 
 	}
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		if err = ctx.Err(); err != nil {
+			return result, err
+		}
+		if err = c.injectInbox(turn, notify); err != nil {
 			return result, err
 		}
 		if c.view.NeedsRequestCompaction(opts.System, definitions) {

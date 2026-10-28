@@ -76,6 +76,7 @@ const (
 	EventToolSkipped  EventType = "tool_skipped"
 	EventNotice       EventType = "notice"
 	EventSummary      EventType = "summary"
+	EventInject       EventType = "inject"
 	EventEnd          EventType = "end"
 )
 
@@ -102,8 +103,10 @@ type Event struct {
 	Artifact   string
 	Notice     string
 	Summary    *SummaryInfo
-	Status     Status
-	Error      string
+	// Sources 在 EventInject 和唤醒轮的 EventStart 上列出被注入收件箱条目的来源。
+	Sources []string
+	Status  Status
+	Error   string
 }
 
 type Result struct {
