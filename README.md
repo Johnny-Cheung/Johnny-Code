@@ -281,6 +281,6 @@ go run ./cmd/tool-demo read '{"path":"demo.txt"}'
 - [v0.10：上下文治理（已确认冻结）](docs/versions/v0.10.md)
 - [v0.11：长期记忆（已确认冻结）](docs/versions/v0.11.md)
 - [v0.12：SubAgent（已实现，验收后置）](docs/versions/v0.12.md)
-- [v0.13：Agent Team（待讨论）](docs/versions/v0.13.md)
+- [v0.13：Workflow（产品行为已确认，技术方案待讨论）](docs/versions/v0.13.md)
 
-> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 已于 2026-10-28 实现；多 Agent 协作拆为 v0.13 Agent Team，待讨论。v0.12 的验收与 v0.7 权限模型的最终收口，都安排在 v0.13 完成之后。
+> v0.9 MCP 已确认暂缓，设计讨论保留；v0.10 上下文治理已于 2026-10-25 确认冻结；v0.11 长期记忆已于 2026-10-26 确认冻结；v0.12 SubAgent 已于 2026-10-28 实现；v0.13 改为 Workflow，产品行为已确认，技术方案待讨论。v0.12 的验收与 v0.7 权限模型的最终收口，都安排在 v0.13 完成之后。
