@@ -50,6 +50,8 @@ func (r *ReadOnly) Definitions() []model.ToolDefinition {
 			definitions[i].Description += " 只读模式可以查询长期记忆。"
 		case "remember":
 			definitions[i].Description += " 只读模式下此工具会被拒绝。"
+		case "task":
+			definitions[i].Description += " 只读模式只能派出 access=read 的子任务。"
 		case "write", "edit":
 			definitions[i].Description += " 只读模式下此工具会被拒绝。"
 		}
@@ -86,6 +88,9 @@ func (r *ReadOnly) Execute(ctx context.Context, call model.ToolCall) (Result, er
 		return r.base.Execute(ctx, call)
 	case "memory":
 		// 记忆查询只读，不修改文件。
+		return r.base.Execute(ctx, call)
+	case "task":
+		// 子任务由 Spawner 按父模式限制访问级别，子任务内的工具调用各自受只读包装约束。
 		return r.base.Execute(ctx, call)
 	case "remember":
 		return r.deny("只读模式不允许写入长期记忆；如需写入请切换到放行模式或默认模式")

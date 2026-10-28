@@ -753,6 +753,7 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 		Source:     audit.Source,
 		Reason:     audit.Reason,
 		Prefixes:   clonePermissionPrefixes(audit.Prefixes),
+		Origin:     audit.Origin.ID,
 	}
 	for _, path := range audit.Paths {
 		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})

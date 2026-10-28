@@ -52,6 +52,8 @@ type PermissionRecord struct {
 	Reason     string           `json:"reason,omitempty"`
 	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
 	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
+	// Origin 是发起请求的子任务 ID；主 Agent 的请求为空。
+	Origin string `json:"origin,omitempty"`
 }
 
 type PermissionPath struct {
@@ -226,6 +228,7 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 		Reason:     record.Reason,
 		Prefixes:   clonePermissionPrefixes(record.Prefixes),
 		Paths:      record.Paths,
+		Origin:     record.Origin,
 	})
 }
 
@@ -361,6 +364,7 @@ type permissionEvent struct {
 	Reason     string           `json:"reason,omitempty"`
 	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
 	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
+	Origin     string           `json:"origin,omitempty"`
 }
 
 type memoryEvent struct {

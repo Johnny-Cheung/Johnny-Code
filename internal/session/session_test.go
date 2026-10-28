@@ -846,3 +846,21 @@ func TestRecordInjectedInboxMessageWithSources(t *testing.T) {
 		t.Fatal("注入记录应包含消息正文")
 	}
 }
+
+func TestRecordPermissionKeepsSubagentOrigin(t *testing.T) {
+	recorder := newTestRecorder(t)
+	if err := recorder.RecordPermission(PermissionRecord{ToolCallID: "c1", Tool: "write", Target: "/tmp/x", Decision: "allow", Origin: "ab12"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.RecordPermission(PermissionRecord{ToolCallID: "c2", Tool: "write", Target: "/tmp/y", Decision: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	lines := readJSONLines(t, recorder.Path())
+	child, main := parseObject(t, lines[1]), parseObject(t, lines[2])
+	if stringField(t, child, "origin") != "ab12" {
+		t.Fatalf("子任务审批应记录来源：%s", lines[1])
+	}
+	if _, ok := main["origin"]; ok {
+		t.Fatalf("主 Agent 的审批不应带来源：%s", lines[2])
+	}
+}

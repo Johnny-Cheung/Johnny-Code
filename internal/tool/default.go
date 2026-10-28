@@ -100,6 +100,9 @@ func (d *Default) Execute(ctx context.Context, call model.ToolCall) (Result, err
 	case "memory":
 		// 记忆查询只读，不触发审批。
 		return d.base.Execute(ctx, call)
+	case "task":
+		// 派出子任务本身不访问文件；子任务内的每次工具调用各自按本模式检查。
+		return d.base.Execute(ctx, call)
 	case "remember":
 		var args rememberArguments
 		if err := json.Unmarshal(arguments, &args); err != nil {
@@ -747,6 +750,7 @@ func likelyPathToken(value string) bool {
 }
 
 func (d *Default) approve(ctx context.Context, request ApprovalRequest) (ApprovalDecision, error) {
+	request.Origin = OriginFrom(ctx)
 	decision, err := d.gate.Ask(ctx, request)
 	if err != nil {
 		d.gate.Audit(request, ApprovalDecision{Source: "error", Reason: err.Error()})

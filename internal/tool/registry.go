@@ -18,6 +18,7 @@ var toolNamePattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 type Registry struct {
 	tools map[string]Tool
 	defs  []model.ToolDefinition
+	list  []Tool
 }
 
 func NewRegistry(tools ...Tool) (*Registry, error) {
@@ -40,11 +41,20 @@ func NewRegistry(tools ...Tool) (*Registry, error) {
 			return nil, errorsForRegistry(fmt.Sprintf("工具名称重复：%s", definition.Name))
 		}
 		registry.tools[definition.Name] = tool
+		registry.list = append(registry.list, tool)
 		definition.InputSchema = append(json.RawMessage(nil), definition.InputSchema...)
 		registry.defs = append(registry.defs, definition)
 	}
 	sort.Slice(registry.defs, func(i, j int) bool { return registry.defs[i].Name < registry.defs[j].Name })
 	return registry, nil
+}
+
+// With 返回在当前工具之外再注册 extra 的新注册表，原注册表不变。
+func (r *Registry) With(extra ...Tool) (*Registry, error) {
+	if r == nil {
+		return NewRegistry(extra...)
+	}
+	return NewRegistry(append(append([]Tool(nil), r.list...), extra...)...)
 }
 
 func errorsForRegistry(message string) error {

@@ -22,6 +22,8 @@ type ApprovalRequest struct {
 	Detail         string
 	RecordPrefixes [][]string
 	RecordPaths    []PathRule
+	// Origin 非零表示请求来自子 Agent，由 Default.approve 根据 context 填写。
+	Origin Origin
 }
 
 func (r ApprovalRequest) CanRecord() bool {
@@ -63,6 +65,7 @@ type ApprovalAudit struct {
 	Reason     string
 	Prefixes   [][]string
 	Paths      []PathRule
+	Origin     Origin
 }
 
 type ApprovalFunc func(context.Context, ApprovalRequest) (ApprovalDecision, error)
@@ -173,6 +176,7 @@ func auditDecision(audit AuditFunc, request ApprovalRequest, decision ApprovalDe
 		Reason:     decision.Reason,
 		Prefixes:   prefixes,
 		Paths:      paths,
+		Origin:     request.Origin,
 	})
 }
 
