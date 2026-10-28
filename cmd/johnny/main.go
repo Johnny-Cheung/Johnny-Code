@@ -25,6 +25,7 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/subagent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
 
@@ -154,27 +155,14 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
-	var tools agent.Tools = registry
 	var rules *tool.ProjectRules
 	var gate *tool.ApprovalGate
-	switch mode {
-	case permissionReadOnly:
-		readOnly, err := tool.NewReadOnly(registry, runtime)
-		if err != nil {
-			return reportError(stderr, "只读模式初始化失败：", err)
-		}
-		tools = readOnly
-	case permissionDefault:
+	if mode == permissionDefault {
 		rules, err = loadProjectPermissions(runtime.WorkDir, interactive && interactiveReader(input), input, stderr)
 		if err != nil {
 			return reportError(stderr, "项目权限规则初始化失败：", err)
 		}
 		gate = tool.NewApprovalGate()
-		permissioned, err := tool.NewDefault(registry, runtime, rules, gate)
-		if err != nil {
-			return reportError(stderr, "默认模式初始化失败：", err)
-		}
-		tools = permissioned
 	}
 	client, err := model.NewClient(model.Options{API: model.API(cfg.API), APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
 	if err != nil {
@@ -221,12 +209,69 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		gate.SetAudit(logs.recordPermission)
 	}
 
+	// task 工具只在 TUI 入口注册：子任务的状态、审批和唤醒都依赖终端界面。
+	tuiMode := interactive && useTUI(input, output)
+	toolRegistry := registry
+	var manager *subagent.Manager
+	subagentHub := &subagentEvents{}
+	if tuiMode {
+		manager, err = subagent.NewManager(subagent.Config{
+			WorkDir: runtime.WorkDir, SessionID: sessionID, InteractionMode: mode.label(),
+			Client: client, Model: cfg.Model, MaxOutputTokens: contextCfg.OutputTokens,
+			Budget:  contextview.NewBudget(contextCfg.Window, contextCfg.OutputTokens),
+			Toolbox: subagent.Toolbox{Runtime: runtime, Registry: registry, Mode: subagent.Mode(mode), Rules: rules, Gate: gate},
+			Pinned:  memoryContext.Load,
+			System: func(info subagent.Info) string {
+				return childSystemPrompt(runtime.WorkDir, mode, info, skills)
+			},
+			OpenLog: openChildLog(logs, session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}),
+			OnEvent: func(event subagent.Event) {
+				if event.Type == subagent.EventStarted || event.Type == subagent.EventEnded {
+					logs.recordSubagent(subagentRecord(event))
+				}
+				subagentHub.publish(event)
+			},
+		})
+		if err != nil {
+			return reportError(stderr, "子任务初始化失败：", err)
+		}
+		defer manager.Close()
+		taskTool, err := tool.NewTaskTool(runtime, manager)
+		if err != nil {
+			return reportError(stderr, "子任务初始化失败：", err)
+		}
+		if toolRegistry, err = registry.With(taskTool); err != nil {
+			return reportError(stderr, "子任务初始化失败：", err)
+		}
+	}
+	var tools agent.Tools = toolRegistry
+	switch mode {
+	case permissionReadOnly:
+		readOnly, err := tool.NewReadOnly(toolRegistry, runtime)
+		if err != nil {
+			return reportError(stderr, "只读模式初始化失败：", err)
+		}
+		tools = readOnly
+	case permissionDefault:
+		permissioned, err := tool.NewDefault(toolRegistry, runtime, rules, gate)
+		if err != nil {
+			return reportError(stderr, "默认模式初始化失败：", err)
+		}
+		tools = permissioned
+	}
+	if manager != nil {
+		if tools, err = manager.GuardMain(tools); err != nil {
+			return reportError(stderr, "子任务初始化失败：", err)
+		}
+	}
+	buildSystem := func() string { return mainSystemPrompt(runtime.WorkDir, mode, skills, manager != nil) }
+
 	display := newRenderer(output, stderr)
 	conversation := agent.NewConversation(agent.Options{
 		Client:          client,
 		Tools:           tools,
 		Model:           cfg.Model,
-		System:          systemPrompt(runtime.WorkDir, mode, skills),
+		System:          buildSystem(),
 		InteractionMode: mode.label(),
 		MaxTurns:        *maxTurns,
 		RequestTimeout:  agent.DefaultRequestTimeout,
@@ -235,6 +280,9 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		Pinned:          memoryContext.Load,
 		MemoryReview:    memoryReview,
 	})
+	if manager != nil {
+		manager.SetParent(conversation, tools)
+	}
 	compact := func(ctx context.Context, emit func(agent.Event) error) (string, error) {
 		return conversation.Compact(ctx, func(event agent.Event) error {
 			logs.record(event)
@@ -265,7 +313,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		if err := skills.Reload(); err != nil {
 			return err
 		}
-		conversation.SetSystemPrompt(systemPrompt(runtime.WorkDir, mode, skills))
+		conversation.SetSystemPrompt(buildSystem())
 		return nil
 	}, contextCommands, memoryCommands).Handle
 
