@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -148,4 +149,55 @@ func TestEndWorkflowWaitsForClaimsRelease(t *testing.T) {
 	}
 	h.manager.CancelAll()
 	h.manager.Wait()
+}
+
+func TestStepQueuesAndCountsPartialResults(t *testing.T) {
+	h := newHarness(t, harnessOptions{configure: func(c *Config) { c.MaxRequests = 3 }})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := map[string]int{}
+	h.respond = func(ctx context.Context, req model.Request) (model.Response, error) {
+		if !isChild(req) {
+			return textResponse("好"), nil
+		}
+		label := taskLabel(requestTexts(req))
+		mu.Lock()
+		calls[label]++
+		count := calls[label]
+		mu.Unlock()
+		// 第一个任务一直调用工具，直到达到请求次数上限，成为“部分结果”。
+		if label == "T1" {
+			return callResponse(fmt.Sprintf("call-%s-%d", label, count), "bash", `{"command":"pwd"}`), nil
+		}
+		select {
+		case <-release:
+			return textResponse("完成 " + label), nil
+		case <-ctx.Done():
+			return model.Response{}, ctx.Err()
+		}
+	}
+	if _, err := h.manager.StartWorkflow("一", outline("唯一的一步")); err != nil {
+		t.Fatal(err)
+	}
+	requests := make([]tool.SpawnRequest, tool.MaxWorkflowTasks)
+	for i := range requests {
+		requests[i] = freshReadRequest(fmt.Sprintf("T%d", i+1))
+	}
+	if _, err := h.manager.RunWorkflowStep(context.Background(), 1, requests); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("名额内的任务启动", func() bool { return len(h.eventsOf(EventStarted)) == MaxConcurrent })
+	if view, _ := h.manager.Workflow(); view.Steps[0].Queued != tool.MaxWorkflowTasks-MaxConcurrent {
+		t.Fatalf("多出的任务应排队：%+v", view.Steps[0])
+	}
+	close(release)
+	h.waitFor("排队的任务补位", func() bool { return len(h.eventsOf(EventStarted)) == tool.MaxWorkflowTasks })
+	h.waitEnded(tool.MaxWorkflowTasks)
+	message, _ := h.deliver()
+	if !strings.Contains(message, "7 个完成") || !strings.Contains(message, "1 个只完成了一部分") {
+		t.Fatalf("整步消息应统计部分结果：\n%s", message)
+	}
+	if h.manager.WorkflowActive() {
+		t.Fatal("最后一步结束后工作流应完成")
+	}
 }
