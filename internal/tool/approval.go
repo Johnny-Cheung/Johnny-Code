@@ -77,6 +77,7 @@ type ApprovalGate struct {
 	mu    sync.RWMutex
 	ask   ApprovalFunc
 	audit AuditFunc
+	wait  func(Origin, bool)
 }
 
 func NewApprovalGate() *ApprovalGate {
@@ -101,6 +102,17 @@ func (g *ApprovalGate) SetAudit(fn AuditFunc) {
 	g.audit = fn
 }
 
+// SetWaitObserver 注册子任务审批等待的观察者：来自子 Agent 的请求开始等待时
+// 以 true 调用，等待结束（无论结果）以 false 调用。
+func (g *ApprovalGate) SetWaitObserver(fn func(Origin, bool)) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.wait = fn
+}
+
 func (g *ApprovalGate) Ask(ctx context.Context, request ApprovalRequest) (ApprovalDecision, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -112,10 +124,14 @@ func (g *ApprovalGate) Ask(ctx context.Context, request ApprovalRequest) (Approv
 		return ApprovalDecision{Source: "unavailable", Reason: ErrApprovalUnavailable.Error()}, nil
 	}
 	g.mu.RLock()
-	fn := g.ask
+	fn, wait := g.ask, g.wait
 	g.mu.RUnlock()
 	if fn == nil {
 		return ApprovalDecision{Source: "unavailable", Reason: ErrApprovalUnavailable.Error()}, nil
+	}
+	if wait != nil && !request.Origin.IsZero() {
+		wait(request.Origin, true)
+		defer wait(request.Origin, false)
 	}
 	decision, err := fn(ctx, request)
 	if err != nil {
