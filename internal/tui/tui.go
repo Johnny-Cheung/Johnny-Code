@@ -51,6 +51,10 @@ type Options struct {
 	SlashCommands func() []SlashCommand
 	RunTurn       func(context.Context, string, func(Event) error, func(string)) (agent.Result, error)
 	RunCompact    func(context.Context, func(string)) (string, error)
+	// Subagents 非空时显示后台子任务区、处理其审批并支持唤醒与统一取消。
+	Subagents SubagentControl
+	// RunWake 以子任务结果为起点执行一轮（空闲唤醒），不回显为用户输入。
+	RunWake func(context.Context, func(Event) error, func(string)) (agent.Result, error)
 }
 
 // LocalCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
@@ -62,6 +66,7 @@ type LocalCommandResult struct {
 }
 
 type approvalDelivery struct {
+	ctx      context.Context
 	request  tool.ApprovalRequest
 	response chan tool.ApprovalDecision
 }
@@ -73,6 +78,7 @@ type approvalOption struct {
 }
 
 type approvalState struct {
+	ctx      context.Context
 	request  tool.ApprovalRequest
 	response chan tool.ApprovalDecision
 	options  []approvalOption
@@ -135,7 +141,12 @@ type terminalModel struct {
 	historyIndex  int
 	draft         string
 	approval      *approvalState
+	approvalQueue []*approvalDelivery
 	slash         slashMenuState
+	subs          []subagentView
+	subTick       bool
+	wakeRounds    int
+	wakeBlocked   bool
 }
 
 // Run 在退出前取消并等待所有任务。即使库因终端错误提前恢复终端，也不会留下
@@ -163,6 +174,12 @@ func Run(ctx context.Context, options Options) error {
 	}
 	program := tea.NewProgram(m, tea.WithInput(input), tea.WithOutput(output),
 		tea.WithContext(runCtx), tea.WithoutSignalHandler())
+	if options.Subagents != nil {
+		unsubscribe := options.Subagents.Subscribe(func(notice SubagentNotice) {
+			program.Send(subagentMsg{notice: notice})
+		})
+		defer unsubscribe()
+	}
 	_, err := program.Run()
 	cancel()
 	workers.Wait()
@@ -213,8 +230,10 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 		markdown: markdownStream{width: 79}}
 }
 
+// Init 打印页眉并启动事件读取链。读取链在整个会话期间保持存活（空闲时也是），
+// 这样后台子任务的审批请求随时都有接收方。
 func (m *terminalModel) Init() tea.Cmd {
-	return tea.Println(wrap(m.headerText(), m.contentWidth()))
+	return tea.Batch(tea.Println(wrap(m.headerText(), m.contentWidth())), m.waitEvent())
 }
 
 func (m *terminalModel) headerText() string {
@@ -239,7 +258,21 @@ func (m *terminalModel) waitEvent() tea.Cmd {
 }
 
 func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	m.pruneApprovals()
+	model, cmd := m.update(message)
+	if wake := m.maybeWake(); wake != nil {
+		cmd = tea.Batch(cmd, wake)
+	}
+	return model, cmd
+}
+
+func (m *terminalModel) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
+	case subagentMsg:
+		return m, m.applySubagent(msg.notice)
+	case subagentTickMsg:
+		m.subTick = false
+		return m, m.scheduleSubagentTick()
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
 		m.markdown.SetWidth(m.contentWidth())
@@ -269,7 +302,7 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPrint = nil
 		return m, m.printResponse(pending.summary, pending.answer)
 	case tea.PasteMsg:
-		if m.busy {
+		if m.busy || m.approval != nil {
 			return m, nil
 		}
 		text := normalizeNewlines(msg.Content)
@@ -281,14 +314,15 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		message = tea.PasteMsg{Content: text}
 	case tea.KeyPressMsg:
 		keys := msg.String()
+		if m.approval != nil {
+			return m, m.handleApprovalKey(keys)
+		}
 		if m.busy {
-			if m.approval != nil {
-				return m, m.handleApprovalKey(keys)
-			}
 			if keys == "ctrl+c" && !m.stopping {
 				m.stopping = true
 				m.status = "正在取消，等待当前操作停止…"
 				m.cancel()
+				m.cancelSubagents()
 			}
 			return m, nil
 		}
@@ -316,6 +350,9 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch keys {
 		case "ctrl+c":
+			if m.input.Value() == "" && m.cancelSubagents() > 0 {
+				return m, nil
+			}
 			m.input.Reset()
 			m.historyIndex = len(m.history)
 			m.draft = ""
@@ -325,8 +362,7 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+d":
 			if m.input.Value() == "" {
-				m.quitting = true
-				return m, tea.Quit
+				return m, m.exit()
 			}
 		case "ctrl+o":
 			if !m.expanded && len(m.lastTools) > 0 {
@@ -340,8 +376,7 @@ func (m *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if prompt == "/exit" {
-				m.quitting = true
-				return m, tea.Quit
+				return m, m.exit()
 			}
 			if m.options.LocalCommand != nil {
 				if result, handled := m.options.LocalCommand(prompt); handled {
@@ -417,8 +452,21 @@ func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
 	if display == "" {
 		display = prompt
 	}
+	m.beginTurnState("正在等待模型回复…")
+	m.history = append(m.history, display)
+	m.historyIndex, m.draft = len(m.history), ""
+	m.wakeRounds, m.wakeBlocked = 0, false
+	run := m.options.RunTurn
+	m.launchTurn(func(ctx context.Context, emit func(Event) error, notice func(string)) (agent.Result, error) {
+		return run(ctx, prompt, emit, notice)
+	})
+	return tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth()))
+}
+
+// beginTurnState 进入一轮任务的忙碌状态：清空上一轮的动态内容并锁定输入。
+func (m *terminalModel) beginTurnState(status string) {
 	m.busy, m.stopping = true, false
-	m.status = "正在等待模型回复…"
+	m.status = status
 	m.pendingReady = nil
 	m.liveTools = nil
 	m.pendingPrint = nil
@@ -426,9 +474,11 @@ func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
 	m.input.Reset()
 	m.input.Blur()
 	m.slash = slashMenuState{}
-	m.history = append(m.history, display)
-	m.historyIndex, m.draft = len(m.history), ""
 	m.resizeInput()
+}
+
+// launchTurn 在后台执行一轮任务，事件经 m.events 回到界面。
+func (m *terminalModel) launchTurn(run func(context.Context, func(Event) error, func(string)) (agent.Result, error)) {
 	turnCtx, cancel := context.WithCancel(m.ctx)
 	m.cancel = cancel
 	m.workers.Add(1)
@@ -465,13 +515,12 @@ func (m *terminalModel) startExpanded(prompt, display string) tea.Cmd {
 			case <-m.ctx.Done():
 			}
 		}
-		result, err := m.options.RunTurn(turnCtx, prompt, emit, notice)
+		result, err := run(turnCtx, emit, notice)
 		select {
 		case m.events <- delivery{done: true, result: result, err: err}:
 		case <-m.ctx.Done():
 		}
 	}()
-	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth())), m.waitEvent())
 }
 
 // startCompact 在后台生成摘要，期间保持输入区不可编辑，结束后打印结果。
@@ -509,7 +558,7 @@ func (m *terminalModel) startCompact(display string) tea.Cmd {
 		case <-m.ctx.Done():
 		}
 	}()
-	return tea.Sequence(tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth())), m.waitEvent())
+	return tea.Println(wrap("\n❯ "+safeText(display)+"\n", m.contentWidth()))
 }
 
 func (m *terminalModel) requestApproval(ctx context.Context, request tool.ApprovalRequest) (tool.ApprovalDecision, error) {
@@ -517,7 +566,7 @@ func (m *terminalModel) requestApproval(ctx context.Context, request tool.Approv
 		ctx = context.Background()
 	}
 	response := make(chan tool.ApprovalDecision, 1)
-	item := delivery{approval: &approvalDelivery{request: request, response: response}}
+	item := delivery{approval: &approvalDelivery{ctx: ctx, request: request, response: response}}
 	select {
 	case m.events <- item:
 	case <-ctx.Done():
@@ -535,10 +584,20 @@ func (m *terminalModel) requestApproval(ctx context.Context, request tool.Approv
 	}
 }
 
+// beginApproval 收到审批请求：当前没有待处理项时直接显示，否则按先进先出排队。
+// 审批可能来自主 Agent，也可能来自后台子任务，与主 Agent 是否忙碌无关。
 func (m *terminalModel) beginApproval(item *approvalDelivery) {
 	if item == nil {
 		return
 	}
+	if m.approval != nil {
+		m.approvalQueue = append(m.approvalQueue, item)
+		return
+	}
+	m.showApproval(item)
+}
+
+func (m *terminalModel) showApproval(item *approvalDelivery) {
 	options := []approvalOption{
 		{label: "允许本次", allow: true},
 		{label: "拒绝本次"},
@@ -547,6 +606,7 @@ func (m *terminalModel) beginApproval(item *approvalDelivery) {
 		options = append(options, approvalOption{label: "批准并记录", allow: true, record: true})
 	}
 	m.approval = &approvalState{
+		ctx:      item.ctx,
 		request:  item.request,
 		response: item.response,
 		options:  options,
@@ -555,19 +615,58 @@ func (m *terminalModel) beginApproval(item *approvalDelivery) {
 	m.status = "等待权限确认"
 }
 
+// pruneApprovals 丢弃请求方已经取消的审批（本轮被取消、子任务被取消或超时），
+// 并在当前项被移除后显示队列中的下一项。
+func (m *terminalModel) pruneApprovals() {
+	if m.approval == nil && len(m.approvalQueue) == 0 {
+		return
+	}
+	if m.approval != nil && m.approval.ctx != nil && m.approval.ctx.Err() != nil {
+		m.approval = nil
+	}
+	alive := m.approvalQueue[:0]
+	for _, item := range m.approvalQueue {
+		if item.ctx == nil || item.ctx.Err() == nil {
+			alive = append(alive, item)
+		}
+	}
+	m.approvalQueue = alive
+	m.promoteApproval()
+}
+
+// promoteApproval 在没有当前审批时显示队列头；队列也空了则恢复空闲状态文字。
+func (m *terminalModel) promoteApproval() {
+	if m.approval != nil {
+		return
+	}
+	if len(m.approvalQueue) > 0 {
+		next := m.approvalQueue[0]
+		m.approvalQueue = m.approvalQueue[1:]
+		m.showApproval(next)
+		return
+	}
+	if !m.busy && m.status == "等待权限确认" {
+		m.status = "空闲"
+	}
+}
+
 func (m *terminalModel) handleApprovalKey(keys string) tea.Cmd {
 	state := m.approval
 	if state == nil {
-		return m.waitEvent()
+		return nil
 	}
 	switch keys {
 	case "ctrl+c":
+		// 取消主 Agent 当前轮（如果有）和全部子任务，它们的待审批请求一并丢弃。
 		m.approval = nil
-		if !m.stopping {
+		m.approvalQueue = nil
+		if m.busy && !m.stopping {
 			m.stopping = true
 			m.status = "正在取消，等待当前操作停止…"
 			m.cancel()
 		}
+		m.cancelSubagents()
+		m.promoteApproval()
 	case "up", "k":
 		state.selected = (state.selected + len(state.options) - 1) % len(state.options)
 	case "down", "j", "tab":
@@ -592,8 +691,12 @@ func (m *terminalModel) handleApprovalKey(keys string) tea.Cmd {
 		default:
 			m.status = "已允许本次，等待工具执行…"
 		}
+		if !m.busy {
+			m.status = "空闲"
+		}
+		m.promoteApproval()
 	}
-	return m.waitEvent()
+	return nil
 }
 
 func (m *terminalModel) showLocalResult(prompt, text string) tea.Cmd {
@@ -687,7 +790,6 @@ func (m *terminalModel) finishCompact(item delivery) tea.Cmd {
 	m.busy, m.stopping = false, false
 	m.cancel = nil
 	m.pendingReady = nil
-	m.approval = nil
 	body := ""
 	switch {
 	case errors.Is(item.err, context.Canceled):
@@ -700,12 +802,13 @@ func (m *terminalModel) finishCompact(item delivery) tea.Cmd {
 		m.status = "空闲"
 		body = item.text
 	}
+	m.pruneApprovals()
 	focus := m.input.Focus()
 	m.resizeInput()
 	if body == "" {
-		return focus
+		return tea.Batch(focus, m.waitEvent())
 	}
-	return tea.Sequence(tea.Println(wrap(safeText(body), m.contentWidth())), focus)
+	return tea.Batch(tea.Sequence(tea.Println(wrap(safeText(body), m.contentWidth())), focus), m.waitEvent())
 }
 
 // finishResponse 在完整响应结束后一次性提交正文。最终响应会先打印折叠摘要，
@@ -801,7 +904,6 @@ func (m *terminalModel) finishTurn(item delivery) tea.Cmd {
 	m.busy, m.stopping = false, false
 	m.cancel = nil
 	m.pendingReady = nil
-	m.approval = nil
 	switch {
 	case errors.Is(item.err, context.Canceled):
 		m.status = "已取消，可继续输入"
@@ -820,12 +922,13 @@ func (m *terminalModel) finishTurn(item delivery) tea.Cmd {
 		}
 		body.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(wrap(summary, m.contentWidth())))
 	}
+	m.pruneApprovals()
 	focus := m.input.Focus()
 	m.resizeInput()
 	if body.Len() > 0 {
-		return tea.Sequence(tea.Println(body.String()), focus)
+		return tea.Batch(tea.Sequence(tea.Println(body.String()), focus), m.waitEvent())
 	}
-	return focus
+	return tea.Batch(focus, m.waitEvent())
 }
 
 func appendBodyLine(body *strings.Builder, text string, width int) {
@@ -974,12 +1077,15 @@ func (m *terminalModel) approvalLines(width int) []string {
 	line := func(label, value string) string {
 		return ansi.Truncate(label+oneLine(value), width, "…")
 	}
-	lines := []string{
-		"权限确认",
+	lines := []string{"权限确认"}
+	if origin := state.request.Origin; !origin.IsZero() {
+		lines = append(lines, line("来源：", "子任务 "+origin.ID+" "+origin.Description))
+	}
+	lines = append(lines,
 		line("工具：", state.request.Tool),
 		line("目录：", state.request.WorkDir),
 		line("原因：", state.request.Reason),
-	}
+	)
 	if state.request.Target != "" {
 		lines = append(lines, line("目标：", state.request.Target))
 	}
@@ -997,7 +1103,17 @@ func (m *terminalModel) approvalLines(width int) []string {
 		}
 		lines = append(lines, ansi.Truncate(prefix+option.label, width, "…"))
 	}
-	lines = append(lines, "↑↓ 选择 · Enter 确认 · Ctrl+C 取消本轮")
+	if waiting := len(m.approvalQueue); waiting > 0 {
+		lines = append(lines, fmt.Sprintf("另有 %d 个请求在等待", waiting))
+	}
+	cancelHint := "取消全部子任务"
+	switch {
+	case m.busy && len(m.subs) > 0:
+		cancelHint = "取消本轮和子任务"
+	case m.busy:
+		cancelHint = "取消本轮"
+	}
+	lines = append(lines, "↑↓ 选择 · Enter 确认 · Ctrl+C "+cancelHint)
 	for index, value := range lines {
 		lines[index] = ansi.Truncate(value, width, "…")
 	}
@@ -1016,21 +1132,28 @@ func (m *terminalModel) View() tea.View {
 	}
 	width := m.contentWidth()
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	if m.approval != nil {
+		// 审批面板独占动态区域，无论主 Agent 是否忙碌。
+		maxDynamic := max(1, m.height-1)
+		lines := m.approvalLines(width)
+		if len(lines) > maxDynamic {
+			lines = lines[len(lines)-maxDynamic:]
+		}
+		return tea.NewView(strings.Join(lines, "\n"))
+	}
 	if m.busy {
 		// 留一行给终端光标/滚动，避免动态区域刚好占满屏幕时把旧内容滚入历史。
 		maxDynamic := max(1, m.height-1)
-		if m.approval != nil {
-			lines := m.approvalLines(width)
-			if len(lines) > maxDynamic {
-				lines = lines[len(lines)-maxDynamic:]
-			}
-			return tea.NewView(strings.Join(lines, "\n"))
-		}
 		reserve := 1
 		if maxDynamic >= 2 {
 			reserve = 2
 		}
 		available := max(0, maxDynamic-reserve)
+		subs := m.subagentLines(width)
+		if len(subs) > available {
+			subs = subs[:available]
+		}
+		available -= len(subs)
 		panel := m.progressLines(width)
 		var parts []string
 		if len(panel) > available {
@@ -1045,11 +1168,18 @@ func (m *terminalModel) View() tea.View {
 			}
 		}
 		parts = append(parts, panel...)
+		for _, line := range subs {
+			parts = append(parts, muted.Render(line))
+		}
 		if len(parts) < maxDynamic {
 			parts = append(parts, ansi.Truncate(m.status, width, "…"))
 		}
 		if len(parts) < maxDynamic {
-			parts = append(parts, muted.Render(ansi.Truncate("Ctrl+C 取消本轮", width, "…")))
+			hint := "Ctrl+C 取消本轮"
+			if len(m.subs) > 0 {
+				hint = "Ctrl+C 取消本轮和子任务"
+			}
+			parts = append(parts, muted.Render(ansi.Truncate(hint, width, "…")))
 		}
 		return tea.NewView(strings.Join(parts, "\n"))
 	}
@@ -1062,7 +1192,14 @@ func (m *terminalModel) View() tea.View {
 	border := muted.Render(strings.Repeat("─", width))
 	hasBorder := m.height >= len(lines)+2
 	menu := m.slashView(width, m.slashMaxRows(len(lines)))
+	subs := m.subagentLines(width)
+	if room := m.height - len(lines) - 3; len(subs) > max(0, room) {
+		subs = subs[:max(0, room)]
+	}
 	var parts []string
+	for _, line := range subs {
+		parts = append(parts, muted.Render(line))
+	}
 	if len(menu) > 0 {
 		parts = append(parts, menu...)
 	}
@@ -1089,7 +1226,7 @@ func (m *terminalModel) View() tea.View {
 		if hasBorder {
 			cursor.Position.Y++
 		}
-		cursor.Position.Y += len(menu)
+		cursor.Position.Y += len(menu) + len(subs)
 		cursor.Position.X = min(cursor.Position.X, width-1)
 		cursor.Position.Y = min(cursor.Position.Y, max(0, len(parts)-1))
 		result.Cursor = cursor
