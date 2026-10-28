@@ -45,6 +45,8 @@ type Metadata struct {
 	Access      string
 	Paths       []string
 	Description string
+	// WorkflowStep 是子任务所属的工作流步骤序号，单个委派的子任务为 0。
+	WorkflowStep int
 }
 
 // SubagentRecord 是父会话中一次子任务的起止记录。它只保存定位和结果摘要，
@@ -56,6 +58,7 @@ type SubagentRecord struct {
 	Kind         string
 	Access       string
 	Paths        []string
+	Step         int // 所属的工作流步骤序号，单个委派的子任务为 0
 	ChildSession string
 	Status       string
 	Requests     int
@@ -64,6 +67,22 @@ type SubagentRecord struct {
 	Truncated    bool
 	Injected     bool
 	Error        string
+}
+
+// WorkflowRecord 是父会话中工作流的一次状态变化：登记大纲、步骤启动、步骤结束或工作流结束。
+type WorkflowRecord struct {
+	Phase string // start、step_start、step_end 或 end
+	Title string
+	Steps []string // start：按顺序的步骤标题
+	Step  int
+	Tasks int // step_start、step_end：这一步的任务数
+	// step_end：这一步里完成、只完成一部分和失败的任务数。
+	Completed int
+	Partial   int
+	Failed    int
+	StepsDone int    // end：已完成的步骤数
+	Status    string // end：completed、ended_early 或 canceled
+	Reason    string
 }
 
 // PermissionRecord is one approval decision. It is deliberately separate from
@@ -166,6 +185,7 @@ func New(meta Metadata) (*Recorder, error) {
 		Access:         meta.Access,
 		Paths:          meta.Paths,
 		Description:    meta.Description,
+		WorkflowStep:   meta.WorkflowStep,
 	}
 	if err := recorder.write(metaRecord); err != nil {
 		_ = recorder.Close()
@@ -298,6 +318,7 @@ func (r *Recorder) RecordSubagent(record SubagentRecord) error {
 		Kind:         record.Kind,
 		Access:       record.Access,
 		Paths:        record.Paths,
+		Step:         record.Step,
 		ChildSession: record.ChildSession,
 		Status:       record.Status,
 		Requests:     record.Requests,
@@ -306,6 +327,29 @@ func (r *Recorder) RecordSubagent(record SubagentRecord) error {
 		Truncated:    record.Truncated,
 		Injected:     record.Injected,
 		Error:        record.Error,
+	})
+}
+
+// RecordWorkflow writes one workflow state change.
+func (r *Recorder) RecordWorkflow(record WorkflowRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errRecorderClosed
+	}
+	return r.write(workflowEvent{
+		Type:      "workflow_" + record.Phase,
+		Time:      r.timestamp(),
+		Title:     record.Title,
+		Steps:     record.Steps,
+		Step:      record.Step,
+		Tasks:     record.Tasks,
+		Completed: record.Completed,
+		Partial:   record.Partial,
+		Failed:    record.Failed,
+		StepsDone: record.StepsDone,
+		Status:    record.Status,
+		Reason:    record.Reason,
 	})
 }
 
@@ -377,6 +421,7 @@ type metaEvent struct {
 	Access         string    `json:"access,omitempty"`
 	Paths          []string  `json:"paths,omitempty"`
 	Description    string    `json:"description,omitempty"`
+	WorkflowStep   int       `json:"workflow_step,omitempty"`
 }
 
 type subagentEvent struct {
@@ -387,6 +432,7 @@ type subagentEvent struct {
 	Kind         string    `json:"kind"`
 	Access       string    `json:"access"`
 	Paths        []string  `json:"paths,omitempty"`
+	Step         int       `json:"step,omitempty"`
 	ChildSession string    `json:"child_session,omitempty"`
 	Status       string    `json:"status,omitempty"`
 	Requests     int       `json:"requests,omitempty"`
@@ -395,6 +441,21 @@ type subagentEvent struct {
 	Truncated    bool      `json:"truncated,omitempty"`
 	Injected     bool      `json:"injected,omitempty"`
 	Error        string    `json:"error,omitempty"`
+}
+
+type workflowEvent struct {
+	Type      string    `json:"type"`
+	Time      time.Time `json:"time"`
+	Title     string    `json:"title"`
+	Steps     []string  `json:"steps,omitempty"`
+	Step      int       `json:"step,omitempty"`
+	Tasks     int       `json:"tasks,omitempty"`
+	Completed int       `json:"completed,omitempty"`
+	Partial   int       `json:"partial,omitempty"`
+	Failed    int       `json:"failed,omitempty"`
+	StepsDone int       `json:"steps_done,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
 }
 
 type eventRecord struct {

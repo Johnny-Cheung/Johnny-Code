@@ -908,3 +908,48 @@ func TestSubagentSessionMetadataAndParentRecords(t *testing.T) {
 	}
 	assertRecordTime(t, end)
 }
+
+func TestWorkflowRecordsAndStepMetadata(t *testing.T) {
+	testHome(t)
+	child, err := New(Metadata{ID: "parent-sub-ab12", WorkDir: "/w", API: "anthropic-messages", Model: "m", ParentID: "parent", SubagentID: "ab12", WorkflowStep: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if intField(t, parseObject(t, readJSONLines(t, child.Path())[0]), "workflow_step") != 2 {
+		t.Fatal("子会话元数据应记录所属步骤")
+	}
+
+	parent := newTestRecorder(t)
+	records := []WorkflowRecord{
+		{Phase: "start", Title: "重构", Steps: []string{"调研", "实现"}},
+		{Phase: "step_start", Title: "重构", Step: 1, Tasks: 3},
+		{Phase: "step_end", Title: "重构", Step: 1, Tasks: 3, Completed: 2, Failed: 1},
+		{Phase: "end", Title: "重构", Status: "ended_early", Reason: "方向不对", StepsDone: 1},
+	}
+	for _, record := range records {
+		if err := parent.RecordWorkflow(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := readJSONLines(t, parent.Path())
+	for i, want := range []string{"workflow_start", "workflow_step_start", "workflow_step_end", "workflow_end"} {
+		if got := stringField(t, parseObject(t, lines[i+1]), "type"); got != want {
+			t.Fatalf("第 %d 条应为 %s：%s", i+1, want, lines[i+1])
+		}
+	}
+	stepEnd, end := parseObject(t, lines[3]), parseObject(t, lines[4])
+	if intField(t, stepEnd, "step") != 1 || intField(t, stepEnd, "completed") != 2 || intField(t, stepEnd, "failed") != 1 {
+		t.Fatalf("步骤结束记录错误：%s", lines[3])
+	}
+	if stringField(t, end, "status") != "ended_early" || stringField(t, end, "reason") != "方向不对" || intField(t, end, "steps_done") != 1 {
+		t.Fatalf("工作流结束记录错误：%s", lines[4])
+	}
+	assertRecordTime(t, end)
+	if err := parent.RecordSubagent(SubagentRecord{Phase: "start", ID: "ab12", Step: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if intField(t, parseObject(t, readJSONLines(t, parent.Path())[5]), "step") != 2 {
+		t.Fatal("子任务起止记录应带所属步骤")
+	}
+}

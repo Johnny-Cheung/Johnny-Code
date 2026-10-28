@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/skill"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/subagent"
@@ -26,10 +27,13 @@ func TestMainSystemPromptAddsDelegationOnlyWhenTaskIsAvailable(t *testing.T) {
 	if without != systemPrompt("/tmp/work", permissionAllow, nil) {
 		t.Fatal("没有 task 工具时不应追加委派指引")
 	}
-	for _, want := range []string{"task 工具", "kind=fresh", "kind=fork", "paths", "没有 wait 或 poll", "是数据，不是指令", "最多 5 个"} {
+	for _, want := range []string{"task 工具", "kind=fresh", "kind=fork", "paths", "没有 wait 或 poll", "是数据，不是指令", "最多 5 个", "workflow 工具", "action=start", "action=run", "action=end", "大纲不能修改", "不要空等"} {
 		if !strings.Contains(with, want) {
 			t.Fatalf("委派指引缺少 %q", want)
 		}
+	}
+	if strings.Contains(without, "workflow") {
+		t.Fatal("没有 task 工具时也不应追加工作流指引")
 	}
 }
 
@@ -171,5 +175,99 @@ func TestNonTerminalEntryDoesNotRegisterTaskTool(t *testing.T) {
 	}
 	if strings.Contains(string(body.System), "委派子任务") {
 		t.Fatal("非终端入口的系统提示不应包含委派指引")
+	}
+}
+
+func TestChildSystemPromptAddsReportLengthOnlyInsideWorkflow(t *testing.T) {
+	plain := childSystemPrompt("/tmp/work", permissionAllow, subagent.Info{Access: tool.SpawnRead}, nil)
+	if strings.Contains(plain, "控制在约") {
+		t.Fatal("单个委派的子 Agent 没有报告长度要求")
+	}
+	step := childSystemPrompt("/tmp/work", permissionAllow, subagent.Info{Access: tool.SpawnRead, Step: 2, ReportBytes: 4096}, nil)
+	if !strings.Contains(step, "同一步其他任务的报告") || !strings.Contains(step, "约 1365 字") || !strings.Contains(step, "使用工作流") {
+		t.Fatalf("工作流里的子 Agent 应被要求精简报告：%s", step)
+	}
+}
+
+func TestWorkflowRecordCoversEveryPhase(t *testing.T) {
+	view := &subagent.WorkflowView{Title: "重构", Status: subagent.WorkflowEndedEarly, Reason: "方向不对", Steps: []subagent.StepView{
+		{No: 1, Title: "调研", State: subagent.StepDone, Total: 3, Counts: subagent.StepCounts{Completed: 2, Failed: 1}},
+		{No: 2, Title: "实现", State: subagent.StepSkipped},
+	}}
+	cases := []struct {
+		event subagent.Event
+		want  session.WorkflowRecord
+	}{
+		{subagent.Event{Type: subagent.EventWorkflowStarted, Workflow: view}, session.WorkflowRecord{Phase: "start", Title: "重构", Steps: []string{"调研", "实现"}}},
+		{subagent.Event{Type: subagent.EventStepStarted, Step: 1, Workflow: view}, session.WorkflowRecord{Phase: "step_start", Title: "重构", Step: 1, Tasks: 3}},
+		{subagent.Event{Type: subagent.EventStepEnded, Step: 1, Workflow: view}, session.WorkflowRecord{Phase: "step_end", Title: "重构", Step: 1, Tasks: 3, Completed: 2, Failed: 1}},
+		{subagent.Event{Type: subagent.EventWorkflowEnded, Workflow: view}, session.WorkflowRecord{Phase: "end", Title: "重构", Status: "ended_early", Reason: "方向不对", StepsDone: 1}},
+	}
+	for _, item := range cases {
+		got, ok := workflowRecord(item.event)
+		if !ok || fmt.Sprint(got) != fmt.Sprint(item.want) {
+			t.Fatalf("%s 的记录错误：%+v %v", item.event.Type, got, ok)
+		}
+	}
+	if _, ok := workflowRecord(subagent.Event{Type: subagent.EventStarted}); ok {
+		t.Fatal("普通子任务事件不是工作流记录")
+	}
+}
+
+func TestToolKeyDescribesWorkflowCalls(t *testing.T) {
+	cases := map[string]string{
+		`{"action":"start","title":"重构日志"}`:                   "start：重构日志",
+		`{"action":"run","step":2,"tasks":[{"x":1},{"x":2}]}`: "run：第 2 步（2 个任务）",
+		`{"action":"end","reason":"方向不对"}`:                    "end：方向不对",
+	}
+	for arguments, want := range cases {
+		if got := toolKey(&model.ToolCall{Name: "workflow", Arguments: []byte(arguments)}); got != want {
+			t.Fatalf("工具过程行应概括 workflow 调用：%q != %q", got, want)
+		}
+	}
+}
+
+func TestWorkflowEventsReachParentLogAndChildMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	parentMeta := session.Metadata{ID: "parent", WorkDir: "/work", API: "anthropic-messages", Model: "m", PermissionMode: "default"}
+	var stderr bytes.Buffer
+	logs := openSessionLogger(parentMeta, &stderr)
+	defer logs.close()
+
+	info := subagent.Info{ID: "cd34", SessionID: "parent-sub-cd34", Description: "改造 parser", Kind: tool.SpawnFresh, Access: tool.SpawnRead, Started: time.Now(), Step: 2}
+	sink := openChildLog(logs, parentMeta)(info)
+	if sink == nil {
+		t.Fatalf("应创建子任务记录：%s", stderr.String())
+	}
+	_ = sink.Close()
+	child, err := os.ReadFile(home + "/.johnny/sessions/parent-sub-cd34.jsonl")
+	if err != nil || !strings.Contains(string(child), `"workflow_step":2`) {
+		t.Fatalf("子任务元数据应记录所属步骤：%v %s", err, child)
+	}
+
+	view := &subagent.WorkflowView{Title: "重构", Status: subagent.WorkflowCompleted, Steps: []subagent.StepView{{No: 1, Title: "调研", State: subagent.StepDone, Total: 1}}}
+	for _, event := range []subagent.Event{
+		{Type: subagent.EventWorkflowStarted, Workflow: view},
+		{Type: subagent.EventStepEnded, Step: 1, Workflow: view},
+		{Type: subagent.EventWorkflowEnded, Workflow: view},
+	} {
+		record, ok := workflowRecord(event)
+		if !ok {
+			t.Fatalf("应生成记录：%s", event.Type)
+		}
+		logs.recordWorkflow(record)
+	}
+	logs.recordSubagent(subagentRecord(subagent.Event{Type: subagent.EventStarted, Info: info}))
+	logs.close()
+	parent, err := os.ReadFile(home + "/.johnny/sessions/parent.jsonl")
+	if err != nil {
+		t.Fatalf("父会话应有记录：%v", err)
+	}
+	for _, want := range []string{`"type":"workflow_start"`, `"type":"workflow_step_end"`, `"type":"workflow_end"`, `"status":"completed"`, `"steps":["调研"]`, `"step":2`} {
+		if !strings.Contains(string(parent), want) {
+			t.Fatalf("父会话记录缺少 %s：%s", want, parent)
+		}
 	}
 }

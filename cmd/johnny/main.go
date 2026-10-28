@@ -229,6 +229,9 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 				if event.Type == subagent.EventStarted || event.Type == subagent.EventEnded {
 					logs.recordSubagent(subagentRecord(event))
 				}
+				if record, ok := workflowRecord(event); ok {
+					logs.recordWorkflow(record)
+				}
 				subagentHub.publish(event)
 			},
 		})
@@ -240,7 +243,11 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		if err != nil {
 			return reportError(stderr, "子任务初始化失败：", err)
 		}
-		if toolRegistry, err = registry.With(taskTool); err != nil {
+		workflowTool, err := tool.NewWorkflowTool(runtime, manager)
+		if err != nil {
+			return reportError(stderr, "子任务初始化失败：", err)
+		}
+		if toolRegistry, err = registry.With(taskTool, workflowTool); err != nil {
 			return reportError(stderr, "子任务初始化失败：", err)
 		}
 	}
@@ -637,9 +644,25 @@ func toolKey(call *model.ToolCall) string {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Kind        string `json:"kind"`
+		Action      string `json:"action"`
+		Title       string `json:"title"`
+		Step        int    `json:"step"`
+		Tasks       []any  `json:"tasks"`
+		Reason      string `json:"reason"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return ""
+	}
+	if call.Name == "workflow" {
+		switch args.Action {
+		case "start":
+			return "start：" + args.Title
+		case "run":
+			return fmt.Sprintf("run：第 %d 步（%d 个任务）", args.Step, len(args.Tasks))
+		case "end":
+			return "end：" + args.Reason
+		}
+		return args.Action
 	}
 	if args.Command != "" {
 		return args.Command
