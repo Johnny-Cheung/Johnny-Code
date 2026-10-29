@@ -1,5 +1,7 @@
 package tool
 
+import "runtime"
+
 // 纯读档：这些程序本身没有写文件或执行其他程序的参数，选项表因此可以放宽；
 // 表外的选项（会跟随符号链接、从文件读取参数或一直不返回的形式）仍然拒绝。
 
@@ -22,6 +24,9 @@ var grepOptions = optionSpec{
 		"count", "word-regexp", "line-regexp", "only-matching", "no-filename", "with-filename",
 		"recursive", "extended-regexp", "fixed-strings", "perl-regexp", "basic-regexp", "quiet",
 		"silent", "no-messages", "text", "null", "initial-tab", "byte-offset", "color", "colour",
+		// --context 的取值是可选的：裸 --context 等价于 -C 2，只有 = 形式才
+		// 消费数字，避免把后面的 pattern/路径误当取值。
+		"context",
 	},
 	longInts: map[string]intRange{
 		"max-count": {0, 100000, false}, "after-context": {0, 100000, false},
@@ -58,12 +63,31 @@ var wcOptions = optionSpec{
 	longBools: []string{"lines", "words", "bytes", "chars", "max-line-length"},
 }
 
-var statOptions = optionSpec{
-	bools:     "xst",
-	shortStrs: "cf",
-	longBools: []string{"terse"},
-	longStrs:  []string{"format", "printf"},
+// stat 的短选项在 GNU 与 BSD 上含义不同：GNU 的 -f 是“文件系统状态”布尔量、
+// -c 才是格式，-t 是 terse；BSD 的 -f/-t 都带取值，-c 不存在。选项表按运行
+// 平台封闭选择，避免把某个平台的取值 token 在另一个平台当成未解析的路径
+// 操作数。无论哪边，带值选项在执行前都会归一化成粘连形式。
+func statOptionsFor(goos string) optionSpec {
+	switch goos {
+	case "linux":
+		return optionSpec{
+			bools:     "ft",
+			shortStrs: "c",
+			longBools: []string{"terse"},
+			longStrs:  []string{"format", "printf"},
+		}
+	case "darwin", "freebsd", "netbsd", "openbsd", "dragonfly":
+		return optionSpec{
+			bools:     "xs",
+			shortStrs: "ft",
+		}
+	default:
+		// 未知平台只保留无取值选项为空的保守表，至少可以 stat 路径本身。
+		return optionSpec{}
+	}
 }
+
+var statOptions = statOptionsFor(runtime.GOOS)
 
 var duOptions = optionSpec{
 	bools:     "achkmsxb",
@@ -226,12 +250,21 @@ func parseDiff(tokens []string, scope queryPathResolver, _ bool) (restrictedComm
 	if err != nil {
 		return restrictedCommand{}, err
 	}
-	return restrictedCommand{program: "diff", args: appendFlagsAndPaths(opts.flags, resolved), paths: resolved}, nil
+	flags := opts.flags
+	if recursive {
+		// GNU diff 默认会跟随目录里遇到的符号链接，可能读到工作目录外；
+		// 强制 --no-dereference（不支持该选项的实现会直接报错，失败关闭）。
+		flags = append(append([]string{}, flags...), "--no-dereference")
+	}
+	return restrictedCommand{program: "diff", args: appendFlagsAndPaths(flags, resolved), paths: resolved}, nil
 }
 
 // parseLiteral 处理只对字符串求值、不访问文件系统的程序（echo、basename、dirname）。
 func parseLiteral(program string) func([]string, queryPathResolver, bool) (restrictedCommand, error) {
 	return func(tokens []string, _ queryPathResolver, _ bool) (restrictedCommand, error) {
+		if err := rejectControlSeparators(tokens); err != nil {
+			return restrictedCommand{}, err
+		}
 		return restrictedCommand{program: program, args: append([]string(nil), tokens[1:]...)}, nil
 	}
 }

@@ -30,6 +30,9 @@ func isFindExpressionStart(token string) bool {
 }
 
 func parseFind(tokens []string, scope queryPathResolver, _ bool) (restrictedCommand, error) {
+	if err := rejectControlSeparators(tokens); err != nil {
+		return restrictedCommand{}, err
+	}
 	rest := tokens[1:]
 	var starts []string
 	for len(rest) > 0 && !isFindExpressionStart(rest[0]) {

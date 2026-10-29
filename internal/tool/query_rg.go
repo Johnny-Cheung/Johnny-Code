@@ -3,6 +3,9 @@ package tool
 // rg 属于逃逸口档：--pre/--pre-glob 会执行外部程序，-z 会调用解压程序，-L 会跟随
 // 符号链接，-f/--ignore-file 会读取任意文件。这些选项都不在表里；执行时还会强制
 // 加上 --no-config，避免环境变量指向的配置文件注入被拒绝的选项。
+//
+// -u/--unrestricted 可以重复到三次，但按 ripgrep 语义只会逐级放开 ignore、
+// hidden 和 binary 过滤，仍然跳过符号链接；跟随链接只能靠已拒绝的 -L/--follow。
 var rgOptions = optionSpec{
 	bools:     "nNiswxvlcoqHIFuUaSpbP.0",
 	shortInts: map[rune]intRange{'A': {0, 100000, false}, 'B': {0, 100000, false}, 'C': {0, 100000, false}, 'm': {0, 100000, false}, 'd': {0, 32, false}},
