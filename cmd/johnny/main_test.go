@@ -774,7 +774,7 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 		}
 	}
 	readOnly := systemPrompt("/tmp/johnny work", permissionReadOnly, nil)
-	for _, want := range []string{"/tmp/johnny work", "只读", "pwd", "ls", "find", "grep", "两段固定查询管道", "--permission-mode default", "不要尝试 write、edit"} {
+	for _, want := range []string{"/tmp/johnny work", "只读", "pwd", "ls", "find", "grep", "多段管道", "--permission-mode default", "不要尝试 write、edit"} {
 		if !strings.Contains(readOnly, want) {
 			t.Fatalf("只读系统提示缺少 %q：%s", want, readOnly)
 		}

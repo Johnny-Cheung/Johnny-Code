@@ -43,7 +43,7 @@ func (r *ReadOnly) Definitions() []model.ToolDefinition {
 		case "read":
 			definitions[i].Description += " 只读模式仅允许读取工作目录内文件。"
 		case "bash":
-			definitions[i].Description += " 只读模式只支持用户级只读查询白名单，不经过 shell；允许固定查询命令组成的两段只读管道。"
+			definitions[i].Description += " 只读模式只支持用户级只读查询白名单，不经过 shell；允许固定查询命令组成的多段管道、&&/||/; 链、虚拟 cd 以及 2>&1、/dev/null 尾部重定向。"
 		case "skill":
 			definitions[i].Description += " 只读模式可以加载已发现的 Skill。"
 		case "memory":

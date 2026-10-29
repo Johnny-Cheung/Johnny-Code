@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestReadOnlyRestrictedPipelines(t *testing.T) {
+func TestReadOnlyRestrictedPipelinesAndChains(t *testing.T) {
 	readOnly, runtime := readOnlyTest(t)
 	if err := os.WriteFile(filepath.Join(runtime.WorkDir, "file.txt"), []byte("hello\nworld\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -19,31 +19,92 @@ func TestReadOnlyRestrictedPipelines(t *testing.T) {
 		{"ls | head -n 1", "file.txt"},
 		{"ls | wc -l", ""},
 		{"cat file.txt | wc -l", "2"},
+		{"cat file.txt | grep hello | wc -l | head -n 1", "1"},
 		{"grep -n hello file.txt | head -n 1", "1:hello"},
+		{"cat file.txt | grep -n world | wc -l", "1"},
+		{"grep absent file.txt; echo after-semicolon", "after-semicolon"},
+		{"grep absent file.txt && echo skipped || echo fallback", "fallback"},
+		{"grep absent file.txt || echo fallback | grep fallback", "fallback"},
+		{"grep -E 'a&&b|a|b' file.txt; echo quoted-ok", "quoted-ok"},
+		{"cat file.txt >/dev/null", ""},
+		{"cat file.txt 2>/dev/null", "hello"},
+		{"cat file.txt 2>&1 | wc -l", "2"},
 	} {
 		result, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": test.command})
-		if err != nil || (test.want != "" && !strings.Contains(result.Content, test.want)) {
-			t.Fatalf("管道 %q 失败：%q %v", test.command, result.Content, err)
+		if err != nil {
+			t.Fatalf("命令 %q 失败：%v", test.command, err)
+		}
+		if test.want != "" && !strings.Contains(result.Content, test.want) {
+			t.Fatalf("命令 %q 输出缺少 %q：%q", test.command, test.want, result.Content)
 		}
 	}
 }
 
-func TestReadOnlyRestrictedPipelineRejectsUnsupportedForms(t *testing.T) {
+func TestReadOnlyRestrictedPipelinesRejectUnsupportedForms(t *testing.T) {
 	readOnly, runtime := readOnlyTest(t)
 	if err := os.WriteFile(filepath.Join(runtime.WorkDir, "file.txt"), []byte("hello\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, command := range []string{
-		"ls | cat",
-		"ls | head -n 1 | wc -l",
-		"ls | head > out.txt",
+		"ls | sh",
+		"ls > out.txt",
+		"ls >> out.txt",
+		"ls 2> out.txt",
+		"ls < in.txt",
 		"ls |& head",
-		"ls | head; pwd",
-		"ls | head && pwd",
-		"find . | grep -r hello",
-		"ls | head file.txt",
+		"ls | | head",
+		"echo $(pwd)",
+		"echo `pwd`",
+		"echo \"$(pwd)\"",
+		"echo $HOME",
+		"ls *.go",
+		"find . -delete",
+		"cat file.txt 1>/dev/null",
 	} {
 		_, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": command})
 		requireToolKind(t, err, KindPermissionDenied)
+	}
+}
+
+func TestReadOnlyVirtualCwd(t *testing.T) {
+	readOnly, runtime := readOnlyTest(t)
+	sub := filepath.Join(runtime.WorkDir, "sub")
+	if err := os.Mkdir(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedSub := mustEvalSymlinks(t, sub)
+	if err := os.WriteFile(filepath.Join(sub, "inside.txt"), []byte("inside\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cd sub && cat inside.txt"})
+	if err != nil || !strings.Contains(result.Content, "inside") {
+		t.Fatalf("虚拟 cd 后查询失败：%q %v", result.Content, err)
+	}
+	result, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cd sub; pwd"})
+	if err != nil || !strings.Contains(result.Content, resolvedSub) {
+		t.Fatalf("虚拟 cd 的 pwd 错误：%q %v", result.Content, err)
+	}
+	if _, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cd .. && pwd"}); err == nil {
+		t.Fatal("只读模式不应允许 cd 到工作目录外")
+	} else {
+		requireToolKind(t, err, KindPermissionDenied)
+	}
+	outside := t.TempDir()
+	_, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cd " + outside + " && pwd"})
+	requireToolKind(t, err, KindPermissionDenied)
+}
+
+func TestReadOnlyGrepNoMatchInsideChain(t *testing.T) {
+	readOnly, runtime := readOnlyTest(t)
+	if err := os.WriteFile(filepath.Join(runtime.WorkDir, "file.txt"), []byte("hello\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": "grep absent file.txt"})
+	if err != nil || result.IsError || !strings.Contains(result.Content, "无匹配") {
+		t.Fatalf("grep 无匹配应是非错误结果：%#v %v", result, err)
+	}
+	result, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "grep absent file.txt && echo skipped || echo fallback"})
+	if err != nil || !strings.Contains(result.Content, "fallback") || strings.Contains(result.Content, "skipped") {
+		t.Fatalf("grep 原始退出码未驱动链：%q %v", result.Content, err)
 	}
 }

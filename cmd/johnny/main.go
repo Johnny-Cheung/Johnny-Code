@@ -316,13 +316,17 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		},
 	}
 	memoryCommands := &memoryController{store: memoryContext.Store, writable: mode != permissionReadOnly}
-	localCommand := newLocalCommandHandlerWithMemory(rules, skills, func() error {
+	localHandler := newLocalCommandHandlerWithMemory(rules, skills, func() error {
 		if err := skills.Reload(); err != nil {
 			return err
 		}
 		conversation.SetSystemPrompt(buildSystem())
 		return nil
-	}, contextCommands, memoryCommands).Handle
+	}, contextCommands, memoryCommands)
+	if gate != nil {
+		localHandler.session = func() *tool.SessionGrants { return gate.Session() }
+	}
+	localCommand := localHandler.Handle
 
 	if !interactive {
 		printPermissionNotice(stderr, mode)
@@ -465,8 +469,8 @@ func systemPromptBase(workDir string, mode permissionMode) string {
 当前工作目录：%s
 当前权限模式：只读。
 
-你只能读取当前工作目录内的文件，并使用受限查询命令（echo、pwd、ls、find、grep、cat、head、tail、wc、stat、du、diff）了解项目。
-请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、重定向、构建或测试命令。查询时可以使用两段固定查询管道，例如 find . -name '*.go' | head -n 20；不要组合管道、&&、||、; 或其他 shell 语法。
+你只能读取当前工作目录内的文件，并使用受限查询命令（echo、pwd、ls、find、grep、cat、head、tail、wc、stat、du、diff、basename、dirname、realpath、rg、sed、sort、uniq、tree、file）了解项目；每个程序只开放已校验的查询参数，sort 大输入可能使用系统临时文件，这不是操作系统沙箱。
+请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、构建或测试命令。查询时可以使用固定查询命令组成的多段管道、&&/||/; 链、虚拟 cd 和 2>&1、/dev/null 尾部重定向，例如 find . -name '*.go' | head -n 20；不要使用未引用的通配符、变量、命令替换或其他重定向。
 如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户使用 --permission-mode default 重启后由审批决定；放行模式需要用户显式选择。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
 展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
@@ -477,7 +481,7 @@ func systemPromptBase(workDir string, mode permissionMode) string {
 当前工作目录：%s
 当前权限模式：默认。
 
-路径白名单内的 read、write、edit 会自动执行；用户级只读查询白名单和已记录的项目命令前缀会自动执行。可以使用受控的 cd 目录 && 简单命令链，也可以使用简单的 || 和 ;，系统会先检查全部分段再按退出状态执行；管道、重定向、命令替换和循环仍需要审批。默认模式的管道不会自动放行，查询管道请使用只读模式。含 || 的命令链只能本次允许，不提供记录。
+路径白名单内的 read、write、edit 会自动执行；用户级只读查询白名单和已记录的项目命令前缀会自动执行。可以使用受控的 cd、&&、||、;、多段固定查询管道和 2>&1、/dev/null 尾部重定向，系统会先检查全部分段再按每条流水线最后一段的原始退出码执行；未引用的通配符、变量、命令替换、循环和其他重定向需要完整 shell 审批。含 || 的命令链不提供项目永久记录，但可按符合条件的命令段创建本会话授权；危险后缀和 remember 每次询问。
 Bash 已经在当前工作目录执行，优先使用相对路径或绝对路径，不要为了切换目录拼接复杂 shell 命令。需要审批时，等待工具结果；如果用户拒绝，不要重复同一未授权操作，改用已授权的方案或说明阻塞原因。
 不要尝试绕过权限层，也不要把审批提示当作已授权。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
@@ -838,6 +842,17 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 	for _, path := range audit.Paths {
 		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})
 	}
+	for _, grant := range audit.SessionCommands {
+		record.SessionCommands = append(record.SessionCommands, session.PermissionCommandGrant{
+			CWD:       grant.WorkDir,
+			Prefix:    append([]string(nil), grant.Prefix...),
+			Argv:      append([]string(nil), grant.Argv...),
+			Redirects: append([]string(nil), grant.Redirects...),
+		})
+	}
+	for _, path := range audit.SessionPaths {
+		record.SessionPaths = append(record.SessionPaths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})
+	}
 	if err := l.recorder.RecordPermission(record); err != nil {
 		l.warn("写入权限记录", err)
 		_ = l.recorder.Close()
@@ -975,7 +990,7 @@ func printHelp(output io.Writer) {
 交互模式：
   只支持在终端直接运行 johnny 进入 TUI；参数任务、管道和重定向会被拒绝。
   每轮输入一个任务；空行不发送请求；输入完整的 /exit 或按 Ctrl+D（EOF）退出。
-  /permissions 查看固定权限名单和项目规则；支持 remove-command、remove-path、clear。
+  /permissions 查看固定权限名单、项目规则和本会话授权；支持 remove-command、remove-path、clear、clear-session。
   /skills 查看已加载 Skill；/skills reload 重新扫描；/skill <name> [参数] 显式使用。
   /context 查看上下文估算、预算、摘要、缓存指标和工具输出存档。
   /compact 手动压缩较早的已完成轮次；自动压缩在接近窗口上限时触发。
@@ -983,7 +998,8 @@ func printHelp(output io.Writer) {
   /remember [内容] 让模型起草或更新项目 AGENTS，确认后写入。
   Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
   Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
-  TUI 审批只有允许本次、拒绝本次、批准并记录；等待审批时 Ctrl+C 取消本轮。
+  TUI 审批提供允许本次、拒绝本次、本会话内允许、批准并记录；默认焦点在拒绝。
+  本会话内允许只在当前 johnny 进程内有效，主 Agent、子任务和 workflow 任务共享；等待审批时 Ctrl+C 取消本轮。
   每轮独立计算模型请求次数；单轮失败会说明原因并继续等待输入。
 上下文预算：
   JOHNNY_CONTEXT_WINDOW 模型上下文窗口，默认 1000000

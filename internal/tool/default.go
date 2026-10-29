@@ -22,7 +22,6 @@ type Default struct {
 	runtime Runtime
 	scope   *multiPathScope
 	rules   *ProjectRules
-	bash    *restrictedBash
 	shell   *Bash
 	gate    *ApprovalGate
 }
@@ -40,12 +39,12 @@ func NewDefault(base *Registry, runtime Runtime, rules *ProjectRules, gate *Appr
 	if err != nil {
 		return nil, err
 	}
+	scope.setSession(gate.Session())
 	return &Default{
 		base:    base,
 		runtime: runtime,
 		scope:   scope,
 		rules:   rules,
-		bash:    &restrictedBash{runtime: runtime, scope: scope},
 		shell:   NewBash(runtime),
 		gate:    gate,
 	}, nil
@@ -60,7 +59,7 @@ func (d *Default) Definitions() []model.ToolDefinition {
 		case "write", "edit":
 			definitions[i].Description += " 默认模式自动执行路径白名单内修改，范围外需要审批。"
 		case "bash":
-			definitions[i].Description += " 默认模式按分段检查用户级查询白名单或已记录的项目命令前缀；受控的 cd && 简单命令链、|| 和 ; 可按规则执行，只读模式支持固定查询两段管道，其他命令需要审批。"
+			definitions[i].Description += " 默认模式按分段检查用户级查询白名单或已记录的项目命令前缀；受控的 cd、&&、||、;、多段固定查询管道和 2>&1、/dev/null 尾部重定向会先检查全部分段再直接执行，其他命令或 shell 语法需要审批。"
 		case "skill":
 			definitions[i].Description += " 默认模式自动加载已发现的 Skill。"
 		case "memory":
@@ -153,8 +152,9 @@ func (d *Default) executeFile(ctx context.Context, call model.ToolCall, argument
 		Reason:     "路径不在项目路径白名单",
 		Detail:     detail,
 	}
-	if d.rules.CanRecord() {
-		if rule, err := canonicalPathRule(resolved, ""); err == nil {
+	if rule, err := canonicalPathRule(resolved, ""); err == nil {
+		request.SessionPaths = []PathRule{rule}
+		if d.rules.CanRecord() {
 			request.RecordPaths = []PathRule{rule}
 		}
 	}
@@ -214,30 +214,39 @@ func previewForApproval(text string) string {
 }
 
 type chainSegmentPlan struct {
-	index      int
-	operator   string
-	tokens     []string
-	cwd        string
-	cd         bool
-	cdTarget   string
-	query      *restrictedCommand
-	prefix     []string
-	outside    []string
-	dangerous  string
-	reason     string
-	auto       bool
-	recordable bool
+	index          int
+	pipeline       int
+	pipe           bool
+	operator       string
+	tokens         []string
+	redirects      []bashRedirect
+	cwd            string
+	cd             bool
+	cdTarget       string
+	query          *restrictedCommand
+	prefix         []string
+	outside        []string
+	dangerous      string
+	reason         string
+	auto           bool
+	recordable     bool
+	sessionBlocked bool
 }
 
 type chainPlan struct {
-	command        string
-	segments       []chainSegmentPlan
-	recordPrefixes [][]string
-	recordPaths    []PathRule
-	auto           bool
-	recordable     bool
-	hasOr          bool
-	reason         string
+	command          string
+	segments         []chainSegmentPlan
+	controlled       controlledChain
+	approvalSegments []int
+	recordPrefixes   [][]string
+	recordPaths      []PathRule
+	auto             bool
+	recordable       bool
+	hasOr            bool
+	reason           string
+	sessionCommands  []CommandGrant
+	sessionPaths     []PathRule
+	sessionBlocked   bool
 }
 
 func (d *Default) executeBash(ctx context.Context, call model.ToolCall, arguments json.RawMessage) (Result, error) {
@@ -252,59 +261,43 @@ func (d *Default) executeBash(ctx context.Context, call model.ToolCall, argument
 	if err != nil {
 		return Result{}, err
 	}
-	if chain, claimed := parseBashChain(args.Command); claimed {
-		return d.executeBashChain(ctx, call, chain, timeout)
+	chain, parseErr := parseShellCommand(args.Command)
+	if parseErr != nil {
+		return d.approveShellFallback(ctx, call, args.Command, parseErr)
 	}
-	tokens, tokenErr := tokenizeRestricted(args.Command)
-	if tokenErr == nil {
-		if hit, ok := dangerousSuffixHit(tokens[0], tokens); ok {
-			return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, nil, timeout,
-				fmt.Sprintf("命中固定危险后缀 %s，不能记录", hit))
-		}
-		if spec, parseErr := buildRestrictedCommand(args.Command, d.scope); parseErr == nil {
-			outside := d.outsidePaths(spec.paths)
-			if len(outside) == 0 {
-				return executeRestrictedSpec(ctx, d.runtime, spec, timeout)
-			}
-			return d.approveWhitelistOutside(ctx, call, args.Command, spec, outside, timeout)
-		}
-		prefix, recordable := recordablePrefix(tokens)
-		if recordable {
-			outside, pathErr := d.commandOutsidePaths(tokens)
-			if pathErr != nil {
-				return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, nil, timeout,
-					"命令包含无法解析的路径参数，不能自动放行")
-			}
-			if d.rules.ContainsPrefix(tokens) {
-				if len(outside) == 0 {
-					return d.executeDirect(ctx, tokens, timeout)
-				}
-				return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, outside, timeout,
-					"命令路径不在项目路径白名单")
-			}
-			reason := "命令不在用户级白名单或项目前缀白名单"
-			if len(outside) > 0 {
-				reason += "，且路径不在项目路径白名单"
-			}
-			return d.approveBashThenExecute(ctx, call, args.Command, tokens, [][]string{prefix}, outside, timeout, reason)
-		}
-	}
-	return d.approveBashThenExecute(ctx, call, args.Command, tokens, nil, nil, timeout,
-		bashApprovalReason(tokenErr, tokens))
-}
-
-func (d *Default) executeBashChain(ctx context.Context, call model.ToolCall, chain bashChain, timeout time.Duration) (Result, error) {
-	plan, err := d.analyzeBashChain(chain)
+	plan, err := d.analyzeShellChain(chain)
 	if err != nil {
 		return Result{}, err
 	}
 	if plan.auto {
-		return executeChainPlan(ctx, d.runtime, plan, timeout)
+		return executeControlledChain(ctx, d.runtime, plan.controlled, timeout)
 	}
 	return d.approveBashChainThenExecute(ctx, call, plan, timeout)
 }
 
-func (d *Default) analyzeBashChain(chain bashChain) (chainPlan, error) {
+// approveShellFallback 对无法安全转成 argv 的命令只做一次完整 shell 审批，
+// 且不提供项目规则或会话授权目标。
+func (d *Default) approveShellFallback(ctx context.Context, call model.ToolCall, command string, parseErr error) (Result, error) {
+	request := ApprovalRequest{
+		ToolCallID: call.ID,
+		Tool:       "bash",
+		WorkDir:    d.runtime.WorkDir,
+		Target:     command,
+		Command:    command,
+		Reason:     "命令包含需要 shell 语义或未识别的语法，需要完整 shell 审批；本次不能记录或加入会话授权",
+		Detail:     parseErr.Error(),
+	}
+	decision, err := d.approve(ctx, request)
+	if err != nil {
+		return Result{}, err
+	}
+	if !decision.Allow {
+		return d.deny(approvalDeniedMessage(request, decision))
+	}
+	return d.shell.Execute(ctx, call.Arguments)
+}
+
+func (d *Default) analyzeShellChain(chain bashChain) (chainPlan, error) {
 	plan := chainPlan{
 		command:    chain.command,
 		auto:       true,
@@ -345,111 +338,136 @@ func (d *Default) analyzeBashChain(chain bashChain) (chainPlan, error) {
 		seenPrefixes[key] = true
 		plan.recordPrefixes = append(plan.recordPrefixes, append([]string(nil), prefix...))
 	}
-
-	for index, segment := range chain.segments {
-		part := chainSegmentPlan{
-			index:      index + 1,
-			operator:   segment.operator,
-			tokens:     append([]string(nil), segment.tokens...),
-			cwd:        currentDir,
-			auto:       true,
-			recordable: true,
+	finishPart := func(part chainSegmentPlan) {
+		commands, paths, eligible := d.segmentSessionRequirements(part)
+		if !eligible {
+			plan.sessionBlocked = true
+		} else {
+			plan.sessionCommands = append(plan.sessionCommands, commands...)
+			plan.sessionPaths = append(plan.sessionPaths, paths...)
+			if len(commands) == 0 && len(paths) == 0 {
+				part.auto = true
+			}
 		}
-		if segment.operator == "||" {
+		if !part.auto {
+			plan.auto = false
+			plan.approvalSegments = append(plan.approvalSegments, part.index)
+		}
+		plan.segments = append(plan.segments, part)
+	}
+
+	for pipelineIndex, pipeline := range chain.pipelines {
+		plannedPipeline := controlledPipeline{operator: pipeline.operator}
+		if pipeline.operator == "||" {
 			plan.hasOr = true
 		}
-		if segment.tokens[0] == "cd" {
-			resolved, err := d.scope.resolveExistingFrom(currentDir, segment.tokens[1])
-			if err != nil {
-				return chainPlan{}, executionError(fmt.Sprintf("cd 目标不可用：%s", segment.tokens[1]), err)
+		for segmentIndex := pipeline.start; segmentIndex < pipeline.end; segmentIndex++ {
+			segment := chain.segments[segmentIndex]
+			part := chainSegmentPlan{
+				index:      segmentIndex + 1,
+				pipeline:   pipelineIndex + 1,
+				pipe:       segment.pipe,
+				operator:   segment.operator,
+				tokens:     append([]string(nil), segment.tokens...),
+				redirects:  append([]bashRedirect(nil), segment.redirects...),
+				cwd:        currentDir,
+				auto:       true,
+				recordable: true,
 			}
-			info, err := os.Stat(resolved)
-			if err != nil {
-				return chainPlan{}, executionError(fmt.Sprintf("cd 目标不可用：%s", segment.tokens[1]), err)
-			}
-			if !info.IsDir() {
-				return chainPlan{}, executionError(fmt.Sprintf("cd 目标不是目录：%s", segment.tokens[1]), nil)
-			}
-			part.cd = true
-			part.cdTarget = resolved
-			if !d.scope.contains(resolved) {
-				part.auto = false
-				addReason("cd 目标不在项目路径白名单")
-				addPath(resolved, PathKindDir)
-			}
-			plan.segments = append(plan.segments, part)
-			if !part.auto {
-				plan.auto = false
-			}
-			currentDir = resolved
-			continue
-		}
-
-		resolver := chainPathResolver{scope: d.scope, base: currentDir}
-		if hit, ok := dangerousSuffixHit(segment.tokens[0], segment.tokens); ok {
-			part.dangerous = hit
-			part.auto = false
-			part.recordable = false
-			plan.recordable = false
-			addReason(fmt.Sprintf("分段命中固定危险后缀 %s", hit))
-			plan.segments = append(plan.segments, part)
-			plan.auto = false
-			continue
-		}
-		if spec, err := buildRestrictedCommandTokens(segment.tokens, resolver, false); err == nil {
-			part.query = &spec
-			part.outside = d.outsidePaths(spec.paths)
-			if len(part.outside) > 0 {
-				part.auto = false
-				addReason("查询路径不在项目路径白名单")
-				for _, path := range part.outside {
-					addPath(path, "")
+			if segment.tokens[0] == "cd" {
+				resolved, err := d.scope.resolveExistingFrom(currentDir, segment.tokens[1])
+				if err != nil {
+					return chainPlan{}, executionError(fmt.Sprintf("cd 目标不可用：%s", segment.tokens[1]), err)
 				}
+				info, err := os.Stat(resolved)
+				if err != nil {
+					return chainPlan{}, executionError(fmt.Sprintf("cd 目标不可用：%s", segment.tokens[1]), err)
+				}
+				if !info.IsDir() {
+					return chainPlan{}, executionError(fmt.Sprintf("cd 目标不是目录：%s", segment.tokens[1]), nil)
+				}
+				part.cd = true
+				part.cdTarget = resolved
+				if !d.scope.contains(resolved) {
+					part.auto = false
+					addReason("cd 目标不在项目路径白名单")
+					addPath(resolved, PathKindDir)
+				}
+				finishPart(part)
+				currentDir = resolved
+				plannedPipeline.virtual = true
+				continue
 			}
-			plan.segments = append(plan.segments, part)
-			if !part.auto {
-				plan.auto = false
-			}
-			continue
-		}
 
-		prefix, ok := recordablePrefix(segment.tokens)
-		if ok {
-			outside, err := d.commandOutsidePathsFrom(segment.tokens, currentDir)
-			if err != nil {
+			resolver := chainPathResolver{scope: d.scope, base: currentDir}
+			if hit, ok := dangerousSuffixHit(segment.tokens[0], segment.tokens); ok {
+				part.dangerous = hit
 				part.auto = false
 				part.recordable = false
 				plan.recordable = false
-				addReason("分段包含无法解析的路径参数")
-			} else {
-				part.prefix = append([]string(nil), prefix...)
-				part.outside = outside
-				if len(outside) > 0 {
+				addReason(fmt.Sprintf("分段命中固定危险后缀 %s", hit))
+				plannedPipeline.segments = append(plannedPipeline.segments, directControlledSegment(segment.tokens, segment.redirects, currentDir, d.runtime.Env))
+				finishPart(part)
+				continue
+			}
+			spec, queryErr := buildRestrictedCommandTokens(segment.tokens, resolver, segment.pipe)
+			if queryErr == nil {
+				part.query = &spec
+				part.outside = d.outsidePaths(spec.paths)
+				if len(part.outside) > 0 {
 					part.auto = false
-					addReason("命令路径不在项目路径白名单")
-					for _, path := range outside {
+					addReason("查询路径不在项目路径白名单")
+					for _, path := range part.outside {
 						addPath(path, "")
 					}
 				}
-				if !d.rules.ContainsPrefix(segment.tokens) {
-					part.auto = false
-					addPrefix(prefix)
-					addReason("分段命令不在项目前缀白名单")
-				}
+				plannedPipeline.segments = append(plannedPipeline.segments, queryControlledSegment(spec, segment.redirects, currentDir, restrictedEnvironment(d.runtime.Env)))
+				finishPart(part)
+				continue
 			}
-			plan.segments = append(plan.segments, part)
-			if !part.auto {
-				plan.auto = false
-			}
-			continue
-		}
 
-		part.auto = false
-		part.recordable = false
-		plan.recordable = false
-		addReason("分段命令不在用户级白名单或项目前缀白名单")
-		plan.segments = append(plan.segments, part)
-		plan.auto = false
+			if prefix, ok := recordablePrefix(segment.tokens); ok {
+				outside, pathErr := d.commandOutsidePathsFrom(segment.tokens, currentDir)
+				if pathErr != nil {
+					part.auto = false
+					part.recordable = false
+					part.sessionBlocked = true
+					plan.recordable = false
+					addReason("分段包含无法解析的路径参数")
+				} else {
+					part.prefix = append([]string(nil), prefix...)
+					part.outside = outside
+					if len(outside) > 0 {
+						part.auto = false
+						addReason("命令路径不在项目路径白名单")
+						for _, path := range outside {
+							addPath(path, "")
+						}
+					}
+					if !d.rules.ContainsPrefix(segment.tokens) {
+						part.auto = false
+						addPrefix(prefix)
+						addReason("分段命令不在项目前缀白名单")
+					}
+				}
+				plannedPipeline.segments = append(plannedPipeline.segments, directControlledSegment(segment.tokens, segment.redirects, currentDir, d.runtime.Env))
+				finishPart(part)
+				continue
+			}
+
+			// 未知程序仍按直接 argv 执行；本次审批通过后不会回退到 shell。
+			part.auto = false
+			part.recordable = false
+			plan.recordable = false
+			if _, known := fixedQueryCommandByName[segment.tokens[0]]; known {
+				addReason("查询形式未通过自动放行校验：" + queryErr.Error())
+			} else {
+				addReason("分段命令不在用户级白名单或项目前缀白名单")
+			}
+			plannedPipeline.segments = append(plannedPipeline.segments, directControlledSegment(segment.tokens, segment.redirects, currentDir, d.runtime.Env))
+			finishPart(part)
+		}
+		plan.controlled.pipelines = append(plan.controlled.pipelines, plannedPipeline)
 	}
 	if plan.hasOr {
 		plan.recordable = false
@@ -460,6 +478,10 @@ func (d *Default) analyzeBashChain(chain bashChain) (chainPlan, error) {
 }
 
 func (d *Default) approveBashChainThenExecute(ctx context.Context, call model.ToolCall, plan chainPlan, timeout time.Duration) (Result, error) {
+	detail := fmt.Sprintf("将按 %d 段直接执行，不经过 shell。", len(plan.segments))
+	if len(plan.approvalSegments) > 0 {
+		detail += "需要审批的分段：" + formatSegmentIndices(plan.approvalSegments) + "。"
+	}
 	request := ApprovalRequest{
 		ToolCallID: call.ID,
 		Tool:       "bash",
@@ -467,7 +489,11 @@ func (d *Default) approveBashChainThenExecute(ctx context.Context, call model.To
 		Target:     plan.command,
 		Command:    plan.command,
 		Reason:     plan.reason,
-		Detail:     fmt.Sprintf("将按 %d 段直接执行，不经过 shell。", len(plan.segments)),
+		Detail:     detail,
+	}
+	if !plan.sessionBlocked {
+		request.SessionCommands = plan.sessionCommands
+		request.SessionPaths = plan.sessionPaths
 	}
 	if d.rules.CanRecord() && plan.recordable {
 		request.RecordPrefixes = clonePrefixes(plan.recordPrefixes)
@@ -485,164 +511,18 @@ func (d *Default) approveBashChainThenExecute(ctx context.Context, call model.To
 	if !decision.Allow {
 		return d.deny(approvalDeniedMessage(request, decision))
 	}
-	return executeChainPlan(ctx, d.runtime, plan, timeout)
+	return executeControlledChain(ctx, d.runtime, plan.controlled, timeout)
 }
 
-func executeChainPlan(ctx context.Context, runtime Runtime, plan chainPlan, timeout time.Duration) (Result, error) {
-	if ctx == nil {
-		ctx = context.Background()
+func formatSegmentIndices(indices []int) string {
+	if len(indices) == 0 {
+		return "无"
 	}
-	deadline := time.Now().Add(timeout)
-	var output strings.Builder
-	truncated := false
-	appendOutput := func(content string) {
-		if truncated || content == "" {
-			return
-		}
-		limit := runtime.MaxOutputBytes
-		if limit <= 0 || output.Len()+len(content) <= limit {
-			output.WriteString(content)
-			return
-		}
-		remaining := limit - output.Len()
-		if remaining > 0 {
-			output.WriteString(content[:remaining])
-		}
-		truncated = true
+	parts := make([]string, 0, len(indices))
+	for _, index := range indices {
+		parts = append(parts, strconv.Itoa(index))
 	}
-
-	lastCode := 0
-	var lastResult Result
-	var lastErr error
-	lastCompleted := true
-	for index, segment := range plan.segments {
-		if index > 0 {
-			switch segment.operator {
-			case "&&":
-				if lastCode != 0 {
-					continue
-				}
-			case "||":
-				if lastCode == 0 {
-					continue
-				}
-			case ";":
-				// Always execute after a completed command.
-			}
-		}
-		if segment.cd {
-			lastCode = 0
-			lastCompleted = true
-			continue
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return Result{Content: output.String(), IsError: true}, executionError("命令链执行超时", context.DeadlineExceeded)
-		}
-		segmentRuntime := runtime
-		segmentRuntime.WorkDir = segment.cwd
-		var outcome argvOutcome
-		if segment.query != nil {
-			outcome = executeRestrictedSpecOutcome(ctx, segmentRuntime, *segment.query, remaining)
-		} else {
-			if len(segment.tokens) == 0 {
-				return Result{Content: output.String(), IsError: true}, invalidArguments("命令链包含空分段", nil)
-			}
-			spec := restrictedCommand{program: segment.tokens[0], args: append([]string(nil), segment.tokens[1:]...)}
-			outcome = executeArgvOutcome(ctx, segmentRuntime, spec, remaining, segmentRuntime.Env, nil)
-		}
-		appendOutput(outcome.result.Content)
-		lastResult, lastErr, lastCode = outcome.result, outcome.err, outcome.exitCode
-		lastCompleted = outcome.err == nil || outcome.exitCode >= 0
-		if outcome.err != nil && outcome.exitCode < 0 {
-			content := output.String()
-			if truncated && !strings.HasSuffix(content, "\n[输出已截断：超过限制，已省略后续内容]") {
-				content += "\n[输出已截断：超过限制，已省略后续内容]"
-			}
-			return Result{Content: content, IsError: true}, outcome.err
-		}
-	}
-	content := output.String()
-	if truncated {
-		content += "\n[输出已截断：超过限制，已省略后续内容]"
-	}
-	if !lastCompleted {
-		return Result{Content: content, IsError: true}, lastErr
-	}
-	if lastCode != 0 {
-		return Result{Content: content, IsError: lastResult.IsError}, lastErr
-	}
-	return Result{Content: content}, nil
-}
-
-func (d *Default) approveWhitelistOutside(ctx context.Context, call model.ToolCall, command string, spec restrictedCommand, outside []string, timeout time.Duration) (Result, error) {
-	request := ApprovalRequest{
-		ToolCallID: call.ID,
-		Tool:       "bash",
-		WorkDir:    d.runtime.WorkDir,
-		Target:     command,
-		Command:    command,
-		Reason:     "查询路径不在项目路径白名单",
-	}
-	if d.rules.CanRecord() {
-		request.RecordPaths = d.recordPathRules(outside)
-	}
-	decision, err := d.approve(ctx, request)
-	if err != nil {
-		return Result{}, err
-	}
-	if !decision.Allow {
-		return d.deny(approvalDeniedMessage(request, decision))
-	}
-	return executeRestrictedSpec(ctx, d.runtime, spec, timeout)
-}
-
-func (d *Default) approveBashThenExecute(ctx context.Context, call model.ToolCall, command string, tokens []string, prefixes [][]string, outside []string, timeout time.Duration, reason string) (Result, error) {
-	request := ApprovalRequest{
-		ToolCallID: call.ID,
-		Tool:       "bash",
-		WorkDir:    d.runtime.WorkDir,
-		Target:     command,
-		Command:    command,
-		Reason:     reason,
-	}
-	if d.rules.CanRecord() {
-		request.RecordPrefixes = clonePrefixes(prefixes)
-		for _, prefix := range prefixes {
-			if warning := prefixExecutionWarning(prefix); warning != "" {
-				request.Detail += warning
-			}
-		}
-		request.RecordPaths = d.recordPathRules(outside)
-	}
-	decision, err := d.approve(ctx, request)
-	if err != nil {
-		return Result{}, err
-	}
-	if !decision.Allow {
-		return d.deny(approvalDeniedMessage(request, decision))
-	}
-	if tokens == nil || requiresShell(tokens) {
-		return d.shell.Execute(ctx, call.Arguments)
-	}
-	return d.executeDirect(ctx, tokens, timeout)
-}
-
-func (d *Default) recordPathRules(paths []string) []PathRule {
-	if !d.rules.CanRecord() {
-		return nil
-	}
-	rules := make([]PathRule, 0, len(paths))
-	seen := make(map[string]bool)
-	for _, path := range paths {
-		rule, err := canonicalPathRule(path, "")
-		if err != nil || seen[rule.Path+"\x00"+string(rule.Kind)] {
-			continue
-		}
-		seen[rule.Path+"\x00"+string(rule.Kind)] = true
-		rules = append(rules, rule)
-	}
-	return rules
+	return strings.Join(parts, "、")
 }
 
 func prefixExecutionWarning(prefix []string) string {
@@ -668,14 +548,6 @@ func prefixExecutionWarning(prefix []string) string {
 	return ""
 }
 
-func (d *Default) executeDirect(ctx context.Context, tokens []string, timeout time.Duration) (Result, error) {
-	if len(tokens) == 0 {
-		return Result{}, invalidArguments("命令不能为空", nil)
-	}
-	spec := restrictedCommand{program: tokens[0], args: append([]string(nil), tokens[1:]...)}
-	return executeArgv(ctx, d.runtime, spec, timeout, d.runtime.Env, nil)
-}
-
 func (d *Default) outsidePaths(paths []string) []string {
 	seen := make(map[string]bool)
 	outside := make([]string, 0, len(paths))
@@ -687,13 +559,6 @@ func (d *Default) outsidePaths(paths []string) []string {
 		outside = append(outside, path)
 	}
 	return outside
-}
-
-// commandOutsidePaths 对项目前缀命令做可识别的路径参数检查。它只检查
-// 命令行中形似路径的 token 和常见选项值，无法约束脚本内部访问；真正的
-// 硬边界仍需要 OS sandbox。
-func (d *Default) commandOutsidePaths(tokens []string) ([]string, error) {
-	return d.commandOutsidePathsFrom(tokens, d.scope.workDir)
 }
 
 func (d *Default) commandOutsidePathsFrom(tokens []string, base string) ([]string, error) {
@@ -751,6 +616,9 @@ func likelyPathToken(value string) bool {
 
 func (d *Default) approve(ctx context.Context, request ApprovalRequest) (ApprovalDecision, error) {
 	request.Origin = OriginFrom(ctx)
+	if d.gate.TrySession(request) {
+		return ApprovalDecision{Allow: true, Source: ApprovalSourceSession, Reason: "命中本会话授权"}, nil
+	}
 	decision, err := d.gate.Ask(ctx, request)
 	if err != nil {
 		d.gate.Audit(request, ApprovalDecision{Source: "error", Reason: err.Error()})
@@ -777,23 +645,18 @@ func (d *Default) deny(message string) (Result, error) {
 	return Result{Content: message, IsError: true}, permissionDenied(message, nil)
 }
 
-func bashApprovalReason(tokenErr error, tokens []string) string {
-	if tokenErr != nil {
-		return "命令包含未解析的 shell 语法，不能记录；可拆成 cd && 简单命令，管道和重定向仍需本次审批"
-	}
-	if tokens != nil && requiresShell(tokens) {
-		return "命令需要 shell 语义，不能记录"
-	}
-	return "命令不在用户级白名单或项目前缀白名单"
-}
-
 var shellBuiltinCommands = map[string]bool{
-	"cd": true, "export": true, "set": true, "unset": true, "alias": true,
+	"cd": true, ":": true, "export": true, "set": true, "unset": true, "alias": true,
 	"unalias": true, "source": true, ".": true, "eval": true, "exec": true,
 	"command": true, "builtin": true, "ulimit": true, "umask": true,
 	"read": true, "shift": true, "trap": true, "type": true, "hash": true,
 	"jobs": true, "fg": true, "bg": true, "wait": true, "return": true,
 	"break": true, "continue": true, "test": true, "[": true,
+	"local": true, "declare": true, "typeset": true, "let": true, "mapfile": true,
+	"readarray": true, "caller": true, "enable": true, "help": true, "history": true,
+	"logout": true, "popd": true, "pushd": true, "dirs": true, "disown": true,
+	"suspend": true, "times": true, "bind": true, "compgen": true, "complete": true,
+	"compopt": true, "shopt": true, "getopts": true,
 }
 
 func requiresShell(tokens []string) bool {

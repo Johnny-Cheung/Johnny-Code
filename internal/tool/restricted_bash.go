@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -175,7 +174,7 @@ func queryPathError(path string, err error) error {
 // 不启动 shell，只直接执行白名单程序。
 type restrictedBash struct {
 	runtime Runtime
-	scope   queryPathResolver
+	scope   workspaceScope
 }
 
 func newRestrictedBash(runtime Runtime) (*restrictedBash, error) {
@@ -201,35 +200,97 @@ func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSec
 	if err != nil {
 		return Result{}, err
 	}
-	if _, claimed := splitReadonlyPipeline(command); claimed {
-		pipeline, err := buildRestrictedPipeline(command, b.scope)
-		if err != nil {
-			return Result{}, err
-		}
-		return executeRestrictedPipelineWithTimeout(ctx, b.runtime, pipeline, timeout)
+	chain, parseErr := parseShellCommand(command)
+	if parseErr != nil {
+		return Result{}, permissionDenied("只读模式不支持该 shell 语法", parseErr)
 	}
-	spec, err := buildRestrictedCommand(command, b.scope)
+	controlled, err := buildRestrictedChain(chain, b.scope, b.runtime.Env)
 	if err != nil {
 		return Result{}, err
 	}
-	return executeRestrictedSpec(ctx, b.runtime, spec, timeout)
+	return executeControlledChain(ctx, b.runtime, controlled, timeout)
 }
 
-func executeRestrictedSpecOutcome(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) argvOutcome {
-	successExitCodes := map[int]bool{}
-	if spec.program == "grep" || spec.program == "diff" || spec.program == "rg" {
-		successExitCodes[1] = true
-	}
-	outcome := executeArgvOutcome(ctx, runtime, spec, timeout, restrictedEnvironment(runtime.Env), successExitCodes)
-	if outcome.err == nil && (spec.program == "grep" || spec.program == "rg") && strings.TrimSpace(outcome.result.Content) == "" {
-		outcome.result.Content = "（无匹配）"
-	}
-	return outcome
+// workspaceChainResolver 在虚拟 cd 之后继续把相对路径解析到新的基准目录，
+// 同时仍然要求结果位于只读工作目录内。
+type workspaceChainResolver struct {
+	scope workspaceScope
+	base  string
 }
 
-func executeRestrictedSpec(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) (Result, error) {
-	outcome := executeRestrictedSpecOutcome(ctx, runtime, spec, timeout)
-	return outcome.result, outcome.err
+func (r workspaceChainResolver) resolve(path string) (string, error) {
+	return resolveWorkspaceFrom(r.scope, r.base, path, false)
+}
+
+func (r workspaceChainResolver) resolveExisting(path string) (string, error) {
+	return resolveWorkspaceFrom(r.scope, r.base, path, true)
+}
+
+func resolveWorkspaceFrom(scope workspaceScope, base, path string, existing bool) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("路径不能为空")
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return "", errors.New("路径包含无效字符")
+	}
+	if strings.TrimSpace(base) == "" {
+		return "", errors.New("路径基准不能为空")
+	}
+	// 不做 TrimSpace/Clean：符号链接之后的 ".." 必须按内核语义解析，
+	// 且以空格结尾的目录名是合法目标。
+	resolved, err := resolvePathFromBase(base, path)
+	if err != nil {
+		return "", err
+	}
+	if !scope.contains(resolved) {
+		return "", fmt.Errorf("%w: %s", errPathOutsideWorkspace, path)
+	}
+	if existing {
+		if _, err := os.Stat(resolved); err != nil {
+			return "", err
+		}
+	}
+	return resolved, nil
+}
+
+// buildRestrictedChain 在启动任何进程之前校验全部命令段、路径和 cd 目标。
+func buildRestrictedChain(chain bashChain, scope workspaceScope, baseEnv []string) (controlledChain, error) {
+	currentDir := scope.root
+	env := restrictedEnvironment(baseEnv)
+	controlled := controlledChain{pipelines: make([]controlledPipeline, 0, len(chain.pipelines))}
+	for _, pipeline := range chain.pipelines {
+		planned := controlledPipeline{operator: pipeline.operator}
+		for index := pipeline.start; index < pipeline.end; index++ {
+			segment := chain.segments[index]
+			if segment.tokens[0] == "cd" {
+				target, err := resolveWorkspaceFrom(scope, currentDir, segment.tokens[1], true)
+				if err != nil {
+					if errors.Is(err, errPathOutsideWorkspace) {
+						return controlledChain{}, permissionDenied(fmt.Sprintf("只读模式不允许切换到工作目录外的目录 %q", segment.tokens[1]), err)
+					}
+					return controlledChain{}, executionError(fmt.Sprintf("cd 目标不可用：%s", segment.tokens[1]), err)
+				}
+				info, err := os.Stat(target)
+				if err != nil {
+					return controlledChain{}, executionError(fmt.Sprintf("cd 目标不可用：%s", segment.tokens[1]), err)
+				}
+				if !info.IsDir() {
+					return controlledChain{}, executionError(fmt.Sprintf("cd 目标不是目录：%s", segment.tokens[1]), nil)
+				}
+				currentDir = target
+				planned.virtual = true
+				continue
+			}
+			resolver := workspaceChainResolver{scope: scope, base: currentDir}
+			spec, err := buildRestrictedCommandTokens(segment.tokens, resolver, segment.pipe)
+			if err != nil {
+				return controlledChain{}, err
+			}
+			planned.segments = append(planned.segments, queryControlledSegment(spec, segment.redirects, currentDir, env))
+		}
+		controlled.pipelines = append(controlled.pipelines, planned)
+	}
+	return controlled, nil
 }
 
 // restrictedEnvironment 只保留查询命令运行所需的最小环境，避免把 Johnny、

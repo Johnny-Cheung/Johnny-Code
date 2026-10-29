@@ -282,7 +282,7 @@ func TestRestrictedBashRejectsBeforeStarting(t *testing.T) {
 	}
 	for _, command := range []string{
 		"find . -delete",
-		"ls | cat",
+		"ls | sh",
 		"ls -L",
 	} {
 		_, err := b.execute(context.Background(), command, nil)

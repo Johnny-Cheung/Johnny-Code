@@ -159,7 +159,7 @@ func TestReadOnlyBashUsesWhitelist(t *testing.T) {
 	if err != nil || !strings.Contains(result.Content, "file.txt") {
 		t.Fatalf("只读 bash 管道失败：%q %v", result.Content, err)
 	}
-	_, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "ls | cat"})
+	_, err = executeReadOnly(t, readOnly, "bash", map[string]any{"command": "ls | sh"})
 	requireToolKind(t, err, KindPermissionDenied)
 }
 
