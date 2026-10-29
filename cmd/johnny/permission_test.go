@@ -17,3 +17,37 @@ func TestPermissionModeParsing(t *testing.T) {
 		t.Fatal("权限模式展示标签错误")
 	}
 }
+
+func TestResolvePermissionModeFlags(t *testing.T) {
+	for _, test := range []struct {
+		value   string
+		set     bool
+		read    bool
+		skip    bool
+		want    permissionMode
+		wantErr bool
+	}{
+		{"", false, false, false, permissionDefault, false},
+		{"", false, true, false, permissionReadOnly, false},
+		{"", false, false, true, permissionAllow, false},
+		{"", false, true, true, "", true},
+		{"read-only", true, true, false, permissionReadOnly, false},
+		{"read-only", true, false, true, "", true},
+		{"allow", true, false, true, permissionAllow, false},
+		{"default", true, false, false, permissionDefault, false},
+		{"default", true, true, false, "", true},
+		{"", true, false, false, "", true},
+		{"bad", true, false, false, "", true},
+	} {
+		got, err := resolvePermissionMode(test.value, test.set, test.read, test.skip)
+		if test.wantErr {
+			if err == nil {
+				t.Fatalf("value=%q set=%v read=%v skip=%v 应报错", test.value, test.set, test.read, test.skip)
+			}
+			continue
+		}
+		if err != nil || got != test.want {
+			t.Fatalf("value=%q set=%v read=%v skip=%v 得到 %q、%v，预期 %q", test.value, test.set, test.read, test.skip, got, err, test.want)
+		}
+	}
+}

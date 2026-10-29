@@ -135,7 +135,7 @@ func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 			if !strings.Contains(output.String(), "v"+version) || !strings.Contains(output.String(), commit) {
 				t.Fatal("版本输出缺少构建信息")
 			}
-		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
+		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--read") || !strings.Contains(output.String(), "--skip") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
 			t.Fatal("帮助输出缺少 TUI 入口、退出方式或现有配置位置")
 		}
 		if stderr.Len() != 0 {
@@ -165,6 +165,9 @@ func TestInvalidFlagsDoNotRequestOrCreateLogs(t *testing.T) {
 		{"--max-turns", "-1", "你好"},
 		{"--max-turns", "abc", "你好"},
 		{"--permission-mode", "bad", "你好"},
+		{"--permission-mode", "", "你好"},
+		{"--read", "--skip", "你好"},
+		{"--read", "--permission-mode", "allow", "你好"},
 	} {
 		var output, stderr bytes.Buffer
 		if code := runLegacy(context.Background(), args, strings.NewReader(""), &output, &stderr); code == 0 {
@@ -198,6 +201,9 @@ func TestArgumentModeExecutesOnceWithoutReadingStdin(t *testing.T) {
 	}
 	if output.String() != "答复\n" {
 		t.Fatalf("正文输出错误：%q", output.String())
+	}
+	if !strings.Contains(stderr.String(), "权限模式：默认") {
+		t.Fatalf("不带权限参数应使用默认模式：%s", stderr.String())
 	}
 	if after, err := os.Getwd(); err != nil || after != before {
 		t.Fatal("问答过程不应切换工作目录")
@@ -587,7 +593,7 @@ func TestCLIReadOnlyModeRejectsWritesAndAllowsQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output, stderr bytes.Buffer
-	code := runLegacy(context.Background(), []string{"--permission-mode", "read-only", "检查项目"}, strings.NewReader(""), &output, &stderr)
+	code := runLegacy(context.Background(), []string{"--read", "检查项目"}, strings.NewReader(""), &output, &stderr)
 	if code != 0 || requests.Load() != 4 {
 		t.Fatalf("code=%d requests=%d stderr=%s", code, requests.Load(), stderr.String())
 	}
@@ -774,7 +780,7 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 		}
 	}
 	readOnly := systemPrompt("/tmp/johnny work", permissionReadOnly, nil)
-	for _, want := range []string{"/tmp/johnny work", "只读", "pwd", "ls", "find", "grep", "多段管道", "--permission-mode default", "不要尝试 write、edit"} {
+	for _, want := range []string{"/tmp/johnny work", "只读", "pwd", "ls", "find", "grep", "多段管道", "重新启动 johnny", "--skip", "不要尝试 write、edit"} {
 		if !strings.Contains(readOnly, want) {
 			t.Fatalf("只读系统提示缺少 %q：%s", want, readOnly)
 		}

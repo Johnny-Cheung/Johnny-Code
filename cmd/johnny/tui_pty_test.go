@@ -45,7 +45,13 @@ func TestTerminalHelperProcess(t *testing.T) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() { <-ctx.Done(); stop() }()
 	var args []string
-	if mode := os.Getenv("JOHNNY_TUI_TEST_MODE"); mode != "" {
+	switch mode := os.Getenv("JOHNNY_TUI_TEST_MODE"); mode {
+	case "", "default":
+	case "read-only":
+		args = []string{"--read"}
+	case "allow":
+		args = []string{"--skip"}
+	default:
 		args = []string{"--permission-mode", mode}
 	}
 	code := run(ctx, args, os.Stdin, os.Stdout, os.Stderr)

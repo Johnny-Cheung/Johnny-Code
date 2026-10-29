@@ -69,7 +69,9 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	api := flags.String("api", "", "临时选择 API 协议")
 	modelName := flags.String("model", "", "临时选择模型")
 	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "每轮任务最多模型请求次数")
-	permissionFlag := flags.String("permission-mode", string(permissionAllow), "权限模式：default、read-only 或 allow")
+	readOnlyFlag := flags.Bool("read", false, "只读模式")
+	skipFlag := flags.Bool("skip", false, "放行模式：跳过逐次审批")
+	permissionFlag := flags.String("permission-mode", "", "权限模式长写法：default、read-only 或 allow")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -86,7 +88,13 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		fmt.Fprintln(stderr, "--max-turns 必须是正整数。")
 		return 1
 	}
-	mode, err := parsePermissionMode(*permissionFlag)
+	permissionSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "permission-mode" {
+			permissionSet = true
+		}
+	})
+	mode, err := resolvePermissionMode(*permissionFlag, permissionSet, *readOnlyFlag, *skipFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -451,7 +459,7 @@ func printPermissionNotice(output io.Writer, mode permissionMode) {
 	case permissionDefault:
 		fmt.Fprintln(output, "权限模式：默认（路径白名单内自动；其他操作需要审批；当前非 TUI 入口的审批会被拒绝）。")
 	case permissionAllow:
-		fmt.Fprintln(output, "权限模式：放行（开发阶段默认；工具直接执行，不逐次审批）。")
+		fmt.Fprintln(output, "权限模式：放行（工具直接执行，不逐次审批）。")
 	}
 }
 
@@ -471,7 +479,7 @@ func systemPromptBase(workDir string, mode permissionMode) string {
 
 你只能读取当前工作目录内的文件，并使用受限查询命令（echo、pwd、ls、find、grep、cat、head、tail、wc、stat、du、diff、basename、dirname、realpath、rg、sed、sort、uniq、tree、file）了解项目；每个程序只开放已校验的查询参数，sort 大输入可能使用系统临时文件，这不是操作系统沙箱。
 请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、构建或测试命令。查询时可以使用固定查询命令组成的多段管道、&&/||/; 链、虚拟 cd 和 2>&1、/dev/null 尾部重定向，例如 find . -name '*.go' | head -n 20；不要使用未引用的通配符、变量、命令替换或其他重定向。
-如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户使用 --permission-mode default 重启后由审批决定；放行模式需要用户显式选择。
+如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户重新启动 johnny 进入默认模式，由审批决定；放行模式需要用户显式使用 --skip。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
 展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
 完成任务后，用简洁的中文总结结果。`, workDir)
@@ -977,14 +985,18 @@ func printHelp(output io.Writer) {
 	fmt.Fprintf(output, `Johnny-Code
 
 用法：
-  johnny            在终端进入 TUI 交互模式，保留本进程历史，直到 /exit 或 EOF
+  johnny            在终端进入 TUI 交互模式，默认逐次审批，直到 /exit 或 EOF
+  johnny --read     只读模式
+  johnny --skip     放行模式，跳过逐次审批
 
 选项：
   -h, --help        显示帮助
   --version         显示版本和提交号
   --model 名称      临时覆盖模型名（选项放在 johnny 之后）
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
-  --permission-mode 模式  default、read-only 或 allow；未指定时使用 allow（开发阶段直接执行；default 为逐次审批）
+  --read            只读模式：拒绝写入，bash 只允许固定查询
+  --skip            放行模式：工具直接执行，不逐次审批
+  --permission-mode 模式  等价的长写法：default、read-only 或 allow；与 --read/--skip 同时使用时必须一致
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
 
 交互模式：
