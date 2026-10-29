@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -271,6 +272,24 @@ func TestDefaultBashGlobIsRejectedWithoutApproval(t *testing.T) {
 	for _, want := range []string{"通配符", "find -name", "不展开", "--skip"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("通配符拒绝缺少 %q：%v", want, err)
+		}
+	}
+}
+
+func TestDefaultBashSegmentLimitIsRejectedWithoutApproval(t *testing.T) {
+	permissioned, _, _, approver := defaultTest(t)
+	command := "pwd"
+	for i := 0; i < maxCommandChainSegments; i++ {
+		command += " && pwd"
+	}
+	_, err := executeDefault(t, permissioned, "bash", map[string]any{"command": command})
+	requireToolKind(t, err, KindPermissionDenied)
+	if requests := approver.snapshot(); len(requests) != 0 {
+		t.Fatalf("超长命令不应发起审批：%#v", requests)
+	}
+	for _, want := range []string{fmt.Sprintf("%d 段", maxCommandChainSegments+1), "拆成多条", "--skip"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("段数超限拒绝缺少 %q：%v", want, err)
 		}
 	}
 }

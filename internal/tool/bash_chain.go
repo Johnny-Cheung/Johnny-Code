@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-const maxCommandChainSegments = 8
+const maxCommandChainSegments = 16
 
 var (
 	errShellNeedsShell = errors.New("命令包含需要 shell 语义的语法")
@@ -17,15 +17,19 @@ var (
 	// errShellGlob 单独标记未引用的通配符：默认模式直接拒绝，不再回退
 	// 到完整 shell 审批，避免每次换参数都重新询问。
 	errShellGlob = errors.New("命令包含未引用的通配符")
+	// errShellSegmentLimit 标记命令段落数超限：默认模式直接拒绝，让模型
+	// 拆分后重试，而不是把一整条长链交给 shell 审批。
+	errShellSegmentLimit = errors.New("命令段落数超过上限")
 )
 
 // shellSyntaxError 说明命令为什么不能直接转换成 argv。needsShell 为真时，
 // 默认模式回退到一次完整 shell 审批；只读模式一律拒绝。glob 为真时默认
-// 模式也直接拒绝，并提示改用 find -name。
+// 模式也直接拒绝，并提示改用 find -name；limit 为真时直接拒绝并提示拆分。
 type shellSyntaxError struct {
 	message    string
 	needsShell bool
 	glob       bool
+	limit      bool
 }
 
 func (e *shellSyntaxError) Error() string { return e.message }
@@ -33,6 +37,9 @@ func (e *shellSyntaxError) Error() string { return e.message }
 func (e *shellSyntaxError) Unwrap() error {
 	if e.glob {
 		return errShellGlob
+	}
+	if e.limit {
+		return errShellSegmentLimit
 	}
 	if e.needsShell {
 		return errShellNeedsShell
@@ -46,6 +53,10 @@ func shellNeedsShell(format string, args ...any) error {
 
 func shellGlob(format string, args ...any) error {
 	return &shellSyntaxError{message: fmt.Sprintf(format, args...), needsShell: true, glob: true}
+}
+
+func shellSegmentLimit(format string, args ...any) error {
+	return &shellSyntaxError{message: fmt.Sprintf(format, args...), limit: true}
 }
 
 func shellUnsupported(format string, args ...any) error {
@@ -110,7 +121,7 @@ func parseShellCommand(command string) (bashChain, error) {
 		return bashChain{}, err
 	}
 	if len(parts) > maxCommandChainSegments {
-		return bashChain{}, shellUnsupported("命令共 %d 段，超过 %d 段上限；请拆成多条 bash 调用", len(parts), maxCommandChainSegments)
+		return bashChain{}, shellSegmentLimit("命令共 %d 段，超过 %d 段上限；请拆成多条 bash 调用，不要重复提交超长命令", len(parts), maxCommandChainSegments)
 	}
 	chain := bashChain{command: command}
 	pipelineStart := -1

@@ -793,7 +793,7 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 		t.Fatalf("只读系统提示仍在鼓励修改：%s", readOnly)
 	}
 	defaultPrompt := systemPrompt("/tmp/johnny work", permissionDefault, nil)
-	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "通配符不会被展开", "find -name", "不超过 8 段", "避免命令替换", "不要尝试绕过权限层"} {
+	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "通配符不会被展开", "find -name", "不超过 16 段", "避免命令替换", "不要尝试绕过权限层"} {
 		if !strings.Contains(defaultPrompt, want) {
 			t.Fatalf("默认模式系统提示缺少 %q：%s", want, defaultPrompt)
 		}

@@ -263,10 +263,11 @@ func (d *Default) executeBash(ctx context.Context, call model.ToolCall, argument
 	}
 	chain, parseErr := parseShellCommand(args.Command)
 	if parseErr != nil {
-		// 通配符在默认模式也直接拒绝：受控执行不展开通配符，走完整
-		// shell 审批会变成每次换参数都重新询问，而且无法加入会话授权。
-		if errors.Is(parseErr, errShellGlob) {
-			return Result{}, permissionDenied("默认模式拒绝该命令："+parseErr.Error()+"；需要 shell 通配符时可使用 --skip 放行模式", parseErr)
+		// 通配符和超长命令段在默认模式也直接拒绝：受控执行无法安全
+		// 展开通配符，超长链交给完整 shell 又会变成一次性审批且无法
+		// 加入会话授权；让模型改写后重试。
+		if errors.Is(parseErr, errShellGlob) || errors.Is(parseErr, errShellSegmentLimit) {
+			return Result{}, permissionDenied("默认模式拒绝该命令："+parseErr.Error()+"；请按提示改写后重试，或使用 --skip 放行模式", parseErr)
 		}
 		return d.approveShellFallback(ctx, call, args.Command, parseErr)
 	}

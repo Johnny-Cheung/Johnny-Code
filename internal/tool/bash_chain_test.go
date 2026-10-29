@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -167,8 +168,8 @@ func TestParseShellCommandSegmentLimit(t *testing.T) {
 		t.Fatalf("%d 段应允许：%v", maxCommandChainSegments, err)
 	}
 	if _, err := parseShellCommand(command + " && pwd"); err == nil {
-		t.Fatal("超过 8 段应回退")
-	} else if !strings.Contains(err.Error(), "9 段") || !strings.Contains(err.Error(), "拆成多条") {
+		t.Fatal("超过段数上限应拒绝")
+	} else if !strings.Contains(err.Error(), fmt.Sprintf("%d 段", maxCommandChainSegments+1)) || !strings.Contains(err.Error(), "拆成多条") {
 		t.Fatalf("段数超限应说明实际段数和处理建议：%v", err)
 	}
 }

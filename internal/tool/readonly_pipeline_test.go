@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,7 @@ func TestReadOnlySyntaxRejectionsExplainReason(t *testing.T) {
 		{"ls *.go", "通配符"},
 		{"ls *.go", "find -name"},
 		{"grep --include=*.php pattern .", "find -name"},
-		{longChain, "9 段"},
+		{longChain, fmt.Sprintf("%d 段", maxCommandChainSegments+1)},
 		{longChain, "拆成多条"},
 		{"echo $(pwd)", "命令替换"},
 	} {
