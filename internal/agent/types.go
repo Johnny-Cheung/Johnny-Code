@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DefaultMaxTurns       = 50
+	DefaultMaxTurns       = 100
 	DefaultRequestTimeout = 5 * time.Minute
 )
 
