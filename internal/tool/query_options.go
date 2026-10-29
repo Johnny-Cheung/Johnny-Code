@@ -103,14 +103,14 @@ func (spec optionSpec) parseShort(program string, tokens []string, index int, ou
 		}
 		rng, isInt := spec.shortInts[option]
 		if !isInt && !strings.ContainsRune(spec.shortStrs, option) {
-			return index, permissionDenied(fmt.Sprintf("只读模式的 %s 不支持选项 %q", program, token), nil)
+			return index, permissionDenied(fmt.Sprintf("%s 不支持选项 %q", program, token), nil)
 		}
 		out.seen[name] = true
 		value := string(cluster[pos+1:])
 		attached := value != ""
 		if !attached {
 			if index+1 >= len(tokens) {
-				return index, invalidArguments(fmt.Sprintf("只读模式的 %s 选项 -%s 缺少取值", program, name), nil)
+				return index, invalidArguments(fmt.Sprintf("%s 选项 -%s 缺少取值", program, name), nil)
 			}
 			index++
 			value = tokens[index]
@@ -148,7 +148,7 @@ func (spec optionSpec) parseLong(program string, tokens []string, index int, out
 				return index, err
 			}
 		} else if !containsString(spec.longStrs, name) {
-			return index, permissionDenied(fmt.Sprintf("只读模式的 %s 不支持选项 %q", program, token), nil)
+			return index, permissionDenied(fmt.Sprintf("%s 不支持选项 %q", program, token), nil)
 		}
 		if err := spec.validateLongEnum(program, name, value); err != nil {
 			return index, err
@@ -166,10 +166,10 @@ func (spec optionSpec) parseLong(program string, tokens []string, index int, out
 	rng, isInt := spec.longInts[name]
 	isStr := containsString(spec.longStrs, name)
 	if !isInt && !isStr {
-		return index, permissionDenied(fmt.Sprintf("只读模式的 %s 不支持选项 %q", program, token), nil)
+		return index, permissionDenied(fmt.Sprintf("%s 不支持选项 %q", program, token), nil)
 	}
 	if index+1 >= len(tokens) {
-		return index, invalidArguments(fmt.Sprintf("只读模式的 %s 选项 --%s 缺少取值", program, name), nil)
+		return index, invalidArguments(fmt.Sprintf("%s 选项 --%s 缺少取值", program, name), nil)
 	}
 	index++
 	value = tokens[index]
@@ -193,7 +193,7 @@ func (spec optionSpec) validateLongEnum(program, name, value string) error {
 	if !ok || containsString(allowed, value) {
 		return nil
 	}
-	return invalidArguments(fmt.Sprintf("只读模式的 %s 选项 --%s 取值 %q 不受支持", program, name, value), nil)
+	return invalidArguments(fmt.Sprintf("%s 选项 --%s 取值 %q 不受支持", program, name, value), nil)
 }
 
 func parseBoundedInt(program, option, value string, rng intRange) (int, error) {
@@ -202,11 +202,11 @@ func parseBoundedInt(program, option, value string, rng intRange) (int, error) {
 		digits = strings.TrimPrefix(digits, "+")
 	}
 	if !isDigits(digits) || len(digits) > 9 {
-		return 0, invalidArguments(fmt.Sprintf("只读模式的 %s %s 必须是非负整数", program, option), nil)
+		return 0, invalidArguments(fmt.Sprintf("%s %s 必须是非负整数", program, option), nil)
 	}
 	number, err := strconv.Atoi(digits)
 	if err != nil || number < rng.min || number > rng.max {
-		return 0, invalidArguments(fmt.Sprintf("只读模式的 %s %s 必须在 %d 到 %d 之间", program, option, rng.min, rng.max), err)
+		return 0, invalidArguments(fmt.Sprintf("%s %s 必须在 %d 到 %d 之间", program, option, rng.min, rng.max), err)
 	}
 	return number, nil
 }
@@ -238,7 +238,7 @@ func containsString(list []string, value string) bool {
 func rejectControlSeparators(tokens []string) error {
 	for _, token := range tokens {
 		if strings.ContainsAny(token, "\n\r\x00") {
-			return permissionDenied("只读命令的参数不能包含换行、回车或 NUL", nil)
+			return permissionDenied("查询命令的参数不能包含换行、回车或 NUL", nil)
 		}
 	}
 	return nil

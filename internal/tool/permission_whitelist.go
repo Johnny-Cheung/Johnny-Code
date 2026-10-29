@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -37,7 +38,7 @@ var fixedQueryCommands = []queryCommandSpec{
 	{name: "basename", tier: tierPureRead, summary: "字面量参数", parse: parseLiteral("basename")},
 	{name: "dirname", tier: tierPureRead, summary: "字面量参数", parse: parseLiteral("dirname")},
 	{name: "pwd", tier: tierPureRead, summary: "无参数", parse: parsePwd},
-	{name: "realpath", tier: tierPureRead, summary: "-e -m -s -L -P -q -z，一个以上已存在路径", parse: parseRealpath},
+	{name: "realpath", tier: tierPureRead, summary: "-e -m -s -L -P -q -z，一个以上路径", parse: parseRealpath},
 	{name: "ls", tier: tierPureRead, summary: "排序、递归、长格式等显示选项；拒绝 -L -H；路径可省略", parse: parseLs},
 	{name: "grep", tier: tierPureRead, summary: "常用匹配与输出选项、-e、-A/-B/-C、--include/--exclude；拒绝 -R -f；管道中可读标准输入", parse: parseGrep},
 	{name: "cat", tier: tierPureRead, summary: "显示选项；一个以上普通文件，管道中可读标准输入", parse: parseCat},
@@ -92,10 +93,14 @@ func resolveRegularQueryPaths(scope queryPathResolver, paths []string) ([]string
 	for _, target := range resolved {
 		info, err := os.Stat(target)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// 不存在由实际程序报告，避免把存在性检查变成一次审批。
+				continue
+			}
 			return nil, queryPathError(target, err)
 		}
 		if !info.Mode().IsRegular() {
-			return nil, executionError(fmt.Sprintf("只读查询目标不是普通文件：%s", target), errNotRegularFile)
+			return nil, executionError(fmt.Sprintf("查询目标不是普通文件：%s", target), errNotRegularFile)
 		}
 	}
 	return resolved, nil
@@ -109,15 +114,18 @@ func resolveDiffPaths(scope queryPathResolver, paths []string, recursive bool) (
 	for _, target := range resolved {
 		info, err := os.Stat(target)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, queryPathError(target, err)
 		}
 		if info.Mode().IsRegular() || (recursive && info.IsDir()) {
 			continue
 		}
 		if info.IsDir() {
-			return nil, executionError("只读模式的 diff 比较目录需要 -r", nil)
+			return nil, executionError("diff 比较目录需要 -r", nil)
 		}
-		return nil, executionError(fmt.Sprintf("只读查询目标不是普通文件：%s", target), errNotRegularFile)
+		return nil, executionError(fmt.Sprintf("查询目标不是普通文件：%s", target), errNotRegularFile)
 	}
 	return resolved, nil
 }
@@ -125,7 +133,7 @@ func resolveDiffPaths(scope queryPathResolver, paths []string, recursive bool) (
 func rejectStdinPaths(paths []string) error {
 	for _, path := range paths {
 		if path == "-" {
-			return invalidArguments("只读模式不接受标准输入", nil)
+			return invalidArguments("查询命令不接受标准输入", nil)
 		}
 	}
 	return nil

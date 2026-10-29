@@ -261,17 +261,29 @@ func TestDefaultBashPipePrecedenceAndSimultaneousFlows(t *testing.T) {
 	}
 }
 
-func TestDefaultBashUnsafeShellSyntaxHasNoRecordTargets(t *testing.T) {
+func TestDefaultBashGlobIsRejectedWithoutApproval(t *testing.T) {
 	permissioned, _, _, approver := defaultTest(t)
-	approver.setDecision(ApprovalDecision{Allow: false, Record: true})
 	_, err := executeDefault(t, permissioned, "bash", map[string]any{"command": "ls *.go"})
 	requireToolKind(t, err, KindPermissionDenied)
-	requests := approver.snapshot()
-	if len(requests) != 1 {
-		t.Fatalf("应只产生一次审批：%#v", requests)
+	if requests := approver.snapshot(); len(requests) != 0 {
+		t.Fatalf("通配符不应发起审批：%#v", requests)
 	}
-	if len(requests[0].RecordPrefixes) != 0 || len(requests[0].RecordPaths) != 0 {
-		t.Fatalf("未识别语法不应提供记录：%#v", requests[0])
+	for _, want := range []string{"通配符", "find -name", "不展开", "--skip"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("通配符拒绝缺少 %q：%v", want, err)
+		}
+	}
+}
+
+func TestDefaultBashMissingPathRunsWithoutApproval(t *testing.T) {
+	permissioned, _, _, approver := defaultTest(t)
+	result, err := executeDefault(t, permissioned, "bash", map[string]any{"command": "cat missing.txt"})
+	if err == nil || !strings.Contains(result.Content, "missing.txt") {
+		t.Fatalf("不存在的路径应由程序报告：%q %v", result.Content, err)
+	}
+	requireToolKind(t, err, KindExecution)
+	if requests := approver.snapshot(); len(requests) != 0 {
+		t.Fatalf("工作目录内的不存在路径不应审批：%#v", requests)
 	}
 }
 

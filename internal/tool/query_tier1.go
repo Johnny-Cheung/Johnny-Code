@@ -137,7 +137,7 @@ func parseGrep(tokens []string, scope queryPathResolver, stdin bool) (restricted
 	var pattern []string
 	if !opts.seen["e"] && !opts.seen["regexp"] {
 		if len(operands) == 0 || operands[0] == "" {
-			return restrictedCommand{}, invalidArguments("只读模式的 grep 缺少搜索模式", nil)
+			return restrictedCommand{}, invalidArguments("grep 缺少搜索模式", nil)
 		}
 		pattern, operands = operands[:1], operands[1:]
 	}
@@ -149,7 +149,7 @@ func parseGrep(tokens []string, scope queryPathResolver, stdin bool) (restricted
 		case stdin:
 			readsStdin = true
 		default:
-			return restrictedCommand{}, invalidArguments("只读模式的 grep 至少需要一个路径", nil)
+			return restrictedCommand{}, invalidArguments("grep 至少需要一个路径", nil)
 		}
 	}
 	resolved, err := resolveQueryPaths(scope, operands)
@@ -171,7 +171,7 @@ func parseFileReader(program string, tokens []string, scope queryPathResolver, s
 		if stdin {
 			return restrictedCommand{program: program, args: opts.flags, readsStdin: true}, nil
 		}
-		return restrictedCommand{}, invalidArguments("只读模式的 "+program+" 至少需要一个路径", nil)
+		return restrictedCommand{}, invalidArguments(""+program+" 至少需要一个路径", nil)
 	}
 	if err := rejectStdinPaths(opts.operands); err != nil {
 		return restrictedCommand{}, err
@@ -211,7 +211,7 @@ func parseRealpath(tokens []string, scope queryPathResolver, _ bool) (restricted
 	return parsePathQuery("realpath", tokens, scope, realpathOptions, false)
 }
 
-// parsePathQuery 处理接受任意已存在路径的程序；defaultDot 为 true 时无操作数等于当前目录。
+// parsePathQuery 处理接受路径参数的程序；路径可以不存在，由实际程序报告；defaultDot 为 true 时无操作数等于当前目录。
 func parsePathQuery(program string, tokens []string, scope queryPathResolver, spec optionSpec, defaultDot bool) (restrictedCommand, error) {
 	opts, err := parseOptions(program, tokens, spec)
 	if err != nil {
@@ -220,7 +220,7 @@ func parsePathQuery(program string, tokens []string, scope queryPathResolver, sp
 	paths := opts.operands
 	if len(paths) == 0 {
 		if !defaultDot {
-			return restrictedCommand{}, invalidArguments("只读模式的 "+program+" 至少需要一个路径", nil)
+			return restrictedCommand{}, invalidArguments(""+program+" 至少需要一个路径", nil)
 		}
 		paths = []string{"."}
 	}
@@ -240,7 +240,7 @@ func parseDiff(tokens []string, scope queryPathResolver, _ bool) (restrictedComm
 		return restrictedCommand{}, err
 	}
 	if len(opts.operands) != 2 {
-		return restrictedCommand{}, invalidArguments("只读模式的 diff 需要恰好两个路径", nil)
+		return restrictedCommand{}, invalidArguments("diff 需要恰好两个路径", nil)
 	}
 	if err := rejectStdinPaths(opts.operands); err != nil {
 		return restrictedCommand{}, err

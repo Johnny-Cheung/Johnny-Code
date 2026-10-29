@@ -25,13 +25,13 @@ func parseSed(tokens []string, scope queryPathResolver, stdin bool) (restrictedC
 	scripts := append(append([]string{}, opts.values["e"]...), opts.values["expression"]...)
 	for _, script := range scripts {
 		if !sedPrintScript.MatchString(script) {
-			return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 sed 只支持行范围加 p 的打印脚本，不支持 %q", script), nil)
+			return restrictedCommand{}, permissionDenied(fmt.Sprintf("sed 只支持行范围加 p 的打印脚本，不支持 %q", script), nil)
 		}
 	}
 	args := append([]string{}, opts.flags...)
 	if len(scripts) == 0 {
 		if len(operands) == 0 || !sedPrintScript.MatchString(operands[0]) {
-			return restrictedCommand{}, permissionDenied("只读模式的 sed 只支持行范围加 p 的打印脚本，例如 sed -n '1,20p' 文件", nil)
+			return restrictedCommand{}, permissionDenied("sed 只支持行范围加 p 的打印脚本，例如 sed -n '1,20p' 文件", nil)
 		}
 		// 归一化成 -e脚本，脚本非空且不可能以 - 开头（地址后必须以 p 结尾）。
 		args = append(args, "-e"+operands[0])
@@ -39,7 +39,7 @@ func parseSed(tokens []string, scope queryPathResolver, stdin bool) (restrictedC
 	}
 	if len(operands) == 0 {
 		if !stdin {
-			return restrictedCommand{}, invalidArguments("只读模式的 sed 至少需要一个路径", nil)
+			return restrictedCommand{}, invalidArguments("sed 至少需要一个路径", nil)
 		}
 		return restrictedCommand{program: "sed", args: args, readsStdin: true}, nil
 	}
@@ -93,10 +93,10 @@ func parseUniq(tokens []string, scope queryPathResolver, stdin bool) (restricted
 		return restrictedCommand{}, err
 	}
 	if opts.lateOption || opts.lateTerminator {
-		return restrictedCommand{}, permissionDenied("只读模式的 uniq 选项和 -- 必须写在输入文件之前，避免第二个操作数被当成输出文件", nil)
+		return restrictedCommand{}, permissionDenied("uniq 选项和 -- 必须写在输入文件之前，避免第二个操作数被当成输出文件", nil)
 	}
 	if len(opts.operands) > 1 {
-		return restrictedCommand{}, permissionDenied("只读模式的 uniq 只接受一个输入文件，第二个文件操作数是输出文件", nil)
+		return restrictedCommand{}, permissionDenied("uniq 只接受一个输入文件，第二个文件操作数是输出文件", nil)
 	}
 	return parseFileReader("uniq", tokens, scope, stdin, uniqOptions)
 }

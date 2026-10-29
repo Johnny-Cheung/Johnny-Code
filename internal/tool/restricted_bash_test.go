@@ -170,8 +170,10 @@ func TestBuildRestrictedCommandChecksPaths(t *testing.T) {
 		"find missing",
 		"grep foo missing.txt",
 	} {
-		_, err := buildRestrictedCommand(command, scope)
-		requireToolKind(t, err, KindExecution)
+		// 不存在的路径由实际程序报告，不再在预检阶段失败。
+		if _, err := buildRestrictedCommand(command, scope); err != nil {
+			t.Fatalf("%q 应交给程序报告路径不存在：%v", command, err)
+		}
 	}
 }
 

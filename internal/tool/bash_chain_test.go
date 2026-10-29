@@ -179,7 +179,7 @@ func TestParseShellCommandRejectsGlobWithHint(t *testing.T) {
 		if err == nil {
 			t.Fatalf("命令 %q 应回退审批", command)
 		}
-		if !strings.Contains(err.Error(), "通配符") || !strings.Contains(err.Error(), "加引号") {
+		if !strings.Contains(err.Error(), "通配符") || !strings.Contains(err.Error(), "不展开") || !strings.Contains(err.Error(), "find -name") {
 			t.Fatalf("通配符错误应说明原因和处理建议：%v", err)
 		}
 	}

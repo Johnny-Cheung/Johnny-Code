@@ -14,18 +14,26 @@ const maxCommandChainSegments = 8
 var (
 	errShellNeedsShell = errors.New("命令包含需要 shell 语义的语法")
 	errShellSyntax     = errors.New("命令包含不支持的 shell 语法")
+	// errShellGlob 单独标记未引用的通配符：默认模式直接拒绝，不再回退
+	// 到完整 shell 审批，避免每次换参数都重新询问。
+	errShellGlob = errors.New("命令包含未引用的通配符")
 )
 
 // shellSyntaxError 说明命令为什么不能直接转换成 argv。needsShell 为真时，
-// 默认模式回退到一次完整 shell 审批；只读模式一律拒绝。
+// 默认模式回退到一次完整 shell 审批；只读模式一律拒绝。glob 为真时默认
+// 模式也直接拒绝，并提示改用 find -name。
 type shellSyntaxError struct {
 	message    string
 	needsShell bool
+	glob       bool
 }
 
 func (e *shellSyntaxError) Error() string { return e.message }
 
 func (e *shellSyntaxError) Unwrap() error {
+	if e.glob {
+		return errShellGlob
+	}
 	if e.needsShell {
 		return errShellNeedsShell
 	}
@@ -34,6 +42,10 @@ func (e *shellSyntaxError) Unwrap() error {
 
 func shellNeedsShell(format string, args ...any) error {
 	return &shellSyntaxError{message: fmt.Sprintf(format, args...), needsShell: true}
+}
+
+func shellGlob(format string, args ...any) error {
+	return &shellSyntaxError{message: fmt.Sprintf(format, args...), needsShell: true, glob: true}
 }
 
 func shellUnsupported(format string, args ...any) error {
@@ -447,7 +459,7 @@ func scanShellSegment(text string) (shellSegmentScan, error) {
 		case '{', '}':
 			return scan, shellNeedsShell("不支持未引用的花括号展开")
 		case '*', '?', '[', ']':
-			return scan, shellNeedsShell("不支持未引用的通配符 %q；请加引号，或改用 find -name 精确查找", string(r))
+			return scan, shellGlob("不支持未引用的通配符 %q；受控执行不展开通配符。查找文件请用 find -name '模式' 或逐个列出路径；作为选项值时请加引号，例如 --include='*.php'", string(r))
 		case '~':
 			if !started {
 				return scan, shellNeedsShell("不支持未引用的 ~ 展开")

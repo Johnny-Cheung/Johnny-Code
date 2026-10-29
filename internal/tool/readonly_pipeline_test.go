@@ -77,7 +77,7 @@ func TestReadOnlySyntaxRejectionsExplainReason(t *testing.T) {
 		want    string
 	}{
 		{"ls *.go", "通配符"},
-		{"ls *.go", "加引号"},
+		{"ls *.go", "find -name"},
 		{"grep --include=*.php pattern .", "find -name"},
 		{longChain, "9 段"},
 		{longChain, "拆成多条"},
@@ -88,6 +88,18 @@ func TestReadOnlySyntaxRejectionsExplainReason(t *testing.T) {
 		if !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("命令 %q 的拒绝原因缺少 %q：%v", test.command, test.want, err)
 		}
+	}
+}
+
+func TestReadOnlyMissingPathReportsProgramError(t *testing.T) {
+	readOnly, _ := readOnlyTest(t)
+	result, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": "cat missing.txt"})
+	if err == nil || !strings.Contains(result.Content, "missing.txt") {
+		t.Fatalf("不存在的路径应由程序报告：%q %v", result.Content, err)
+	}
+	requireToolKind(t, err, KindExecution)
+	if strings.Contains(err.Error(), "路径不可用") {
+		t.Fatalf("不存在路径不应在预检阶段报路径不可用：%v", err)
 	}
 }
 

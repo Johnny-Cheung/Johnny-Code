@@ -35,7 +35,7 @@ func parseRg(tokens []string, scope queryPathResolver, stdin bool) (restrictedCo
 	var pattern []string
 	if !listFiles && !opts.seen["e"] && !opts.seen["regexp"] {
 		if len(operands) == 0 || operands[0] == "" {
-			return restrictedCommand{}, invalidArguments("只读模式的 rg 缺少搜索模式", nil)
+			return restrictedCommand{}, invalidArguments("rg 缺少搜索模式", nil)
 		}
 		pattern, operands = operands[:1], operands[1:]
 	}

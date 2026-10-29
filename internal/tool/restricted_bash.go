@@ -24,7 +24,7 @@ type queryPathResolver interface {
 	resolveExisting(path string) (string, error)
 }
 
-var errRestrictedSyntax = errors.New("只读命令格式无效")
+var errRestrictedSyntax = errors.New("查询命令格式无效")
 
 // tokenizeRestricted 把一条简单命令拆成 argv。引号内的 shell 元字符按
 // 字面量保留，方便 grep 使用正则；引号外的管道、重定向、命令替换和复合
@@ -126,7 +126,7 @@ func tokenizeRestricted(command string) ([]string, error) {
 func buildRestrictedCommand(command string, scope queryPathResolver) (restrictedCommand, error) {
 	tokens, err := tokenizeRestricted(command)
 	if err != nil {
-		return restrictedCommand{}, permissionDenied("只读模式不支持该 shell 命令", err)
+		return restrictedCommand{}, permissionDenied("不支持该 shell 命令", err)
 	}
 	return buildRestrictedCommandTokens(tokens, scope, false)
 }
@@ -139,14 +139,14 @@ func buildRestrictedCommandTokens(tokens []string, scope queryPathResolver, stdi
 	}
 	spec, ok := fixedQueryCommandByName[tokens[0]]
 	if !ok {
-		return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式不允许执行 %q", tokens[0]), nil)
+		return restrictedCommand{}, permissionDenied(fmt.Sprintf("命令 %q 不在固定查询表", tokens[0]), nil)
 	}
 	return spec.parse(tokens, scope, stdin)
 }
 
 func parsePwd(tokens []string, _ queryPathResolver, _ bool) (restrictedCommand, error) {
 	if len(tokens) != 1 {
-		return restrictedCommand{}, permissionDenied("只读模式的 pwd 不接受参数", nil)
+		return restrictedCommand{}, permissionDenied("pwd 不接受参数", nil)
 	}
 	return restrictedCommand{program: "pwd"}, nil
 }
@@ -154,7 +154,9 @@ func parsePwd(tokens []string, _ queryPathResolver, _ bool) (restrictedCommand, 
 func resolveQueryPaths(scope queryPathResolver, paths []string) ([]string, error) {
 	resolved := make([]string, 0, len(paths))
 	for _, path := range paths {
-		target, err := scope.resolveExisting(path)
+		// 查询路径允许不存在：不存在的尾部仍按已解析的祖先拼接，
+		// 范围检查照常进行；由实际程序报告“文件不存在”，不再因此审批。
+		target, err := scope.resolve(path)
 		if err != nil {
 			return nil, queryPathError(path, err)
 		}
@@ -165,9 +167,9 @@ func resolveQueryPaths(scope queryPathResolver, paths []string) ([]string, error
 
 func queryPathError(path string, err error) error {
 	if errors.Is(err, errPathOutsideWorkspace) {
-		return permissionDenied(fmt.Sprintf("只读模式不允许访问工作目录外的路径 %q", path), err)
+		return permissionDenied(fmt.Sprintf("查询路径不在工作目录内 %q", path), err)
 	}
-	return executionError(fmt.Sprintf("只读查询路径不可用：%s", path), err)
+	return executionError(fmt.Sprintf("查询路径不可用：%s", path), err)
 }
 
 // restrictedBash 执行经过 buildRestrictedCommand 校验的查询命令。它永远
