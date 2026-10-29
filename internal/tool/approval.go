@@ -131,6 +131,8 @@ type ApprovalAudit struct {
 	Decision        string
 	Source          string
 	Reason          string
+	RequestReason   string
+	RequestDetail   string
 	Prefixes        [][]string
 	Paths           []PathRule
 	SessionCommands []CommandGrant
@@ -362,6 +364,8 @@ func auditDecision(audit AuditFunc, request ApprovalRequest, decision ApprovalDe
 		Decision:        result,
 		Source:          decision.Source,
 		Reason:          decision.Reason,
+		RequestReason:   request.Reason,
+		RequestDetail:   request.Detail,
 		Prefixes:        prefixes,
 		Paths:           paths,
 		SessionCommands: sessionCommands,

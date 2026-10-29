@@ -228,6 +228,7 @@ func TestApprovalGateSessionRoundTripAndAudit(t *testing.T) {
 		WorkDir:         dir,
 		Target:          "./build.sh --fast 2>&1",
 		Reason:          "命令不在白名单",
+		Detail:          "命令不在固定查询表",
 		SessionCommands: []CommandGrant{{WorkDir: dir, Argv: []string{"./build.sh", "--fast"}, Redirects: []string{"2>&1"}}},
 		SessionPaths:    []PathRule{pathRule},
 	}
@@ -265,6 +266,9 @@ func TestApprovalGateSessionRoundTripAndAudit(t *testing.T) {
 	}
 	if audit.SessionCommands[0].WorkDir != dir || audit.SessionCommands[0].Argv[1] != "--fast" {
 		t.Fatalf("审计未带 cwd/argv：%+v", audit.SessionCommands[0])
+	}
+	if audit.RequestReason != "命令不在白名单" || audit.RequestDetail != "命令不在固定查询表" {
+		t.Fatalf("审计未记录请求原因：%+v", audit)
 	}
 
 	// 命中已有授权自动放行时不写 permission 事件。

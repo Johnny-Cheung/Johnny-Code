@@ -490,7 +490,7 @@ func systemPromptBase(workDir string, mode permissionMode) string {
 当前权限模式：默认。
 
 路径白名单内的 read、write、edit 会自动执行；用户级只读查询白名单和已记录的项目命令前缀会自动执行。可以使用受控的 cd、&&、||、;、多段固定查询管道和 2>&1、/dev/null 尾部重定向，系统会先检查全部分段再按每条流水线最后一段的原始退出码执行；未引用的通配符、变量、命令替换、循环和其他重定向需要完整 shell 审批。含 || 的命令链不提供项目永久记录，但可按符合条件的命令段创建本会话授权；危险后缀和 remember 每次询问。
-Bash 已经在当前工作目录执行，优先使用相对路径或绝对路径，不要为了切换目录拼接复杂 shell 命令。需要审批时，等待工具结果；如果用户拒绝，不要重复同一未授权操作，改用已授权的方案或说明阻塞原因。
+Bash 已经在当前工作目录执行，优先使用相对路径或绝对路径，不要为了切换目录拼接复杂 shell 命令。为了减少不必要的审批：给通配符加引号或改用 find -name；一条命令不超过 8 段，把长探索拆成多次调用；避免命令替换和 for 循环。需要审批时，等待工具结果；如果用户拒绝，不要重复同一未授权操作，改用已授权的方案或说明阻塞原因。
 不要尝试绕过权限层，也不要把审批提示当作已授权。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
 展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
@@ -844,8 +844,11 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 		Decision:   audit.Decision,
 		Source:     audit.Source,
 		Reason:     audit.Reason,
-		Prefixes:   clonePermissionPrefixes(audit.Prefixes),
-		Origin:     audit.Origin.ID,
+		// 请求为什么需要审批，和用户的决策原因分开记录。
+		RequestReason: audit.RequestReason,
+		RequestDetail: audit.RequestDetail,
+		Prefixes:      clonePermissionPrefixes(audit.Prefixes),
+		Origin:        audit.Origin.ID,
 	}
 	for _, path := range audit.Paths {
 		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})

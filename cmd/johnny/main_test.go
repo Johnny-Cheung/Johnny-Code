@@ -683,12 +683,16 @@ func TestDefaultModeNonInteractiveDeniesApproval(t *testing.T) {
 	if permission == nil {
 		t.Fatal("缺少权限审批记录")
 	}
-	var decision, source, target string
+	var decision, source, target, requestReason string
 	_ = json.Unmarshal(permission["decision"], &decision)
 	_ = json.Unmarshal(permission["source"], &source)
 	_ = json.Unmarshal(permission["target"], &target)
+	_ = json.Unmarshal(permission["request_reason"], &requestReason)
 	if decision != "deny" || source != "unavailable" || !strings.Contains(target, "touch denied.txt") {
 		t.Fatalf("权限记录异常：decision=%q source=%q target=%q", decision, source, target)
+	}
+	if requestReason == "" {
+		t.Fatalf("权限记录缺少请求原因：%s", permission["request_reason"])
 	}
 }
 
@@ -789,7 +793,7 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 		t.Fatalf("只读系统提示仍在鼓励修改：%s", readOnly)
 	}
 	defaultPrompt := systemPrompt("/tmp/johnny work", permissionDefault, nil)
-	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "不要尝试绕过权限层"} {
+	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "通配符加引号", "不超过 8 段", "避免命令替换", "不要尝试绕过权限层"} {
 		if !strings.Contains(defaultPrompt, want) {
 			t.Fatalf("默认模式系统提示缺少 %q：%s", want, defaultPrompt)
 		}

@@ -193,14 +193,16 @@ func TestRecordUserTurnsAndSkippedTool(t *testing.T) {
 func TestRecordPermission(t *testing.T) {
 	recorder := newTestRecorder(t)
 	record := PermissionRecord{
-		ToolCallID: "call-1",
-		Tool:       "bash",
-		Target:     "git log --output=x",
-		Decision:   "record",
-		Source:     "tui",
-		Reason:     "批准并记录",
-		Prefixes:   [][]string{{"git", "log"}},
-		Paths:      []PermissionPath{{Path: "/tmp/out", Kind: "file"}},
+		ToolCallID:    "call-1",
+		Tool:          "bash",
+		Target:        "git log --output=x",
+		Decision:      "record",
+		Source:        "tui",
+		Reason:        "批准并记录",
+		RequestReason: "命令不在白名单",
+		RequestDetail: "未引用的通配符 \"*\"",
+		Prefixes:      [][]string{{"git", "log"}},
+		Paths:         []PermissionPath{{Path: "/tmp/out", Kind: "file"}},
 	}
 	if err := recorder.RecordPermission(record); err != nil {
 		t.Fatal(err)
@@ -213,6 +215,7 @@ func TestRecordPermission(t *testing.T) {
 	for key, want := range map[string]string{
 		"type": "permission", "tool_call_id": "call-1", "tool": "bash",
 		"target": "git log --output=x", "decision": "record", "source": "tui",
+		"request_reason": "命令不在白名单", "request_detail": "未引用的通配符 \"*\"",
 	} {
 		var got string
 		if err := json.Unmarshal(object[key], &got); err != nil || got != want {

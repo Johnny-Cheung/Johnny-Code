@@ -89,14 +89,18 @@ type WorkflowRecord struct {
 // model tool results: the decision records what the user chose, while the tool
 // result records what the tool eventually returned.
 type PermissionRecord struct {
-	ToolCallID string           `json:"tool_call_id"`
-	Tool       string           `json:"tool"`
-	Target     string           `json:"target"`
-	Decision   string           `json:"decision"`
-	Source     string           `json:"source,omitempty"`
-	Reason     string           `json:"reason,omitempty"`
-	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
-	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
+	ToolCallID string `json:"tool_call_id"`
+	Tool       string `json:"tool"`
+	Target     string `json:"target"`
+	Decision   string `json:"decision"`
+	Source     string `json:"source,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	// RequestReason/RequestDetail 是请求为什么需要审批（例如未引用通配符、
+	// 路径不在白名单），与 Reason 中用户选择的决策原因分开记录。
+	RequestReason string           `json:"request_reason,omitempty"`
+	RequestDetail string           `json:"request_detail,omitempty"`
+	Prefixes      [][]string       `json:"recorded_prefixes,omitempty"`
+	Paths         []PermissionPath `json:"recorded_paths,omitempty"`
 	// SessionCommands/SessionPaths 只在创建“本会话内允许”时填写，记录授权键
 	// （规范工作目录、命令前缀或精确 argv/重定向、路径规则）。自动命中已有
 	// 会话授权不产生 permission 事件。
@@ -293,6 +297,8 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 		Decision:        record.Decision,
 		Source:          record.Source,
 		Reason:          record.Reason,
+		RequestReason:   record.RequestReason,
+		RequestDetail:   record.RequestDetail,
 		Prefixes:        clonePermissionPrefixes(record.Prefixes),
 		Paths:           record.Paths,
 		SessionCommands: clonePermissionCommandGrants(record.SessionCommands),
@@ -522,6 +528,8 @@ type permissionEvent struct {
 	Decision        string                   `json:"decision"`
 	Source          string                   `json:"source,omitempty"`
 	Reason          string                   `json:"reason,omitempty"`
+	RequestReason   string                   `json:"request_reason,omitempty"`
+	RequestDetail   string                   `json:"request_detail,omitempty"`
 	Prefixes        [][]string               `json:"recorded_prefixes,omitempty"`
 	Paths           []PermissionPath         `json:"recorded_paths,omitempty"`
 	SessionCommands []PermissionCommandGrant `json:"session_commands,omitempty"`
