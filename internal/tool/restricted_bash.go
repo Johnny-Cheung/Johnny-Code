@@ -130,10 +130,12 @@ func buildRestrictedCommand(command string, scope queryPathResolver) (restricted
 	if err != nil {
 		return restrictedCommand{}, permissionDenied("只读模式不支持该 shell 命令", err)
 	}
-	return buildRestrictedCommandTokens(tokens, scope)
+	return buildRestrictedCommandTokens(tokens, scope, false)
 }
 
-func buildRestrictedCommandTokens(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
+// buildRestrictedCommandTokens 按固定表解析一个命令段。stdin 为 true 表示该段处于
+// 管道中，没有路径操作数的形式读取上一段的输出。
+func buildRestrictedCommandTokens(tokens []string, scope queryPathResolver, stdin bool) (restrictedCommand, error) {
 	if len(tokens) == 0 || strings.TrimSpace(tokens[0]) == "" {
 		return restrictedCommand{}, invalidArguments("命令不能为空", nil)
 	}
@@ -141,55 +143,17 @@ func buildRestrictedCommandTokens(tokens []string, scope queryPathResolver) (res
 	if !ok {
 		return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式不允许执行 %q", tokens[0]), nil)
 	}
-	return spec.parse(tokens, scope)
+	return spec.parse(tokens, scope, stdin)
 }
 
-func parsePwd(tokens []string, _ queryPathResolver) (restrictedCommand, error) {
+func parsePwd(tokens []string, _ queryPathResolver, _ bool) (restrictedCommand, error) {
 	if len(tokens) != 1 {
 		return restrictedCommand{}, permissionDenied("只读模式的 pwd 不接受参数", nil)
 	}
 	return restrictedCommand{program: "pwd"}, nil
 }
 
-func parseLs(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
-	var flags []string
-	var paths []string
-	optionsEnded := false
-	for _, token := range tokens[1:] {
-		if !optionsEnded {
-			if token == "--" {
-				optionsEnded = true
-				continue
-			}
-			if strings.HasPrefix(token, "-") && token != "-" {
-				if strings.HasPrefix(token, "--") {
-					return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 ls 不支持选项 %q", token), nil)
-				}
-				for _, option := range token[1:] {
-					if !strings.ContainsRune("alh1Fd", option) {
-						return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 ls 不支持选项 %q", token), nil)
-					}
-				}
-				flags = append(flags, token)
-				continue
-			}
-		}
-		paths = append(paths, token)
-	}
-	if len(paths) == 0 {
-		paths = []string{"."}
-	}
-	resolved, err := resolveQueryPaths(scope, paths)
-	if err != nil {
-		return restrictedCommand{}, err
-	}
-	args := append([]string{}, flags...)
-	args = append(args, "--")
-	args = append(args, resolved...)
-	return restrictedCommand{program: "ls", args: args, paths: resolved}, nil
-}
-
-func parseFind(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
+func parseFind(tokens []string, scope queryPathResolver, _ bool) (restrictedCommand, error) {
 	rest := tokens[1:]
 	path := "."
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
@@ -246,52 +210,6 @@ func parseFind(tokens []string, scope queryPathResolver) (restrictedCommand, err
 		}
 	}
 	return restrictedCommand{program: "find", args: args, paths: []string{resolvedPath}}, nil
-}
-
-func parseGrep(tokens []string, scope queryPathResolver) (restrictedCommand, error) {
-	var flags []string
-	optionsEnded := false
-	index := 1
-	for index < len(tokens) {
-		token := tokens[index]
-		if !optionsEnded {
-			if token == "--" {
-				optionsEnded = true
-				index++
-				continue
-			}
-			if strings.HasPrefix(token, "-") && token != "-" {
-				if strings.HasPrefix(token, "--") {
-					return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 grep 不支持选项 %q", token), nil)
-				}
-				for _, option := range token[1:] {
-					if !strings.ContainsRune("nirEF", option) {
-						return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 grep 不支持选项 %q", token), nil)
-					}
-				}
-				flags = append(flags, token)
-				index++
-				continue
-			}
-		}
-		break
-	}
-	if index >= len(tokens) || tokens[index] == "" {
-		return restrictedCommand{}, invalidArguments("只读模式的 grep 缺少搜索模式", nil)
-	}
-	pattern := tokens[index]
-	index++
-	if index >= len(tokens) {
-		return restrictedCommand{}, invalidArguments("只读模式的 grep 至少需要一个路径", nil)
-	}
-	resolved, err := resolveQueryPaths(scope, tokens[index:])
-	if err != nil {
-		return restrictedCommand{}, err
-	}
-	args := append([]string{}, flags...)
-	args = append(args, "--", pattern)
-	args = append(args, resolved...)
-	return restrictedCommand{program: "grep", args: args, paths: resolved}, nil
 }
 
 func resolveQueryPaths(scope queryPathResolver, paths []string) ([]string, error) {

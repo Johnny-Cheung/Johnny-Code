@@ -120,13 +120,13 @@ func TestBuildRestrictedCommandRejectsCommandsAndOptions(t *testing.T) {
 		"ls | cat",
 		"ls > out",
 		"pwd extra",
-		"ls -R",
-		"ls --color",
-		"ls -aR",
+		"ls -L",
+		"ls --time-style=iso",
+		"ls -aL",
 		"grep -R foo .",
 		"grep -f list .",
 		"grep --file=list .",
-		"grep -e foo file.txt",
+		"grep --exclude-from=list .",
 		"find . -delete",
 		"find . -exec cat {} ;",
 		"find . -fprint out",
@@ -282,7 +282,7 @@ func TestRestrictedBashRejectsBeforeStarting(t *testing.T) {
 	for _, command := range []string{
 		"find . -delete",
 		"ls | cat",
-		"ls -R",
+		"ls -L",
 	} {
 		_, err := b.execute(context.Background(), command, nil)
 		requireToolKind(t, err, KindPermissionDenied)

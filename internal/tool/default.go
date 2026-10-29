@@ -396,7 +396,7 @@ func (d *Default) analyzeBashChain(chain bashChain) (chainPlan, error) {
 			plan.auto = false
 			continue
 		}
-		if spec, err := buildRestrictedCommandTokens(segment.tokens, resolver); err == nil {
+		if spec, err := buildRestrictedCommandTokens(segment.tokens, resolver, false); err == nil {
 			part.query = &spec
 			part.outside = d.outsidePaths(spec.paths)
 			if len(part.outside) > 0 {

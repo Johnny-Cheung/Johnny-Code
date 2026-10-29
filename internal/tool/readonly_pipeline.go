@@ -98,7 +98,7 @@ func buildRestrictedPipeline(command string, scope queryPathResolver) (restricte
 	if err != nil || unsupportedChainExpansion(parts[1]) {
 		return restrictedPipeline{}, permissionDenied("只读模式的管道消费者格式无效", err)
 	}
-	producer, err := buildRestrictedCommandTokens(producerTokens, scope)
+	producer, err := buildRestrictedCommandTokens(producerTokens, scope, false)
 	if err != nil {
 		return restrictedPipeline{}, err
 	}

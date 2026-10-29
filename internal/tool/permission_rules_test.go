@@ -10,7 +10,8 @@ import (
 func TestFixedQueryWhitelistTable(t *testing.T) {
 	names := fixedQueryCommandNames()
 	want := []string{
-		"cat", "diff", "du", "echo", "find", "grep", "head", "ls", "pwd", "stat", "tail", "wc",
+		"basename", "cat", "diff", "dirname", "du", "echo", "find", "grep", "head", "ls",
+		"pwd", "realpath", "stat", "tail", "wc",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("固定查询名单错误：%#v", names)
@@ -59,12 +60,13 @@ func TestBuildRestrictedCommandRejectsExpandedQueryVariants(t *testing.T) {
 	scope, _ := testWorkspace(t)
 	for _, command := range []string{
 		"cat -",
-		"cat --number file.txt",
+		"cat --follow file.txt",
 		"head -f file.txt",
 		"head -n -1 file.txt",
 		"tail -f file.txt",
+		"tail -F file.txt",
 		"tail -n -1 file.txt",
-		"wc --lines file.txt",
+		"wc --files0-from=list",
 		"stat -f file.txt",
 		"du -L .",
 		"du -d 99 .",
