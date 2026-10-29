@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -153,65 +152,6 @@ func parsePwd(tokens []string, _ queryPathResolver, _ bool) (restrictedCommand, 
 	return restrictedCommand{program: "pwd"}, nil
 }
 
-func parseFind(tokens []string, scope queryPathResolver, _ bool) (restrictedCommand, error) {
-	rest := tokens[1:]
-	path := "."
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
-		path = rest[0]
-		rest = rest[1:]
-	}
-	if path == "" || strings.HasPrefix(path, "-") {
-		return restrictedCommand{}, permissionDenied("只读模式的 find 起始路径不能以 - 开头", nil)
-	}
-	resolvedPath, err := scope.resolveExisting(path)
-	if err != nil {
-		return restrictedCommand{}, queryPathError(path, err)
-	}
-	args := []string{resolvedPath}
-	seen := map[string]bool{}
-	for i := 0; i < len(rest); i++ {
-		expression := rest[i]
-		if seen[expression] {
-			return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 find 重复参数 %q", expression), nil)
-		}
-		switch expression {
-		case "-maxdepth":
-			if i+1 >= len(rest) {
-				return restrictedCommand{}, invalidArguments("只读模式的 find 缺少 -maxdepth 值", nil)
-			}
-			value, err := strconv.Atoi(rest[i+1])
-			if err != nil || value < 0 || value > 32 {
-				return restrictedCommand{}, invalidArguments("只读模式的 find -maxdepth 必须在 0 到 32 之间", err)
-			}
-			seen[expression] = true
-			args = append(args, expression, strconv.Itoa(value))
-			i++
-		case "-type":
-			if i+1 >= len(rest) || (rest[i+1] != "f" && rest[i+1] != "d") {
-				return restrictedCommand{}, invalidArguments("只读模式的 find -type 只能是 f 或 d", nil)
-			}
-			seen[expression] = true
-			args = append(args, expression, rest[i+1])
-			i++
-		case "-name":
-			if i+1 >= len(rest) || rest[i+1] == "" {
-				return restrictedCommand{}, invalidArguments("只读模式的 find 缺少 -name 模式", nil)
-			}
-			// -name 的下一个 token 即使以 - 开头也是模式值，不会成为新的
-			// primary，因此 -delete 不会被误执行。
-			seen[expression] = true
-			args = append(args, expression, rest[i+1])
-			i++
-		case "-print":
-			seen[expression] = true
-			args = append(args, expression)
-		default:
-			return restrictedCommand{}, permissionDenied(fmt.Sprintf("只读模式的 find 不支持参数 %q", expression), nil)
-		}
-	}
-	return restrictedCommand{program: "find", args: args, paths: []string{resolvedPath}}, nil
-}
-
 func resolveQueryPaths(scope queryPathResolver, paths []string) ([]string, error) {
 	resolved := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -277,11 +217,11 @@ func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSec
 
 func executeRestrictedSpecOutcome(ctx context.Context, runtime Runtime, spec restrictedCommand, timeout time.Duration) argvOutcome {
 	successExitCodes := map[int]bool{}
-	if spec.program == "grep" || spec.program == "diff" {
+	if spec.program == "grep" || spec.program == "diff" || spec.program == "rg" {
 		successExitCodes[1] = true
 	}
 	outcome := executeArgvOutcome(ctx, runtime, spec, timeout, restrictedEnvironment(runtime.Env), successExitCodes)
-	if outcome.err == nil && spec.program == "grep" && strings.TrimSpace(outcome.result.Content) == "" {
+	if outcome.err == nil && (spec.program == "grep" || spec.program == "rg") && strings.TrimSpace(outcome.result.Content) == "" {
 		outcome.result.Content = "（无匹配）"
 	}
 	return outcome

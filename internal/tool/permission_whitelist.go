@@ -49,7 +49,13 @@ var fixedQueryCommands = []queryCommandSpec{
 	{name: "stat", tier: tierPureRead, summary: "-c/-f 格式、-x -s -t；一个以上路径", parse: parseStat},
 	{name: "du", tier: tierPureRead, summary: "-a -c -h -k -m -s -x -b、-d 0..32、--max-depth；路径可省略", parse: parseDu},
 	{name: "diff", tier: tierPureRead, summary: "常用比较选项、-U N；恰好两个路径", parse: parseDiff},
-	{name: "find", tier: tierEscape, summary: "起始路径；-maxdepth/-type/-name/-print", parse: parseFind},
+	{name: "find", tier: tierEscape, summary: "多个起始路径；-name/-iname/-path/-type/-size/-mtime/-maxdepth/-mindepth/-print 和 ! -o ( ) 组合；拒绝 -delete -exec -fprint -L", parse: parseFind},
+	{name: "rg", tier: tierEscape, summary: "常用搜索选项；执行时强制 --no-config；拒绝 --pre -z -L -f", parse: parseRg},
+	{name: "sed", tier: tierEscape, summary: "-n 加行范围或正则范围的 p 打印脚本；拒绝 -i 和 w e r 命令", parse: parseSed},
+	{name: "sort", tier: tierEscape, summary: "常用排序选项；拒绝 -o -T --compress-program --files0-from", parse: parseSort},
+	{name: "uniq", tier: tierEscape, summary: "-c -d -u -i -f -s -w；至多一个输入文件，不接受输出文件", parse: parseUniq},
+	{name: "tree", tier: tierEscape, summary: "常用显示选项、-L N、-I/-P；拒绝 -o -R -l --fromfile", parse: parseTree},
+	{name: "file", tier: tierEscape, summary: "-b -i -k -h -n -N 和 --mime；拒绝 -C -m -f -L -p -s", parse: parseFile},
 }
 
 var fixedQueryCommandByName = func() map[string]queryCommandSpec {

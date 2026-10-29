@@ -31,10 +31,12 @@ type parsedOptions struct {
 	flags    []string
 	operands []string
 	seen     map[string]bool
+	// values 按选项名保存带值选项的取值，供需要检查取值内容的程序（如 sed）使用。
+	values map[string][]string
 }
 
 func parseOptions(program string, tokens []string, spec optionSpec) (parsedOptions, error) {
-	out := parsedOptions{seen: map[string]bool{}}
+	out := parsedOptions{seen: map[string]bool{}, values: map[string][]string{}}
 	ended := false
 	for i := 1; i < len(tokens); i++ {
 		token := tokens[i]
@@ -92,6 +94,7 @@ func (spec optionSpec) parseShort(program string, tokens []string, index int, ou
 				return index, err
 			}
 		}
+		out.values[name] = append(out.values[name], value)
 		out.flags = append(out.flags, flags...)
 		return index, nil
 	}
@@ -117,6 +120,7 @@ func (spec optionSpec) parseLong(program, token string, out *parsedOptions) erro
 			}
 		}
 		out.seen[name] = true
+		out.values[name] = append(out.values[name], value)
 		out.flags = append(out.flags, token)
 		return nil
 	}

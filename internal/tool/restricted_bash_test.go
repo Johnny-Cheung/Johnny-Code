@@ -115,7 +115,8 @@ func TestBuildRestrictedCommandAllowsQueries(t *testing.T) {
 func TestBuildRestrictedCommandRejectsCommandsAndOptions(t *testing.T) {
 	scope, _ := testWorkspace(t)
 	for _, command := range []string{
-		"sed -n 1p file.txt",
+		"sed -i 1p file.txt",
+		"awk 1 file.txt",
 		"sh -c id",
 		"ls | cat",
 		"ls > out",
