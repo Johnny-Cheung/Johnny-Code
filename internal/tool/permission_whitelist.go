@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
-	"strings"
 )
 
 // queryTier 说明固定查询程序属于哪一档：纯读档本身没有写文件或执行其他程序的
@@ -46,14 +44,14 @@ var fixedQueryCommands = []queryCommandSpec{
 	{name: "head", tier: tierPureRead, summary: "-n N、-c N、-N、-q -v；一个以上普通文件，管道中可读标准输入", parse: parseHead},
 	{name: "tail", tier: tierPureRead, summary: "-n N 或 -n +N、-c N、-N、-q -v；拒绝 -f -F -r；管道中可读标准输入", parse: parseTail},
 	{name: "wc", tier: tierPureRead, summary: "-l -w -c -m -L；一个以上普通文件，管道中可读标准输入", parse: parseWc},
-	{name: "stat", tier: tierPureRead, summary: "-c/-f 格式、-x -s -t；一个以上路径", parse: parseStat},
+	{name: "stat", tier: tierPureRead, summary: "按平台的格式/显示选项（GNU -c -t，BSD -f -t -s -x）；一个以上路径", parse: parseStat},
 	{name: "du", tier: tierPureRead, summary: "-a -c -h -k -m -s -x -b、-d 0..32、--max-depth；路径可省略", parse: parseDu},
-	{name: "diff", tier: tierPureRead, summary: "常用比较选项、-U N；恰好两个路径", parse: parseDiff},
+	{name: "diff", tier: tierPureRead, summary: "常用比较选项、-U N；递归比较强制 --no-dereference；恰好两个路径", parse: parseDiff},
 	{name: "find", tier: tierEscape, summary: "多个起始路径；-name/-iname/-path/-type/-size/-mtime/-maxdepth/-mindepth/-print 和 ! -o ( ) 组合；拒绝 -delete -exec -fprint -L", parse: parseFind},
-	{name: "rg", tier: tierEscape, summary: "常用搜索选项；执行时强制 --no-config；拒绝 --pre -z -L -f", parse: parseRg},
+	{name: "rg", tier: tierEscape, summary: "常用搜索选项；执行时强制 --no-config；拒绝 --pre -z -L -f；-u 可重复但仍不跟随符号链接", parse: parseRg},
 	{name: "sed", tier: tierEscape, summary: "-n 加行范围或正则范围的 p 打印脚本；拒绝 -i 和 w e r 命令", parse: parseSed},
-	{name: "sort", tier: tierEscape, summary: "常用排序选项；拒绝 -o -T --compress-program --files0-from", parse: parseSort},
-	{name: "uniq", tier: tierEscape, summary: "-c -d -u -i -f -s -w；至多一个输入文件，不接受输出文件", parse: parseUniq},
+	{name: "sort", tier: tierEscape, summary: "常用排序选项；输入过大时可能写系统临时文件；拒绝 -o -T --compress-program --files0-from 和 --sort=random", parse: parseSort},
+	{name: "uniq", tier: tierEscape, summary: "-c -d -u -i -f -s -w；选项必须写在输入文件前，至多一个输入文件，不接受输出文件", parse: parseUniq},
 	{name: "tree", tier: tierEscape, summary: "常用显示选项、-L N、-I/-P；拒绝 -o -R -l --fromfile", parse: parseTree},
 	{name: "file", tier: tierEscape, summary: "-b -i -k -h -n -N 和 --mime；拒绝 -C -m -f -L -p -s", parse: parseFile},
 }
@@ -138,79 +136,4 @@ func appendFlagsAndPaths(flags, paths []string) []string {
 	args = append(args, "--")
 	args = append(args, paths...)
 	return args
-}
-
-// splitShortOptions 与 parseNFlags 仍被只读管道消费者使用，统一分段器接入后删除。
-func splitShortOptions(tokens []string, allowed string) ([]string, []string, error) {
-	flags := make([]string, 0, 2)
-	paths := make([]string, 0, 2)
-	optionsEnded := false
-	for _, token := range tokens[1:] {
-		if !optionsEnded {
-			if token == "--" {
-				optionsEnded = true
-				continue
-			}
-			if strings.HasPrefix(token, "-") && token != "-" {
-				if strings.HasPrefix(token, "--") {
-					return nil, nil, permissionDenied(fmt.Sprintf("只读模式不支持选项 %q", token), nil)
-				}
-				for _, option := range token[1:] {
-					if !strings.ContainsRune(allowed, option) {
-						return nil, nil, permissionDenied(fmt.Sprintf("只读模式不支持选项 %q", token), nil)
-					}
-				}
-				flags = append(flags, token)
-				continue
-			}
-		}
-		paths = append(paths, token)
-	}
-	return flags, paths, nil
-}
-
-func parseNFlags(tokens []string, allowPlus bool) ([]string, []string, error) {
-	flags := make([]string, 0, 2)
-	paths := make([]string, 0, 2)
-	optionsEnded := false
-	for index := 1; index < len(tokens); index++ {
-		token := tokens[index]
-		if !optionsEnded {
-			if token == "--" {
-				optionsEnded = true
-				continue
-			}
-			if token == "-n" {
-				if index+1 >= len(tokens) {
-					return nil, nil, invalidArguments("只读模式的 -n 缺少行数", nil)
-				}
-				original := tokens[index+1]
-				value := original
-				if allowPlus {
-					value = strings.TrimPrefix(value, "+")
-				}
-				number, err := strconv.Atoi(value)
-				if err != nil || number < 0 {
-					return nil, nil, invalidArguments("只读模式的 -n 必须是非负整数", err)
-				}
-				flags = append(flags, token, original)
-				index++
-				continue
-			}
-			if strings.HasPrefix(token, "-") && token != "-" {
-				if strings.HasPrefix(token, "--") {
-					return nil, nil, permissionDenied(fmt.Sprintf("只读模式不支持选项 %q", token), nil)
-				}
-				for _, option := range token[1:] {
-					if option != 'q' && option != 'v' {
-						return nil, nil, permissionDenied(fmt.Sprintf("只读模式不支持选项 %q", token), nil)
-					}
-				}
-				flags = append(flags, token)
-				continue
-			}
-		}
-		paths = append(paths, token)
-	}
-	return flags, paths, nil
 }

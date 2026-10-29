@@ -97,8 +97,23 @@ type PermissionRecord struct {
 	Reason     string           `json:"reason,omitempty"`
 	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
 	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
+	// SessionCommands/SessionPaths 只在创建“本会话内允许”时填写，记录授权键
+	// （规范工作目录、命令前缀或精确 argv/重定向、路径规则）。自动命中已有
+	// 会话授权不产生 permission 事件。
+	SessionCommands []PermissionCommandGrant `json:"session_commands,omitempty"`
+	SessionPaths    []PermissionPath         `json:"session_paths,omitempty"`
 	// Origin 是发起请求的子任务 ID；主 Agent 的请求为空。
 	Origin string `json:"origin,omitempty"`
+}
+
+// PermissionCommandGrant 是一条会话命令授权的审计键。Prefix 和 Argv 互斥：
+// Prefix 对应用户批准的命令前缀，Argv 对应完整 argv；Redirects 与 Argv
+// 一起构成精确匹配。
+type PermissionCommandGrant struct {
+	CWD       string   `json:"cwd,omitempty"`
+	Prefix    []string `json:"prefix,omitempty"`
+	Argv      []string `json:"argv,omitempty"`
+	Redirects []string `json:"redirects,omitempty"`
 }
 
 type PermissionPath struct {
@@ -270,17 +285,19 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 		return errRecorderClosed
 	}
 	return r.write(permissionEvent{
-		Type:       "permission",
-		Time:       r.timestamp(),
-		ToolCallID: record.ToolCallID,
-		Tool:       record.Tool,
-		Target:     record.Target,
-		Decision:   record.Decision,
-		Source:     record.Source,
-		Reason:     record.Reason,
-		Prefixes:   clonePermissionPrefixes(record.Prefixes),
-		Paths:      record.Paths,
-		Origin:     record.Origin,
+		Type:            "permission",
+		Time:            r.timestamp(),
+		ToolCallID:      record.ToolCallID,
+		Tool:            record.Tool,
+		Target:          record.Target,
+		Decision:        record.Decision,
+		Source:          record.Source,
+		Reason:          record.Reason,
+		Prefixes:        clonePermissionPrefixes(record.Prefixes),
+		Paths:           record.Paths,
+		SessionCommands: clonePermissionCommandGrants(record.SessionCommands),
+		SessionPaths:    record.SessionPaths,
+		Origin:          record.Origin,
 	})
 }
 
@@ -497,17 +514,35 @@ func newSummary(summary *agent.SummaryInfo) *summaryRecord {
 }
 
 type permissionEvent struct {
-	Type       string           `json:"type"`
-	Time       time.Time        `json:"time"`
-	ToolCallID string           `json:"tool_call_id"`
-	Tool       string           `json:"tool"`
-	Target     string           `json:"target"`
-	Decision   string           `json:"decision"`
-	Source     string           `json:"source,omitempty"`
-	Reason     string           `json:"reason,omitempty"`
-	Prefixes   [][]string       `json:"recorded_prefixes,omitempty"`
-	Paths      []PermissionPath `json:"recorded_paths,omitempty"`
-	Origin     string           `json:"origin,omitempty"`
+	Type            string                   `json:"type"`
+	Time            time.Time                `json:"time"`
+	ToolCallID      string                   `json:"tool_call_id"`
+	Tool            string                   `json:"tool"`
+	Target          string                   `json:"target"`
+	Decision        string                   `json:"decision"`
+	Source          string                   `json:"source,omitempty"`
+	Reason          string                   `json:"reason,omitempty"`
+	Prefixes        [][]string               `json:"recorded_prefixes,omitempty"`
+	Paths           []PermissionPath         `json:"recorded_paths,omitempty"`
+	SessionCommands []PermissionCommandGrant `json:"session_commands,omitempty"`
+	SessionPaths    []PermissionPath         `json:"session_paths,omitempty"`
+	Origin          string                   `json:"origin,omitempty"`
+}
+
+func clonePermissionCommandGrants(grants []PermissionCommandGrant) []PermissionCommandGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	cloned := make([]PermissionCommandGrant, len(grants))
+	for i, grant := range grants {
+		cloned[i] = PermissionCommandGrant{
+			CWD:       grant.CWD,
+			Prefix:    append([]string(nil), grant.Prefix...),
+			Argv:      append([]string(nil), grant.Argv...),
+			Redirects: append([]string(nil), grant.Redirects...),
+		}
+	}
+	return cloned
 }
 
 type memoryEvent struct {

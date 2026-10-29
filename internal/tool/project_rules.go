@@ -521,14 +521,15 @@ func canonicalDirectory(path string) (string, error) {
 }
 
 func canonicalPathRule(path string, kind PathKind) (PathRule, error) {
-	path = strings.TrimSpace(path)
-	if path == "" || strings.IndexByte(path, 0) >= 0 {
+	if strings.TrimSpace(path) == "" || strings.IndexByte(path, 0) >= 0 {
 		return PathRule{}, errors.New("路径不能为空或包含无效字符")
 	}
 	if !filepath.IsAbs(path) {
 		return PathRule{}, errors.New("项目路径规则必须是绝对路径")
 	}
-	resolved, err := resolveExistingAncestors(filepath.Clean(path))
+	// 保留原始字节：以空格结尾的路径是合法目标。解析时先展开符号链接
+	// 再应用 ".."，因此记录下来的规则就是内核实际访问的目标。
+	resolved, err := resolveExistingAncestors(path)
 	if err != nil {
 		return PathRule{}, err
 	}

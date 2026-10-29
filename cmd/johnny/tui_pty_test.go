@@ -387,8 +387,10 @@ func TestTerminalPTYDefaultModeBashChainApproval(t *testing.T) {
 	end := p.expect(t, 0, "权限确认")
 	p.expect(t, end, "cd sub && make test")
 	p.expect(t, end, "命令前缀 make test")
+	p.expect(t, end, "本会话内允许")
 	p.expect(t, end, "批准并记录")
-	p.write(t, "j\r")
+	// 默认焦点在拒绝；下移两次越过“本会话内允许”到达“批准并记录”。
+	p.write(t, "jj\r")
 	p.expect(t, end, "CHAIN_OK")
 	if _, err := os.Stat(filepath.Join(p.dir, "sub", "chain-marker")); err != nil {
 		t.Fatalf("命令链中的 Makefile 未执行：%v", err)

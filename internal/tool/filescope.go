@@ -164,11 +164,9 @@ func (g *ScopeGuard) Execute(ctx context.Context, call model.ToolCall) (Result, 
 	if err != nil || strings.TrimSpace(path) == "" {
 		return g.inner.Execute(ctx, call)
 	}
-	target := path
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(g.workDir, target)
-	}
-	resolved, err := resolveExistingAncestors(filepath.Clean(target))
+	// 与权限分类和文件工具执行保持同一套真实路径解析：符号链接先展开，
+	// 再应用 ".."，不做词法 Clean。
+	resolved, err := resolvePathFromBase(g.workDir, path)
 	if err != nil {
 		return g.inner.Execute(ctx, call)
 	}

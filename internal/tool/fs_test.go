@@ -8,11 +8,13 @@ import (
 )
 
 func TestResolvePathAndLimitedWriter(t *testing.T) {
-	runtime := Runtime{WorkDir: "/tmp/work"}
-	if got, err := resolvePath(runtime, "src/main.go"); err != nil || got != filepath.Join("/tmp/work", "src", "main.go") {
+	workDir := mustEvalSymlinks(t, t.TempDir())
+	runtime := Runtime{WorkDir: workDir}
+	if got, err := resolvePath(runtime, "src/main.go"); err != nil || got != filepath.Join(workDir, "src", "main.go") {
 		t.Fatalf("相对路径解析错误：%q %v", got, err)
 	}
-	if got, err := resolvePath(runtime, "/tmp/other.go"); err != nil || got != "/tmp/other.go" {
+	absolute := filepath.Join(workDir, "other.go")
+	if got, err := resolvePath(runtime, absolute); err != nil || got != absolute {
 		t.Fatalf("绝对路径解析错误：%q %v", got, err)
 	}
 	for _, path := range []string{"", "bad\x00path"} {

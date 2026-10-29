@@ -17,11 +17,12 @@ type workspaceScope struct {
 }
 
 // multiPathScope 用于默认模式：相对路径仍以启动工作目录为基准，但判断
-// 访问范围时同时检查工作目录和项目路径白名单。resolve 不因路径在范围外
-// 而失败，由调用方决定审批还是拒绝。
+// 访问范围时同时检查工作目录、项目路径白名单和可选的会话路径授权。
+// resolve 不因路径在范围外而失败，由调用方决定审批还是拒绝。
 type multiPathScope struct {
 	workDir string
 	rules   *ProjectRules
+	session *SessionGrants
 }
 
 func newMultiPathScope(workDir string, rules *ProjectRules) (*multiPathScope, error) {
@@ -37,8 +38,7 @@ func (s *multiPathScope) resolve(path string) (string, error) {
 }
 
 func (s *multiPathScope) resolveFrom(base, path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return "", errors.New("路径不能为空")
 	}
 	if strings.IndexByte(path, 0) >= 0 {
@@ -47,11 +47,9 @@ func (s *multiPathScope) resolveFrom(base, path string) (string, error) {
 	if strings.TrimSpace(base) == "" {
 		return "", errors.New("路径基准不能为空")
 	}
-	target := path
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(base, target)
-	}
-	return resolveExistingAncestors(filepath.Clean(target))
+	// 不能先 TrimSpace 或 filepath.Clean：真实的目录/文件名可以以空格
+	// 结尾，而符号链接之后的 ".." 必须按内核语义解析。
+	return resolvePathFromBase(base, path)
 }
 
 func (s *multiPathScope) resolveExisting(path string) (string, error) {
@@ -76,7 +74,18 @@ func (s *multiPathScope) contains(path string) bool {
 	if pathWithin(s.workDir, path) {
 		return true
 	}
-	return s.rules != nil && s.rules.ContainsPath(path)
+	if s.rules != nil && s.rules.ContainsPath(path) {
+		return true
+	}
+	return s.session != nil && s.session.ContainsPath(path)
+}
+
+// setSession 接入进程内会话路径授权。只在启动或授权库确定后调用；之后
+// 授权库自身的读写由 SessionGrants 加锁。
+func (s *multiPathScope) setSession(grants *SessionGrants) {
+	if s != nil {
+		s.session = grants
+	}
 }
 
 func newWorkspaceScope(workDir string) (workspaceScope, error) {
@@ -105,20 +114,13 @@ func newWorkspaceScope(workDir string) (workspaceScope, error) {
 // 不存在的尾部会拼接到已解析的最近祖先上，因此符号链接父目录不能把
 // 尚未创建的文件带出工作目录。
 func (s workspaceScope) resolve(path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return "", errors.New("路径不能为空")
 	}
 	if strings.IndexByte(path, 0) >= 0 {
 		return "", errors.New("路径包含无效字符")
 	}
-	target := path
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(s.root, target)
-	}
-	target = filepath.Clean(target)
-
-	resolved, err := resolveExistingAncestors(target)
+	resolved, err := resolvePathFromBase(s.root, path)
 	if err != nil {
 		return "", err
 	}
@@ -146,29 +148,4 @@ func (s workspaceScope) contains(path string) bool {
 		return false
 	}
 	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-// resolveExistingAncestors 解析路径中已经存在的部分，再拼接还不存在的
-// 尾部。这样既能检查目标本身的符号链接，也能检查其父目录的符号链接。
-func resolveExistingAncestors(target string) (string, error) {
-	current := target
-	var missing []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			for i := len(missing) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, missing[i])
-			}
-			return filepath.Clean(resolved), nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", err
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
-	}
 }

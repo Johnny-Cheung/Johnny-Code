@@ -43,20 +43,22 @@ func (w *limitedWriter) String() string {
 }
 
 func resolvePath(runtime Runtime, path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return "", errors.New("路径不能为空")
 	}
 	if strings.IndexByte(path, 0) >= 0 {
 		return "", errors.New("路径包含无效字符")
 	}
+	// 与权限分类使用同一套真实路径解析：先展开符号链接再应用 ".."，
+	// 不预先词法清理。这样分类看到的路径就是 read/write/edit 实际
+	// 打开的目标，以空格结尾的文件名也不会被误当成同名兄弟。
 	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
+		return resolveExistingAncestors(path)
 	}
 	if runtime.WorkDir == "" {
 		return "", errors.New("工作目录不能为空")
 	}
-	return filepath.Join(runtime.WorkDir, path), nil
+	return resolvePathFromBase(runtime.WorkDir, path)
 }
 
 var errNotRegularFile = errors.New("目标不是普通文件")

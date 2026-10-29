@@ -69,18 +69,64 @@ type approvalDelivery struct {
 	ctx      context.Context
 	request  tool.ApprovalRequest
 	response chan tool.ApprovalDecision
+	// mu 串行化“取消”和“用户提交决策”：提交前检查 ctx，提交后
+	// requestApproval 即使在 ctx.Done 上醒来也能看到已提交的决策，
+	// 不会出现 TUI 已保存授权、Gate 却按取消返回错误的分裂结果。
+	mu       sync.Mutex
+	decided  bool
+	decision tool.ApprovalDecision
+}
+
+// canceled 只判断请求方是否已经取消；ctx 本身并发安全。
+func (d *approvalDelivery) canceled() bool {
+	return d != nil && d.ctx != nil && d.ctx.Err() != nil
+}
+
+// decide 在锁内检查取消、执行 build（可能写入会话授权）并回传决策。
+// 已被取消时不执行 build，从而不会在取消后保存授权。
+func (d *approvalDelivery) decide(build func() tool.ApprovalDecision) (tool.ApprovalDecision, bool) {
+	if d == nil {
+		return tool.ApprovalDecision{}, false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.decided {
+		return d.decision, true
+	}
+	if d.ctx != nil && d.ctx.Err() != nil {
+		return tool.ApprovalDecision{}, false
+	}
+	decision := build()
+	d.decided = true
+	d.decision = decision
+	select {
+	case d.response <- decision:
+	default:
+	}
+	return decision, true
+}
+
+func (d *approvalDelivery) committedDecision() (tool.ApprovalDecision, bool) {
+	if d == nil {
+		return tool.ApprovalDecision{}, false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.decision, d.decided
 }
 
 type approvalOption struct {
-	label  string
-	allow  bool
-	record bool
+	label   string
+	allow   bool
+	record  bool
+	session bool
 }
 
 type approvalState struct {
 	ctx      context.Context
 	request  tool.ApprovalRequest
 	response chan tool.ApprovalDecision
+	item     *approvalDelivery
 	options  []approvalOption
 	selected int
 }
@@ -571,29 +617,46 @@ func (m *terminalModel) requestApproval(ctx context.Context, request tool.Approv
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	response := make(chan tool.ApprovalDecision, 1)
-	item := delivery{approval: &approvalDelivery{ctx: ctx, request: request, response: response}}
+	approval := &approvalDelivery{ctx: ctx, request: request, response: make(chan tool.ApprovalDecision, 1)}
 	select {
-	case m.events <- item:
+	case m.events <- delivery{approval: approval}:
 	case <-ctx.Done():
+		if decision, ok := approval.committedDecision(); ok {
+			return decision, nil
+		}
 		return tool.ApprovalDecision{}, ctx.Err()
 	case <-m.ctx.Done():
+		if decision, ok := approval.committedDecision(); ok {
+			return decision, nil
+		}
 		return tool.ApprovalDecision{}, m.ctx.Err()
 	}
 	select {
-	case decision := <-response:
+	case decision := <-approval.response:
 		return decision, nil
 	case <-ctx.Done():
+		// 用户点击可能刚完成保存并提交决策。以提交结果为准，避免 TUI
+		// 已保存授权但 Gate 按取消处理、审计记录成拒绝。
+		if decision, ok := approval.committedDecision(); ok {
+			return decision, nil
+		}
 		return tool.ApprovalDecision{}, ctx.Err()
 	case <-m.ctx.Done():
+		if decision, ok := approval.committedDecision(); ok {
+			return decision, nil
+		}
 		return tool.ApprovalDecision{}, m.ctx.Err()
 	}
 }
 
-// beginApproval 收到审批请求：当前没有待处理项时直接显示，否则按先进先出排队。
-// 审批可能来自主 Agent，也可能来自后台子任务，与主 Agent 是否忙碌无关。
+// beginApproval 收到审批请求：已有会话授权命中时直接放行，否则当前没有
+// 待处理项时显示，或按先进先出排队。审批可能来自主 Agent，也可能来自
+// 后台子任务，与主 Agent 是否忙碌无关。
 func (m *terminalModel) beginApproval(item *approvalDelivery) {
 	if item == nil {
+		return
+	}
+	if m.sessionAutoAllow(item) {
 		return
 	}
 	if m.approval != nil {
@@ -603,10 +666,52 @@ func (m *terminalModel) beginApproval(item *approvalDelivery) {
 	m.showApproval(item)
 }
 
+// canOfferSession 表示这个请求可以在当前进程里记住。读取类子任务仍走
+// 只读包装，不会带有会话授权字段。
+func (m *terminalModel) canOfferSession(request tool.ApprovalRequest) bool {
+	return m.options.Gate != nil && request.CanSession()
+}
+
+// sessionAutoAllow 在显示审批前重检当前授权库。队列重检和授权创建后
+// 的后续请求都经过这里；命中不写 permission 事件。已取消请求直接丢弃，
+// 既不显示也不回传决策。
+func (m *terminalModel) sessionAutoAllow(item *approvalDelivery) bool {
+	if item == nil {
+		return false
+	}
+	if item.canceled() {
+		return true
+	}
+	if m.options.Gate == nil || !item.request.CanSession() {
+		return false
+	}
+	if !m.options.Gate.SessionMatches(item.request) {
+		return false
+	}
+	// decide 会在锁内再次检查取消，避免重检后到提交前刚好被取消。
+	item.decide(func() tool.ApprovalDecision {
+		return tool.ApprovalDecision{
+			Allow:  true,
+			Source: tool.ApprovalSourceSession,
+			Reason: "本会话授权",
+		}
+	})
+	return true
+}
+
 func (m *terminalModel) showApproval(item *approvalDelivery) {
+	if item == nil || item.canceled() {
+		return
+	}
+	if m.sessionAutoAllow(item) {
+		return
+	}
 	options := []approvalOption{
 		{label: "允许本次", allow: true},
 		{label: "拒绝本次"},
+	}
+	if m.canOfferSession(item.request) {
+		options = append(options, approvalOption{label: "本会话内允许", allow: true, session: true})
 	}
 	if item.request.CanRecord() {
 		options = append(options, approvalOption{label: "批准并记录", allow: true, record: true})
@@ -615,6 +720,7 @@ func (m *terminalModel) showApproval(item *approvalDelivery) {
 		ctx:      item.ctx,
 		request:  item.request,
 		response: item.response,
+		item:     item,
 		options:  options,
 		selected: 1,
 	}
@@ -627,12 +733,12 @@ func (m *terminalModel) pruneApprovals() {
 	if m.approval == nil && len(m.approvalQueue) == 0 {
 		return
 	}
-	if m.approval != nil && m.approval.ctx != nil && m.approval.ctx.Err() != nil {
+	if m.approval != nil && (m.approval.item.canceled() || (m.approval.item == nil && m.approval.ctx != nil && m.approval.ctx.Err() != nil)) {
 		m.approval = nil
 	}
 	alive := m.approvalQueue[:0]
 	for _, item := range m.approvalQueue {
-		if item.ctx == nil || item.ctx.Err() == nil {
+		if !item.canceled() {
 			alive = append(alive, item)
 		}
 	}
@@ -641,13 +747,17 @@ func (m *terminalModel) pruneApprovals() {
 }
 
 // promoteApproval 在没有当前审批时显示队列头；队列也空了则恢复空闲状态文字。
+// 入队后可能已经有新的会话授权，显示前逐项重检，命中则直接放行。
 func (m *terminalModel) promoteApproval() {
 	if m.approval != nil {
 		return
 	}
-	if len(m.approvalQueue) > 0 {
+	for len(m.approvalQueue) > 0 {
 		next := m.approvalQueue[0]
 		m.approvalQueue = m.approvalQueue[1:]
+		if m.sessionAutoAllow(next) {
+			continue
+		}
 		m.showApproval(next)
 		return
 	}
@@ -679,26 +789,49 @@ func (m *terminalModel) handleApprovalKey(keys string) tea.Cmd {
 		state.selected = (state.selected + 1) % len(state.options)
 	case "enter":
 		option := state.options[state.selected]
-		select {
-		case state.response <- tool.ApprovalDecision{
-			Allow:  option.allow,
-			Record: option.record,
-			Source: "tui",
-			Reason: option.label,
-		}:
-		default:
+		item := state.item
+		if item == nil {
+			item = &approvalDelivery{ctx: state.ctx, request: state.request, response: state.response}
 		}
+		var status string
+		_, committed := item.decide(func() tool.ApprovalDecision {
+			decision := tool.ApprovalDecision{
+				Allow:  option.allow,
+				Record: option.record,
+				Source: "tui",
+				Reason: option.label,
+			}
+			switch {
+			case !option.allow:
+				status = "已拒绝本次，等待模型继续…"
+			case option.session:
+				// 必须在回传决策前写入：promoteApproval 紧接着会重检队列。
+				// decide 已确认 ctx 未取消，StoreSession 成功后用 SessionStored
+				// 告诉 Gate.Ask 不要重复保存。
+				if m.options.Gate == nil {
+					decision.Reason = "本会话内允许不可用，仅允许本次"
+					status = "会话授权不可用，已仅允许本次，等待工具执行…"
+				} else if err := m.options.Gate.StoreSession(state.request); err != nil {
+					decision.Reason = "本会话内允许失败，仅允许本次：" + err.Error()
+					status = "会话授权失败，已仅允许本次，等待工具执行…"
+				} else {
+					decision.Session = true
+					decision.SessionStored = true
+					status = "已允许本会话，等待工具执行…"
+				}
+			case option.record:
+				status = "已允许并记录，等待工具执行…"
+			default:
+				status = "已允许本次，等待工具执行…"
+			}
+			return decision
+		})
 		m.approval = nil
-		switch {
-		case !option.allow:
-			m.status = "已拒绝本次，等待模型继续…"
-		case option.record:
-			m.status = "已允许并记录，等待工具执行…"
-		default:
-			m.status = "已允许本次，等待工具执行…"
-		}
-		if !m.busy {
-			m.status = "空闲"
+		if committed {
+			m.status = status
+			if !m.busy {
+				m.status = "空闲"
+			}
 		}
 		m.promoteApproval()
 	}
@@ -1099,6 +1232,9 @@ func (m *terminalModel) approvalLines(width int) []string {
 	}
 	if state.request.Detail != "" {
 		lines = append(lines, line("详情：", state.request.Detail))
+	}
+	if m.canOfferSession(state.request) {
+		lines = append(lines, line("本会话授权：", state.request.SessionLabel()))
 	}
 	if state.request.CanRecord() {
 		lines = append(lines, line("将记录：", state.request.RecordLabel()))

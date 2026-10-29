@@ -14,10 +14,11 @@ import (
 )
 
 const permissionUsage = `用法：
-  /permissions                     查看固定名单和项目规则
+  /permissions                     查看固定名单、项目规则和本会话授权
   /permissions remove-command 序号  删除一条项目命令前缀
   /permissions remove-path 序号     删除一条项目路径
-  /permissions clear               清空项目规则`
+  /permissions clear               清空项目规则
+  /permissions clear-session       清除全部本会话授权`
 
 const skillUsage = `用法：
   /skills                    查看已加载、被覆盖、未加载和未注入提示的 Skill
@@ -56,6 +57,8 @@ type localCommandHandler struct {
 	reload  func() error
 	context *contextController
 	memory  *memoryController
+	// session 返回进程内共享的会话授权；nil 表示当前模式不提供。
+	session func() *tool.SessionGrants
 }
 
 func newLocalCommandHandler(rules *tool.ProjectRules, skills *skill.Store, reload func() error, controllers ...*contextController) *localCommandHandler {
@@ -80,7 +83,7 @@ func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
 	if result, handled := handleMemoryCommand(line, h.memory); handled {
 		return result, true
 	}
-	if text, handled := handleLocalCommand(line, h.rules); handled {
+	if text, handled := handleLocalCommand(line, h.rules, h.session); handled {
 		return localCommandResult{Output: text}, true
 	}
 	if result, handled := handleDirectSkillCommand(line, h.skills); handled {
@@ -307,22 +310,41 @@ func printSkillNotice(output io.Writer, skills *skill.Store) {
 }
 
 // handleLocalCommand 处理不进入模型的本地命令。第二个返回值表示是否已
-// 处理；未处理的输入继续作为任务发送。
-func handleLocalCommand(line string, rules *tool.ProjectRules) (string, bool) {
+// 处理；未处理的输入继续作为任务发送。session 是可选参数，保留无会话
+// 授权入口（以及现有调用方）的原有行为。
+func handleLocalCommand(line string, rules *tool.ProjectRules, sessionSources ...func() *tool.SessionGrants) (string, bool) {
 	line = strings.TrimSpace(line)
 	if line != "/permissions" && !strings.HasPrefix(line, "/permissions ") {
 		return "", false
 	}
+	var session *tool.SessionGrants
+	if len(sessionSources) > 0 && sessionSources[0] != nil {
+		session = sessionSources[0]()
+	}
 	fields := strings.Fields(line)
 	if len(fields) == 1 {
-		return tool.PermissionSummary(rules), true
+		text := tool.PermissionSummary(rules)
+		if session != nil {
+			text += "\n\n" + tool.SessionGrantSummary(session)
+		}
+		return text, true
+	}
+	switch fields[1] {
+	case "help":
+		return permissionUsage, true
+	case "clear-session":
+		if len(fields) != 2 {
+			return "用法：/permissions clear-session", true
+		}
+		if session == nil {
+			return "当前模式没有本会话授权。", true
+		}
+		return fmt.Sprintf("已清除 %d 条本会话授权。", session.Clear()), true
 	}
 	if rules == nil {
 		return "当前模式未加载项目规则；固定名单可用 /permissions 查看。", true
 	}
 	switch fields[1] {
-	case "help":
-		return permissionUsage, true
 	case "clear":
 		if len(fields) != 2 {
 			return "用法：/permissions clear", true
