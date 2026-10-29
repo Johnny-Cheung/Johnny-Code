@@ -202,7 +202,7 @@ func (b *restrictedBash) execute(ctx context.Context, command string, timeoutSec
 	}
 	chain, parseErr := parseShellCommand(command)
 	if parseErr != nil {
-		return Result{}, permissionDenied("只读模式不支持该 shell 语法", parseErr)
+		return Result{}, permissionDenied("只读模式不支持该命令："+parseErr.Error(), parseErr)
 	}
 	controlled, err := buildRestrictedChain(chain, b.scope, b.runtime.Env)
 	if err != nil {

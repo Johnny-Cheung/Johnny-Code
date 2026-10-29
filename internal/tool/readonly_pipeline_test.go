@@ -66,6 +66,31 @@ func TestReadOnlyRestrictedPipelinesRejectUnsupportedForms(t *testing.T) {
 	}
 }
 
+func TestReadOnlySyntaxRejectionsExplainReason(t *testing.T) {
+	readOnly, _ := readOnlyTest(t)
+	longChain := "pwd"
+	for i := 0; i < maxCommandChainSegments; i++ {
+		longChain += " && pwd"
+	}
+	for _, test := range []struct {
+		command string
+		want    string
+	}{
+		{"ls *.go", "通配符"},
+		{"ls *.go", "加引号"},
+		{"grep --include=*.php pattern .", "find -name"},
+		{longChain, "9 段"},
+		{longChain, "拆成多条"},
+		{"echo $(pwd)", "命令替换"},
+	} {
+		_, err := executeReadOnly(t, readOnly, "bash", map[string]any{"command": test.command})
+		requireToolKind(t, err, KindPermissionDenied)
+		if !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("命令 %q 的拒绝原因缺少 %q：%v", test.command, test.want, err)
+		}
+	}
+}
+
 func TestReadOnlyVirtualCwd(t *testing.T) {
 	readOnly, runtime := readOnlyTest(t)
 	sub := filepath.Join(runtime.WorkDir, "sub")

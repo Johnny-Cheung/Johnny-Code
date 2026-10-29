@@ -97,6 +97,9 @@ func parseShellCommand(command string) (bashChain, error) {
 	if err != nil {
 		return bashChain{}, err
 	}
+	if len(parts) > maxCommandChainSegments {
+		return bashChain{}, shellUnsupported("命令共 %d 段，超过 %d 段上限；请拆成多条 bash 调用", len(parts), maxCommandChainSegments)
+	}
 	chain := bashChain{command: command}
 	pipelineStart := -1
 	pipelineOperator := ""
@@ -120,9 +123,6 @@ func parseShellCommand(command string) (bashChain, error) {
 		scan, err := scanShellSegment(part.text)
 		if err != nil {
 			return bashChain{}, err
-		}
-		if len(chain.segments) >= maxCommandChainSegments {
-			return bashChain{}, shellUnsupported("命令段数量超过 %d 段上限", maxCommandChainSegments)
 		}
 		chain.segments = append(chain.segments, bashChainSegment{
 			text:      part.text,
@@ -447,7 +447,7 @@ func scanShellSegment(text string) (shellSegmentScan, error) {
 		case '{', '}':
 			return scan, shellNeedsShell("不支持未引用的花括号展开")
 		case '*', '?', '[', ']':
-			return scan, shellNeedsShell("不支持未引用的通配符")
+			return scan, shellNeedsShell("不支持未引用的通配符 %q；请加引号，或改用 find -name 精确查找", string(r))
 		case '~':
 			if !started {
 				return scan, shellNeedsShell("不支持未引用的 ~ 展开")

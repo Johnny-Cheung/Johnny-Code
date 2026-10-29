@@ -284,7 +284,7 @@ func (d *Default) approveShellFallback(ctx context.Context, call model.ToolCall,
 		WorkDir:    d.runtime.WorkDir,
 		Target:     command,
 		Command:    command,
-		Reason:     "命令包含需要 shell 语义或未识别的语法，需要完整 shell 审批；本次不能记录或加入会话授权",
+		Reason:     "命令无法直接执行：" + parseErr.Error() + "；需要完整 shell 审批，本次不能记录或加入会话授权",
 		Detail:     parseErr.Error(),
 	}
 	decision, err := d.approve(ctx, request)

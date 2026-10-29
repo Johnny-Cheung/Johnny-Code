@@ -137,6 +137,9 @@ func TestDefaultBashUnknownShellSyntaxUsesSingleShellApproval(t *testing.T) {
 		len(requests[0].SessionCommands) != 0 || len(requests[0].SessionPaths) != 0 {
 		t.Fatalf("完整 shell 审批不应提供记录或会话授权：%#v", requests[0])
 	}
+	if !strings.Contains(requests[0].Reason, "命令替换") {
+		t.Fatalf("审批原因应说明具体语法：%q", requests[0].Reason)
+	}
 }
 
 func TestDefaultBashUnknownProgramRunsDirectAfterApproval(t *testing.T) {

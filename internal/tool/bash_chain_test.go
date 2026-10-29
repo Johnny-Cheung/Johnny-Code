@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +168,20 @@ func TestParseShellCommandSegmentLimit(t *testing.T) {
 	}
 	if _, err := parseShellCommand(command + " && pwd"); err == nil {
 		t.Fatal("超过 8 段应回退")
+	} else if !strings.Contains(err.Error(), "9 段") || !strings.Contains(err.Error(), "拆成多条") {
+		t.Fatalf("段数超限应说明实际段数和处理建议：%v", err)
+	}
+}
+
+func TestParseShellCommandRejectsGlobWithHint(t *testing.T) {
+	for _, command := range []string{"ls *.go", "grep --include=*.php pattern .", "cat *.conf", "ls file?.txt", "ls [ab].txt"} {
+		_, err := parseShellCommand(command)
+		if err == nil {
+			t.Fatalf("命令 %q 应回退审批", command)
+		}
+		if !strings.Contains(err.Error(), "通配符") || !strings.Contains(err.Error(), "加引号") {
+			t.Fatalf("通配符错误应说明原因和处理建议：%v", err)
+		}
 	}
 }
 
