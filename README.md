@@ -124,51 +124,6 @@ johnny --skip    # 放行模式：跳过逐次审批
 
 默认模式下写文件和任意命令会请求审批。选择「批准并记录」后，同一项目前缀（如 `go test`）写入 `.johnny/permissions.local.json`，后续自动执行。
 
-## 权限模型
-
-三种模式都是**应用层策略，不是操作系统沙箱**。
-
-- 默认模式自动执行需要同时满足：路径在工作目录白名单内、未命中危险后缀、每个命令段命中固定查询表 / 项目前缀 / 本会话授权。
-- 固定查询 21 个：纯读 14 个（`echo`、`basename`、`dirname`、`pwd`、`realpath`、`ls`、`grep`、`cat`、`head`、`tail`、`wc`、`stat`、`du`、`diff`），逃逸口 7 个（`find`、`rg`、`sed`、`sort`、`uniq`、`tree`、`file`），各自使用封闭参数表。
-- 默认与只读模式共用分段器：支持 `|`、`&&`、`||`、`;`、虚拟 `cd` 和三种尾部安全重定向，最多 16 段，按 argv 直接执行。
-- 未引用的通配符直接拒绝，查找文件请用 `find -name`；超过 16 段也直接拒绝。
-- 审批提供允许本次、拒绝本次、本会话内允许、批准并记录；默认焦点在拒绝。
-
-默认模式下常见自动执行：
-
-```sh
-rg -n "TODO" . | head -20
-find . -name '*.go' | head
-git status 2>/dev/null        # 已记录 git status 前缀后
-go test ./... | tail -20      # 已记录 go test 前缀后
-```
-
-路径规则、危险后缀、项目规则信任、只读边界等完整细节见[权限模型](docs/permissions.md)和 [v0.7 设计文档](docs/versions/v0.7.md)。
-
-## 子 Agent 与 Workflow
-
-**SubAgent。** 主 Agent 通过 `task` 把边界清晰的任务交给后台子 Agent：`fresh` 从干净上下文开始，`fork` 带上主对话快照。子任务运行期间主 Agent 可以继续工作或结束本轮；报告在下一次请求前注入，主 Agent 空闲时自动唤醒汇总。写入类子任务必须声明文件范围，`write`/`edit` 不能越界。
-
-**Workflow。** 较大的任务由主 Agent 用 `workflow` 拆成有顺序的几步：先 `start` 声明大纲，轮到某一步时再 `run` 启动这一步的多个并行任务，整步结束后所有报告合并成一条送回，最后一步完成即收尾。步骤必须按顺序执行，大纲不能中途修改。`end` 可提前结束。
-
-```text
-workflow 重构日志模块  2/4
-✓ 1 调研现状
-◆ 2 并行改造各子模块    3/5 个任务完成
-    ◆ 改造 parser · 1m05s · 运行中
-    ◆ 改造 writer · 1m05s · 等待审批
-○ 3 集成测试
-○ 4 汇总
-```
-
-详见 [v0.12 · SubAgent](docs/versions/v0.12.md) 和 [v0.13 · Workflow](docs/versions/v0.13.md)。
-
-## 上下文、记忆与 Skills
-
-- **上下文治理**：完整历史、请求视图和终端展示分离；单次工具结果模型可见上限 32 KiB，超出部分存档并可续读；接近窗口上限时保留最近 5 个已完成轮次并生成摘要。`/context` 查看用量，`/compact` 手动压缩。
-- **长期记忆**：`~/.johnny/AGENTS.md` 与项目根 `AGENTS.md` 固定注入；记忆一条一个 Markdown 文件，`MEMORY.md` 索引常驻、正文按需读取。模型通过只读 `memory` 检索、通过 `remember` 写入。
-- **Skills**：从 `<项目>/.johnny/skills/` 和 `~/.johnny/skills/` 发现 `SKILL.md`，系统提示只注入名称和描述，正文由 `skill` 工具按需加载。Skill 只提供任务指导，不授予权限。
-
 ## 文档
 
 | 文档 | 内容 |
@@ -180,25 +135,4 @@ workflow 重构日志模块  2/4
 | [路线图](docs/johnny-code-roadmap.md) | 版本顺序、范围与各版验收状态 |
 | [版本文档](docs/versions/) | v0.1 – v0.13 的设计、取舍和验收记录 |
 
-## 开发
-
-```sh
-go run ./cmd/johnny                 # 源码目录直接运行，读取当前目录 .env
-go test -race ./...                 # 全量测试
-go vet ./... && go build ./...
-bash -n scripts/install.sh
-```
-
-测试使用临时配置、临时 HOME 和本地模拟服务，不读取真实凭据。代码分层、测试覆盖和手动验证工具见[开发](docs/development.md)。
-
-Windows 未做验证；安装脚本只支持 zsh/Bash，可尝试手动构建：
-
-```powershell
-go build -o johnny.exe ./cmd/johnny
-```
-
-## 状态
-
-当前版本 **v0.13.0**。除暂缓的 MCP（v0.9）外，v0.1 – v0.13 均已实现并完成验收；MCP 的设计讨论保留在版本文档中。`johnny` 默认进入逐次审批，`--read` 选择只读，`--skip` 选择放行。
-
-Johnny-Code 是一个逐步迭代的个人项目：每个版本先讨论、再实现、再一起验收，设计取舍和限制都记录在[版本文档](docs/versions/)里。
+当前版本 **v0.13.0**。除暂缓的 MCP（v0.9）外，各版本均已实现并完成验收；设计取舍和已知限制记录在版本文档中。
