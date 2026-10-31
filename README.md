@@ -8,23 +8,7 @@
 
 在任意项目目录运行 `johnny`，用自然语言描述任务，它会反复调用文件与命令工具——读实现、改代码、跑测试、查日志——直到给出结论。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions 三种协议，可以接自建中转站。
 
-```text
-$ johnny
-> 给 calc 加一个 pow 命令，补测试并运行
-
-  正在执行  bash   go test ./...
-  正在编辑  calc.go
-
-✓ 本轮完成 · 9 次工具调用 · bash, read, edit        Ctrl+O 展开
-
-已完成：pow 命令实现在 calc.go，3 个测试全部通过。
-────────────────────────────────────────
-> █
-────────────────────────────────────────
-空闲 · Enter 发送 · Alt+Enter 换行 · /exit 退出
-```
-
-> 界面示意；实际布局会随终端宽度、运行状态和任务区内容变化。
+![Johnny-Code 启动界面](docs/assets/johnny-tui.png)
 
 ## 特性
 
