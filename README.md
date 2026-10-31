@@ -6,7 +6,7 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 ![Version](https://img.shields.io/badge/version-v0.13.0-blue)
 
-在任意项目目录运行 `johnny`，用自然语言描述任务，它会反复调用文件与命令工具——读实现、改代码、跑测试、查日志——直到给出结论。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions 三种协议，可以接自建中转站。
+在任意项目目录运行 `johnny`，用自然语言描述任务，它会反复调用文件与命令工具——读实现、改代码、跑测试、查日志——直到给出结论。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions 三种协议。
 
 ![Johnny-Code 启动界面](docs/assets/johnny-tui.png)
 
@@ -69,12 +69,11 @@ johnny --read    # 只读模式
 johnny --skip    # 放行模式：跳过逐次审批
 ```
 
-`--permission-mode default|read-only|allow` 是等价的长写法，和 `--read`/`--skip` 同时使用时必须一致。
 
 | 模式 | 行为 |
 | --- | --- |
 | `default` | 工作目录内的文件读写、固定查询命令自动执行；其余操作逐次审批 |
-| `read-only` | 拒绝写入；`bash` 只允许固定查询；不弹审批，直接拒绝 |
+| `read` | 拒绝写入；`bash` 只允许固定查询；不弹审批，直接拒绝 |
 | `allow` | 工具直接执行，不逐次确认 |
 
 常用操作：
@@ -92,22 +91,6 @@ johnny --skip    # 放行模式：跳过逐次审批
 
 完整按键、审批面板和任务区说明见[使用手册](docs/usage.md)。
 
-### 示例
-
-```text
-用 read 看一下 internal/tool 的目录结构，找出 bash 工具的实现入口
-```
-
-```text
-给 calc 增加 pow 命令，补一个表驱动测试，然后运行 go test ./...
-```
-
-```text
-只读检查这个大仓库的风险点：并发、错误处理和配置读取，输出一份报告
-```
-
-默认模式下写文件和任意命令会请求审批。选择「批准并记录」后，同一项目前缀（如 `go test`）写入 `.johnny/permissions.local.json`，后续自动执行。
-
 ## 文档
 
 | 文档 | 内容 |
@@ -119,4 +102,3 @@ johnny --skip    # 放行模式：跳过逐次审批
 | [路线图](docs/johnny-code-roadmap.md) | 版本顺序、范围与各版验收状态 |
 | [版本文档](docs/versions/) | v0.1 – v0.13 的设计、取舍和验收记录 |
 
-当前版本 **v0.13.0**。除暂缓的 MCP（v0.9）外，各版本均已实现并完成验收；设计取舍和已知限制记录在版本文档中。
