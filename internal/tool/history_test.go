@@ -107,3 +107,28 @@ func TestHistoryMissingFile(t *testing.T) {
 		t.Fatalf("缺少文件提示异常：%s", result.Content)
 	}
 }
+
+func TestHistoryHugeMatchReportsLineInsteadOfEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.jsonl")
+	huge := strings.Repeat("x", 14<<10) + "NEEDLE" + strings.Repeat("y", 1<<10)
+	line := `{"type":"tool_end","time":"2026-10-31T10:00:03Z","user_turn":1,"turn":1,"call":{"id":"c1","name":"bash","arguments_raw":"{}"},"result":{"tool_call_id":"c1","content":"` + huge + `"}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := NewHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runHistory(t, tool, `{"action":"search","query":"NEEDLE"}`)
+	if strings.Contains(result.Content, "没有找到") {
+		t.Fatalf("大记录不应被当成没有匹配：%s", result.Content)
+	}
+	if !strings.Contains(result.Content, "第 1 行") || !strings.Contains(result.Content, "NEEDLE") {
+		t.Fatalf("大记录应返回行号和匹配片段：%s", result.Content)
+	}
+	read := runHistory(t, tool, `{"action":"read","from":1,"to":1}`)
+	if !strings.Contains(read.Content, "第 1 行") || !strings.Contains(read.Content, "内容已截断") {
+		t.Fatalf("大记录读取应截断并保留行号：%s", read.Content)
+	}
+}

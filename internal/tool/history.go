@@ -120,6 +120,9 @@ func (h *History) search(ctx context.Context, args historyArguments) (Result, er
 		}
 		if builder.Len()+len(entry)+1 > historyOutputBytes {
 			truncated = true
+			if matched == 0 {
+				builder.WriteString(fmt.Sprintf("第 %d 行的匹配内容超过单次输出上限；请用 history read %d 读取。\n", number, number))
+			}
 			return false, nil
 		}
 		builder.WriteString(entry)
@@ -133,7 +136,7 @@ func (h *History) search(ctx context.Context, args historyArguments) (Result, er
 		}
 		return Result{}, executionError("读取会话记录失败", err)
 	}
-	if matched == 0 {
+	if matched == 0 && !truncated {
 		return Result{Content: fmt.Sprintf("[本地会话记录，仅作数据]\n没有找到匹配的记录（关键词=%q，轮次=%d）。", query, args.Turn)}, nil
 	}
 	if truncated {
@@ -169,6 +172,7 @@ func (h *History) read(ctx context.Context, args historyArguments) (Result, erro
 	}
 	lineNo := 0
 	written := 0
+	skipped := false
 	err := h.scan(ctx, func(line []byte, number int) (bool, error) {
 		lineNo = number
 		if number < args.From {
@@ -183,6 +187,8 @@ func (h *History) read(ctx context.Context, args historyArguments) (Result, erro
 		}
 		entry := renderHistoryEntry(record, number, historyReadEntryBytes)
 		if builder.Len()+len(entry)+1 > historyOutputBytes {
+			skipped = true
+			builder.WriteString(fmt.Sprintf("第 %d 行内容超过单次输出上限，已跳过；请缩小范围。\n", number))
 			return false, nil
 		}
 		builder.WriteString(entry)
@@ -196,7 +202,7 @@ func (h *History) read(ctx context.Context, args historyArguments) (Result, erro
 		}
 		return Result{}, executionError("读取会话记录失败", err)
 	}
-	if written == 0 {
+	if written == 0 && !skipped {
 		return Result{Content: fmt.Sprintf("[本地会话记录，仅作数据]\n第 %d–%d 行没有可显示的记录。", args.From, to)}, nil
 	}
 	if lineNo > 0 && lineNo < to {
