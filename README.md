@@ -4,7 +4,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
-![Version](https://img.shields.io/badge/version-v0.13.0-blue)
+![Version](https://img.shields.io/badge/version-v0.14.0-blue)
 
 在任意项目目录运行 `johnny`，用自然语言描述任务，它会反复调用文件与命令工具——读实现、改代码、跑测试、查日志——直到给出结论。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions 三种协议。
 
@@ -19,7 +19,9 @@
 - **Workflow**：主 Agent 先声明分步大纲，再逐步并行执行，整步报告合并送回，适合前后依赖的任务。
 - **上下文治理**：32 KiB 工具预览、大输出存档、接近窗口时自动压缩，`/context` 与 `/compact` 可查可控。
 - **Skills 与长期记忆**：项目/用户级 `SKILL.md`、AGENTS 规则、跨会话 memory，按需加载而非全量注入。
-- **可排查**：每轮对话和工具调用写入本地 JSONL，审批原因同样留痕；记录只用于排查，不参与恢复。
+- **会话恢复**：`/resume` 选择当前目录的历史会话，恢复到关闭前的摘要和保留轮次；`--resume <id>` 可直接启动。
+- **历史查询**：`history` 工具按关键词或轮次查询当前会话的 JSONL，找回压缩或预览截断后丢失的细节。
+- **可排查**：每轮对话和工具调用写入本地 JSONL，审批原因同样留痕。
 
 ## 快速开始
 
@@ -64,9 +66,10 @@ JOHNNY_MODEL=服务提供的模型名
 ## 使用
 
 ```sh
-johnny           # 默认模式：逐次审批
-johnny --read    # 只读模式
-johnny --skip    # 放行模式：跳过逐次审批
+johnny                  # 默认模式：逐次审批
+johnny --read           # 只读模式
+johnny --skip           # 放行模式：跳过逐次审批
+johnny --resume <会话ID>  # 启动时直接恢复指定会话
 ```
 
 | 模式 | 行为 |
@@ -86,7 +89,7 @@ johnny --skip    # 放行模式：跳过逐次审批
 | `Ctrl+C` | 取消本轮和全部子任务；空闲时清空输入 |
 | `/exit`、空输入 `Ctrl+D` | 退出 |
 
-内置命令：`/permissions`、`/context`、`/compact`、`/memory`、`/remember`、`/skills`、`/skills reload`、`/skill <name>`。每个 Skill 同时是独立的 `/skill-name` 命令。
+内置命令：`/permissions`、`/context`、`/compact`、`/memory`、`/remember`、`/resume`、`/skills`、`/skills reload`、`/skill <name>`。每个 Skill 同时是独立的 `/skill-name` 命令。
 
 完整按键、审批面板和任务区说明见[使用手册](docs/usage.md)。
 
@@ -99,5 +102,5 @@ johnny --skip    # 放行模式：跳过逐次审批
 | [权限模型](docs/permissions.md) | 三种模式、固定查询、分段器、审批与边界 |
 | [开发](docs/development.md) | 本地运行、测试、代码结构和手动验证工具 |
 | [路线图](docs/johnny-code-roadmap.md) | 版本顺序、范围与各版验收状态 |
-| [版本文档](docs/versions/) | v0.1 – v0.13 的设计、取舍和验收记录 |
+| [版本文档](docs/versions/) | v0.1 – v0.14 的设计、取舍和验收记录 |
 

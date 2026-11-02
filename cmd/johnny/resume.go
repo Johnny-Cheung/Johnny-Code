@@ -96,6 +96,24 @@ func resumeError(err error) error {
 	}
 }
 
+func resumeContextNote(state *session.ResumeState) string {
+	if state == nil {
+		return ""
+	}
+	if state.Summary != nil && state.Summary.CoveredThrough > 0 {
+		note := fmt.Sprintf("## 恢复的会话\n本会话从本地记录恢复，摘要覆盖到第 %d 轮。更早的细节可用 history 工具查询。", state.Summary.CoveredThrough)
+		if state.Dropped {
+			note += " 上次未完成的一轮已丢弃。"
+		}
+		return note
+	}
+	note := "## 恢复的会话\n本会话从本地记录恢复，最近的消息已经载入。更早的工具输出预览可用 history 工具查询。"
+	if state.Dropped {
+		note += " 上次未完成的一轮已丢弃。"
+	}
+	return note
+}
+
 func printResumeNotice(output io.Writer, state *session.ResumeState, mode permissionMode) {
 	if state == nil {
 		return

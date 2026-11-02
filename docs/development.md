@@ -36,6 +36,8 @@ bash -n scripts/install.sh
 - **长期记忆**：AGENTS 加载、条目格式、project-id、索引预算、用户/项目存储、`remember` 工具、用户规则、轮末审查、会话事件、`/memory`、`/remember` 和 PTY 记忆流程。
 - **SubAgent**：并发上限、时长和请求次数限额、报告截断与数据声明、取消与 bash 进程清理、审批来源与等待状态、审批先进先出队列、唤醒保险阀、`Ctrl+C` 与退出语义；PTY 中的后台运行、自动唤醒、输入时不抢占、默认模式审批和退出取消。
 - **Workflow**：大纲登记与顺序约束、整批校验与回滚、步骤屏障与整步合并报告、排队补位与取消丢弃、报告总量预算、只读与默认模式、任务区布局与折叠、步骤唤醒保险阀；PTY 中的分步推进与 `Ctrl+C` 取消。
+- **会话恢复**：列表过滤、摘要裁剪、最后一个完整轮次、未完成尾部丢弃、损坏尾行、并发文件锁、权限模式恢复、`/resume` 选择与 `--resume` 启动；PTY 中验证列表切换和直接恢复。
+- **历史查询**：关键词、轮次、行范围、输出上限、缺失文件和参数校验。
 - **其他**：会话记录与批量审批审计（含请求原因）、写入失败降级、默认模式审批引导提示、`--read`/`--skip` 短选项与长写法冲突、跨目录配置复用、安装与更新、PATH 幂等与碰撞保护。
 
 既有 PTY 计时用例偶发失败、单独重跑通过；这是重构前已存在的问题。
@@ -45,14 +47,14 @@ bash -n scripts/install.sh
 | 目录 | 职责 |
 | --- | --- |
 | `internal/model` | 统一模型层与三种协议适配 |
-| `internal/tool` | 工具定义、执行、权限、路径边界、受控命令、Skill 工具、`task` 与 `workflow` 工具 |
+| `internal/tool` | 工具定义、执行、权限、路径边界、受控命令、Skill 工具、`task`/`workflow` 工具、历史查询工具 |
 | `internal/agent` | Agent Loop、消息历史、工具调度、摘要请求、收件箱与结束判断 |
 | `internal/contextview` | 预算与 token 估算、工具结果预览与存档、请求视图、轮级压缩、thrashing 保护 |
 | `internal/memory` | AGENTS 加载、用户/项目记忆、索引、显式写入和旁路审查 |
-| `internal/session` | 只写不读的 JSONL 调试记录 |
+| `internal/session` | JSONL 调试记录；写入、会话列表、最后一个完整轮次的读取/恢复状态与文件锁 |
 | `internal/skill` | Skill 发现、frontmatter 校验、项目覆盖用户、元数据预算、系统提示区块和重载 |
 | `internal/subagent` | 子任务登记、并发与限额、fresh/fork 起点、报告格式化、workflow 进度账本与步骤屏障 |
-| `internal/tui` | Bubble Tea v2 界面、输入、状态、审批面板、任务区、Markdown 与目录树渲染 |
+| `internal/tui` | Bubble Tea v2 界面、输入、状态、审批面板、任务区、`/resume` 选择器、Markdown 与目录树渲染 |
 | `cmd/johnny` | CLI 入口、参数、接线、系统提示、TUI 启动与日志 |
 | `cmd/tool-demo` | 手动调用单个工具的小工具 |
 
@@ -65,6 +67,8 @@ bash -n scripts/install.sh
 - 项目规则与信任：`project_rules.go`
 - 固定白名单与危险后缀：`permission_whitelist.go`、`permission_blacklist.go`
 - 工作流：`internal/subagent/workflow.go`、`workflow_step.go`、`internal/tool/workflow.go`、`internal/tui/workflow.go`、`workflow_area.go`
+- 会话恢复：`internal/session/reader.go`、`internal/contextview/restore.go`、`internal/agent/restore.go`、`internal/tui/resume.go`、`cmd/johnny/resume.go`
+- 历史查询：`internal/tool/history.go`
 
 ## 手动验证工具
 

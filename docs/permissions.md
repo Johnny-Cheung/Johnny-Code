@@ -8,6 +8,8 @@ Johnny-Code 有三个权限模式：`default`、`read-only`、`allow`。三种�
 | `read-only` | `--read` 或 `--permission-mode read-only` | 只能读启动工作目录内的文件 | 只允许固定查询 | 不请求，直接拒绝 |
 | `allow` | `--skip` 或 `--permission-mode allow` | 直接执行 | 直接执行 | 不请求 |
 
+`history` 工具只读当前会话的本地 JSONL 记录，不接受任意路径，在三种模式下都不会触发审批；它不扩大文件访问范围。
+
 `--permission-mode` 与 `--read`/`--skip` 同时使用时必须一致，否则启动报错。
 
 ## 默认模式

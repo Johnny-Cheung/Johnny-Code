@@ -44,6 +44,12 @@ func (m *terminalModel) openResume(prompt string) tea.Cmd {
 	if m.options.Sessions == nil {
 		return m.showLocalResult(prompt, "当前入口不支持恢复会话；请在终端界面使用 /resume。")
 	}
+	if m.hasTasks() {
+		return m.showLocalResult(prompt, "还有子任务或工作流在运行；先取消或等待结束再恢复会话。")
+	}
+	if m.options.Subagents != nil && m.options.Subagents.PendingResults() > 0 {
+		return m.showLocalResult(prompt, "还有子任务结果没有汇总；先让主 Agent 处理完再恢复会话。")
+	}
 	items, err := m.options.Sessions()
 	if err != nil {
 		return m.showLocalResult(prompt, "读取会话列表失败："+err.Error())
