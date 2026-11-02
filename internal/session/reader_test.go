@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,4 +314,44 @@ func firstText(t *testing.T, message model.Message) string {
 
 func bytesEqual(value []byte, want string) bool {
 	return string(value) == want
+}
+
+func TestAuditRecordAfterEndDoesNotMarkIncomplete(t *testing.T) {
+	readerHome(t)
+	recorder := readerRecorder(t, "session-audit")
+	recordUserTurn(t, recorder, 1, "第一轮", "回答", agent.StatusCompleted)
+	if err := recorder.RecordMemory(MemoryRecord{Scope: "user_memory", Action: "create", Name: "note", Path: "/tmp/note.md"}); err != nil {
+		t.Fatalf("record memory: %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	infos, err := List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(infos) != 1 || infos[0].Incomplete {
+		t.Fatalf("审计记录不应把会话标成未完成：%+v", infos)
+	}
+
+	state, err := LoadResume("session-audit")
+	if err != nil {
+		t.Fatalf("LoadResume() error = %v", err)
+	}
+	defer state.Close()
+	if state.Dropped {
+		t.Fatal("审计记录不应被当成未完成尾部")
+	}
+	path, err := LogPath("session-audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"type":"memory_write"`) {
+		t.Fatal("恢复不应截断 end 之后的审计记录")
+	}
 }

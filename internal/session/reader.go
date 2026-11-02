@@ -250,14 +250,14 @@ func LoadResumePath(path string) (*ResumeState, error) {
 }
 
 type headerInfo struct {
-	meta             metaEvent
-	title            string
-	turns            int
-	lastEndOffset    int64
-	lastEndUserTurn  int
-	lastStatus       agent.Status
-	lastContentStart int64
-	incomplete       bool
+	meta               metaEvent
+	title              string
+	turns              int
+	lastEndOffset      int64
+	lastEndUserTurn    int
+	lastStatus         agent.Status
+	lastTurnContentEnd int64
+	incomplete         bool
 }
 
 // scanHeader 只解析列表和恢复所需的最小字段，避免为了列会话把每条工具结果
@@ -276,36 +276,42 @@ func scanHeader(path string) (headerInfo, error) {
 		line, readErr := reader.ReadBytes('\n')
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) > 0 {
-			if typeName := fastRecordType(trimmed); typeName != "" {
-				switch typeName {
-				case metaRecordType:
-					var record metaEvent
-					if json.Unmarshal(trimmed, &record) == nil {
-						header.meta = record
-					}
-				case "start":
-					if header.title == "" {
-						var record struct {
-							Message *messageRecord `json:"message"`
-						}
-						if json.Unmarshal(trimmed, &record) == nil {
-							header.title = messageTitle(record.Message)
-						}
-					}
-				case "end":
+			lineEnd := offset + int64(len(line))
+			typeName := fastRecordType(trimmed)
+			switch {
+			case typeName == "":
+				// 无法解析的行只可能是损坏的尾部；保守地当作不完整轮次。
+				header.lastTurnContentEnd = lineEnd
+			case typeName == metaRecordType:
+				var record metaEvent
+				if json.Unmarshal(trimmed, &record) == nil {
+					header.meta = record
+				}
+			case typeName == "start":
+				if header.title == "" {
 					var record struct {
-						UserTurn int          `json:"user_turn"`
-						Status   agent.Status `json:"status"`
+						Message *messageRecord `json:"message"`
 					}
 					if json.Unmarshal(trimmed, &record) == nil {
-						header.turns++
-						header.lastEndOffset = offset + int64(len(line))
-						header.lastEndUserTurn = record.UserTurn
-						header.lastStatus = record.Status
+						header.title = messageTitle(record.Message)
 					}
 				}
+				header.lastTurnContentEnd = lineEnd
+			case typeName == "end":
+				var record struct {
+					UserTurn int          `json:"user_turn"`
+					Status   agent.Status `json:"status"`
+				}
+				if json.Unmarshal(trimmed, &record) == nil {
+					header.turns++
+					header.lastEndOffset = lineEnd
+					header.lastEndUserTurn = record.UserTurn
+					header.lastStatus = record.Status
+					header.lastTurnContentEnd = lineEnd
+				}
+			case turnRecordType(typeName):
+				header.lastTurnContentEnd = lineEnd
 			}
-			header.lastContentStart = offset + int64(len(line))
 		}
 		offset += int64(len(line))
 		if readErr != nil {
@@ -315,7 +321,7 @@ func scanHeader(path string) (headerInfo, error) {
 			return headerInfo{}, fmt.Errorf("读取会话日志失败: %w", readErr)
 		}
 	}
-	header.incomplete = header.lastEndOffset == 0 || header.lastContentStart > header.lastEndOffset
+	header.incomplete = header.lastEndOffset == 0 || header.lastTurnContentEnd > header.lastEndOffset
 	return header, nil
 }
 
@@ -494,6 +500,17 @@ func modelReplay(record *replayRecord) (*model.Replay, bool) {
 		return &model.Replay{Source: record.Source, Data: json.RawMessage(raw)}, true
 	}
 	return nil, false
+}
+
+// turnRecordType 返回该记录是否属于某个用户轮次。权限、记忆、子任务和工作流
+// 审计可以在 end 之后继续写入，它们不代表有未完成的轮次。
+func turnRecordType(typeName string) bool {
+	switch typeName {
+	case "start", "inject", "response", "tool_start", "tool_end", "tool_skipped", "summary":
+		return true
+	default:
+		return false
+	}
 }
 
 func messageTitle(record *messageRecord) string {
