@@ -72,6 +72,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	readOnlyFlag := flags.Bool("read", false, "只读模式")
 	skipFlag := flags.Bool("skip", false, "放行模式：跳过逐次审批")
 	permissionFlag := flags.String("permission-mode", "", "权限模式长写法：default、read-only 或 allow")
+	resumeFlag := flags.String("resume", "", "恢复指定会话 ID")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -89,9 +90,14 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		return 1
 	}
 	permissionSet := false
+	permissionExplicit := false
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "permission-mode" {
+		switch f.Name {
+		case "permission-mode":
 			permissionSet = true
+			permissionExplicit = true
+		case "read", "skip":
+			permissionExplicit = true
 		}
 	})
 	mode, err := resolvePermissionMode(*permissionFlag, permissionSet, *readOnlyFlag, *skipFlag)
@@ -114,6 +120,10 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
 	if !interactive && prompt == "" {
 		fmt.Fprintln(stderr, "任务不能为空。")
+		return 1
+	}
+	if strings.TrimSpace(*resumeFlag) != "" && !interactive {
+		fmt.Fprintln(stderr, "--resume 不能和参数任务同时使用。")
 		return 1
 	}
 
@@ -151,6 +161,35 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
+
+	// 恢复会话必须在构建工具、请求视图和日志之前完成：要沿用原会话 ID、
+	// 原权限模式和原消息历史。恢复失败时不创建新会话，避免静默丢失上下文。
+	var resumeState *session.ResumeState
+	if id := strings.TrimSpace(*resumeFlag); id != "" {
+		resumeState, err = session.LoadResume(id)
+		if err != nil {
+			return reportError(stderr, "恢复会话失败：", resumeError(err))
+		}
+		defer func() { _ = resumeState.Close() }()
+		if !sameWorkDir(resumeState.Metadata.WorkDir, runtime.WorkDir) {
+			return reportError(stderr, "恢复会话失败：", fmt.Errorf(
+				"该会话的工作目录是 %s，当前目录是 %s；请到原目录启动 johnny 后再恢复",
+				resumeState.Metadata.WorkDir, runtime.WorkDir))
+		}
+		sessionID = resumeState.Metadata.ID
+		if !permissionExplicit {
+			if stored, parseErr := parsePermissionMode(resumeState.Metadata.PermissionMode); parseErr == nil {
+				mode = stored
+			}
+		}
+		if resumeState.Metadata.API != cfg.API || resumeState.Metadata.Model != cfg.Model {
+			fmt.Fprintf(stderr, "注意：会话记录使用 %s / %s，当前配置是 %s / %s；继续时使用当前配置。\n",
+				resumeState.Metadata.API, resumeState.Metadata.Model, cfg.API, cfg.Model)
+			stripReplay(resumeState.Steps)
+		}
+		printResumeNotice(stderr, resumeState, mode)
+	}
+
 	skills := skill.Discover(runtime.WorkDir)
 	printSkillNotice(stderr, skills)
 	memoryContext := memory.NewContext(runtime.WorkDir)
@@ -195,7 +234,13 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	}()
 
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
-	logs := openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
+	// 恢复会话时直接续写原文件，由 Record 继续追加。
+	var logs *sessionLogger
+	if resumeState != nil {
+		logs = newSessionLogger(resumeState.Recorder, stderr)
+	} else {
+		logs = openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
+	}
 	defer logs.close()
 	if memoryContext.Store != nil {
 		memoryContext.Store.Observer = func(event memory.WriteEvent) {
@@ -282,7 +327,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	buildSystem := func() string { return mainSystemPrompt(runtime.WorkDir, mode, skills, manager != nil) }
 
 	display := newRenderer(output, stderr)
-	conversation := agent.NewConversation(agent.Options{
+	conversationOptions := agent.Options{
 		Client:          client,
 		Tools:           tools,
 		Model:           cfg.Model,
@@ -294,7 +339,20 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		ContextView:     view,
 		Pinned:          memoryContext.Load,
 		MemoryReview:    memoryReview,
-	})
+	}
+	var conversation *agent.Conversation
+	if resumeState != nil {
+		conversation, err = agent.RestoreConversation(conversationOptions, agent.RestoreState{
+			Summary:  restoreSummary(resumeState.Summary),
+			Steps:    restoreSteps(resumeState.Steps),
+			UserTurn: resumeState.UserTurn,
+		})
+		if err != nil {
+			return reportError(stderr, "恢复会话失败：", err)
+		}
+	} else {
+		conversation = agent.NewConversation(conversationOptions)
+	}
 	if manager != nil {
 		manager.SetParent(conversation, tools)
 	}
@@ -345,7 +403,8 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		if manager != nil {
 			children = &terminalSubagents{manager: manager, conversation: conversation, hub: subagentHub}
 		}
-		return runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), gate, localCommand, compact, skills, children)
+		code, runErr := runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), sessionID, gate, localCommand, compact, skills, children)
+		return handleTerminalResult(code, runErr, input, output, stderr)
 	}
 	printPermissionNotice(stderr, mode)
 	return runInteractive(ctx, conversation, input, logs, display, stderr, localCommand, contextCommands.compact)
@@ -386,6 +445,10 @@ func runInteractive(ctx context.Context, conversation *agent.Conversation, input
 		prompt := line
 		if localCommand != nil {
 			if result, handled := localCommand(line); handled {
+				if result.Resume {
+					fmt.Fprintln(stderr, "当前入口不支持恢复会话；请在终端界面使用 /resume。")
+					continue
+				}
 				if result.Compact {
 					if compact == nil {
 						fmt.Fprintln(stderr, "当前会话未启用上下文治理。")
@@ -1001,6 +1064,7 @@ func printHelp(output io.Writer) {
   --skip            放行模式：工具直接执行，不逐次审批
   --permission-mode 模式  等价的长写法：default、read-only 或 allow；与 --read/--skip 同时使用时必须一致
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
+  --resume 会话ID   恢复指定会话；省略时进入 TUI 后用 /resume 选择
 
 交互模式：
   只支持在终端直接运行 johnny 进入 TUI；参数任务、管道和重定向会被拒绝。
@@ -1011,6 +1075,7 @@ func printHelp(output io.Writer) {
   /compact 手动压缩较早的已完成轮次；自动压缩在接近窗口上限时触发。
   /memory 查看用户级和项目级 MEMORY.md 索引。
   /remember [内容] 让模型起草或更新项目 AGENTS，确认后写入。
+  /resume 选择并恢复当前目录的历史会话；--resume ID 直接在启动时恢复。
   Enter 发送，Alt+Enter 换行，多行粘贴后手动发送，↑↓ 浏览本次输入历史。
   Ctrl+C 取消本轮并等待清理后继续输入；空闲时 Ctrl+C 清空输入。
   TUI 审批提供允许本次、拒绝本次、本会话内允许、批准并记录；默认焦点在拒绝。

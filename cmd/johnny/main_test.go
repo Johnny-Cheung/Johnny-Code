@@ -135,7 +135,7 @@ func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 			if !strings.Contains(output.String(), "v"+version) || !strings.Contains(output.String(), commit) {
 				t.Fatal("版本输出缺少构建信息")
 			}
-		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--read") || !strings.Contains(output.String(), "--skip") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
+		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--read") || !strings.Contains(output.String(), "--skip") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "--resume") || !strings.Contains(output.String(), "/resume") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
 			t.Fatal("帮助输出缺少 TUI 入口、退出方式或现有配置位置")
 		}
 		if stderr.Len() != 0 {

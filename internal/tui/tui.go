@@ -55,6 +55,8 @@ type Options struct {
 	Subagents SubagentControl
 	// RunWake 以子任务结果为起点执行一轮（空闲唤醒），不回显为用户输入。
 	RunWake func(context.Context, func(Event) error, func(string)) (agent.Result, error)
+	// Sessions 返回 /resume 列表。nil 表示当前入口不支持恢复会话。
+	Sessions func() ([]SessionSummary, error)
 }
 
 // LocalCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
@@ -63,6 +65,7 @@ type LocalCommandResult struct {
 	Output  string
 	Prompt  string
 	Compact bool
+	Resume  bool
 }
 
 type approvalDelivery struct {
@@ -188,6 +191,8 @@ type terminalModel struct {
 	draft         string
 	approval      *approvalState
 	approvalQueue []*approvalDelivery
+	resume        *resumeMenu
+	resumeID      string
 	slash         slashMenuState
 	subs          []subagentView
 	subTick       bool
@@ -240,6 +245,9 @@ func Run(ctx context.Context, options Options) error {
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if m.resumeID != "" {
+		return &ResumeRequest{ID: m.resumeID}
 	}
 	select {
 	case inputErr := <-inputErrors:
@@ -354,7 +362,7 @@ func (m *terminalModel) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPrint = nil
 		return m, m.printResponse(pending.summary, pending.answer)
 	case tea.PasteMsg:
-		if m.busy || m.approval != nil {
+		if m.busy || m.approval != nil || m.resume != nil {
 			return m, nil
 		}
 		text := normalizeNewlines(msg.Content)
@@ -368,6 +376,9 @@ func (m *terminalModel) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		keys := msg.String()
 		if m.approval != nil {
 			return m, m.handleApprovalKey(keys)
+		}
+		if m.resume != nil {
+			return m, m.handleResumeKey(keys)
 		}
 		if m.busy {
 			if keys == "ctrl+c" && !m.stopping {
@@ -432,6 +443,9 @@ func (m *terminalModel) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.options.LocalCommand != nil {
 				if result, handled := m.options.LocalCommand(prompt); handled {
+					if result.Resume {
+						return m, m.openResume(prompt)
+					}
 					if result.Compact {
 						return m, m.startCompact(prompt)
 					}
@@ -1289,6 +1303,9 @@ func (m *terminalModel) View() tea.View {
 			lines = lines[len(lines)-maxDynamic:]
 		}
 		return tea.NewView(strings.Join(lines, "\n"))
+	}
+	if m.resume != nil {
+		return tea.NewView(strings.Join(m.resumeLines(width, max(1, m.height-1)), "\n"))
 	}
 	if m.busy {
 		// 留一行给终端光标/滚动，避免动态区域刚好占满屏幕时把旧内容滚入历史。

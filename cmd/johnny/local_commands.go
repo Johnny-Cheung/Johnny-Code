@@ -39,6 +39,7 @@ type localCommandResult struct {
 	Output  string
 	Prompt  string
 	Compact bool
+	Resume  bool
 }
 
 type contextController struct {
@@ -74,6 +75,11 @@ func newLocalCommandHandlerWithMemory(rules *tool.ProjectRules, skills *skill.St
 }
 
 func (h *localCommandHandler) Handle(line string) (localCommandResult, bool) {
+	if trimmed := strings.TrimSpace(line); trimmed == "/resume" {
+		return localCommandResult{Resume: true}, true
+	} else if strings.HasPrefix(trimmed, "/resume ") {
+		return localCommandResult{Output: "用法：/resume"}, true
+	}
 	if result, handled := handleSkillCommand(line, h.skills, h.reload); handled {
 		return result, true
 	}

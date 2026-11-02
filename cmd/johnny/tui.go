@@ -21,12 +21,12 @@ func useTUI(input io.Reader, output io.Writer) bool {
 	return inOK && outOK && term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
-func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store, children *terminalSubagents) int {
+func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel, sessionID string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store, children *terminalSubagents) (int, error) {
 	var tuiLocalCommand func(string) (tui.LocalCommandResult, bool)
 	if localCommand != nil {
 		tuiLocalCommand = func(line string) (tui.LocalCommandResult, bool) {
 			result, handled := localCommand(line)
-			return tui.LocalCommandResult{Output: result.Output, Prompt: result.Prompt, Compact: result.Compact}, handled
+			return tui.LocalCommandResult{Output: result.Output, Prompt: result.Prompt, Compact: result.Compact, Resume: result.Resume}, handled
 		}
 	}
 	var tuiSlashCommands func() []tui.SlashCommand
@@ -74,6 +74,7 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 		Input: input, Output: output, Model: modelName, WorkDir: workDir, Version: version, Mode: permissionLabel,
 		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands, RunCompact: tuiCompact,
 		Subagents: tuiSubagents, RunWake: tuiWake,
+		Sessions: func() ([]tui.SessionSummary, error) { return resumableSessions(workDir, sessionID) },
 		RunTurn: func(turnCtx context.Context, prompt string, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
 			logs.setStderr(noticeWriter{notice: notice})
 			return conversation.Run(turnCtx, prompt, func(event agent.Event) error {
@@ -86,9 +87,9 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 		},
 	})
 	if err != nil {
-		return reportError(stderr, "终端界面失败：", err)
+		return 1, err
 	}
-	return 0
+	return 0, nil
 }
 
 type noticeWriter struct{ notice func(string) }
@@ -102,7 +103,7 @@ func (w noticeWriter) Write(data []byte) (int, error) {
 // 与内置命令同名的 Skill 不作为独立命令展示，但仍可用 /skill <name>。
 func slashCommands(skills *skill.Store) []tui.SlashCommand {
 	reserved := map[string]bool{
-		"skills": true, "skill": true, "permissions": true, "context": true, "compact": true, "memory": true, "remember": true, "exit": true,
+		"skills": true, "skill": true, "permissions": true, "context": true, "compact": true, "memory": true, "remember": true, "resume": true, "exit": true,
 	}
 	commands := make([]tui.SlashCommand, 0, 7)
 	for _, item := range skills.Skills() {
@@ -124,6 +125,7 @@ func slashCommands(skills *skill.Store) []tui.SlashCommand {
 		tui.SlashCommand{Command: "compact", Description: "手动压缩较早的已完成轮次", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "memory", Description: "查看用户级和项目级记忆索引", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "remember", Description: "让模型起草或更新项目 AGENTS，确认后写入", Source: "内置", Builtin: true},
+		tui.SlashCommand{Command: "resume", Description: "选择并恢复当前目录的历史会话", Source: "内置", Builtin: true},
 		tui.SlashCommand{Command: "exit", Description: "退出当前会话", Source: "内置", Builtin: true},
 	)
 }

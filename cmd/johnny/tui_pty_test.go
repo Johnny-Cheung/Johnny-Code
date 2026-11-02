@@ -24,6 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
@@ -54,6 +57,9 @@ func TestTerminalHelperProcess(t *testing.T) {
 	default:
 		args = []string{"--permission-mode", mode}
 	}
+	if id := os.Getenv("JOHNNY_TUI_TEST_RESUME"); id != "" {
+		args = append(args, "--resume", id)
+	}
 	code := run(ctx, args, os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	// macOS 在会话首进程退出后撤销 slave，必须在退出前检查恢复结果。
@@ -82,7 +88,11 @@ func startTerminal(t *testing.T, serverURL string) *terminalProcess {
 
 func startTerminalMode(t *testing.T, serverURL, mode string, extraEnv ...string) *terminalProcess {
 	t.Helper()
-	dir, home := t.TempDir(), t.TempDir()
+	return startTerminalModeAt(t, serverURL, mode, t.TempDir(), t.TempDir(), extraEnv...)
+}
+
+func startTerminalModeAt(t *testing.T, serverURL, mode, dir, home string, extraEnv ...string) *terminalProcess {
+	t.Helper()
 	path := filepath.Join(dir, "test.env")
 	if err := os.WriteFile(path, []byte("JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL="+serverURL+"\nJOHNNY_MODEL=terminal-test\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -200,6 +210,32 @@ func (p *terminalProcess) expect(t *testing.T, offset int, text string) int {
 				continue
 			}
 			t.Fatalf("终端提前退出 %v，缺少 %q：\n%s", p.err, text, got)
+		}
+	}
+}
+
+func writeResumeFixture(t *testing.T, home, dir, id, title string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	recorder, err := session.New(session.Metadata{
+		ID: id, WorkDir: dir, API: "anthropic-messages", Model: "terminal-test", PermissionMode: "allow",
+	})
+	if err != nil {
+		t.Fatalf("create session fixture: %v", err)
+	}
+	defer recorder.Close()
+	user := model.Message{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.BlockText, Text: title}}}
+	response := &model.Response{
+		Message:    model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{{Type: model.BlockText, Text: "上次的回答"}}},
+		StopReason: model.StopEndTurn,
+	}
+	for _, event := range []agent.Event{
+		{Type: agent.EventStart, UserTurn: 1, Message: &user},
+		{Type: agent.EventResponse, UserTurn: 1, Response: response},
+		{Type: agent.EventEnd, UserTurn: 1, Status: agent.StatusCompleted},
+	} {
+		if err := recorder.Record(event); err != nil {
+			t.Fatalf("record fixture: %v", err)
 		}
 	}
 }
@@ -694,4 +730,39 @@ func TestTerminalPTYExitWithoutTask(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTerminalPTYResumeFlagRestoresSession(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		terminalAnswer(w, "ok")
+	}))
+	defer server.Close()
+
+	dir, home := t.TempDir(), t.TempDir()
+	writeResumeFixture(t, home, dir, "resume-direct", "直接恢复的会话")
+	p := startTerminalModeAt(t, server.URL, "allow", dir, home, "JOHNNY_TUI_TEST_RESUME=resume-direct")
+	end := p.expect(t, 0, "已恢复会话 resume-direct")
+	p.expect(t, end, "1 轮")
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+}
+
+func TestTerminalPTYResumeListSwitchesSession(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		terminalAnswer(w, "ok")
+	}))
+	defer server.Close()
+
+	dir, home := t.TempDir(), t.TempDir()
+	writeResumeFixture(t, home, dir, "resume-list", "列表里的会话")
+	p := startTerminalModeAt(t, server.URL, "allow", dir, home)
+	p.write(t, "/resume\r")
+	end := p.expect(t, 0, "恢复会话")
+	p.expect(t, end, "列表里的会话")
+	p.expect(t, end, "Enter 恢复")
+	p.write(t, "\r")
+	end = p.expect(t, end, "已恢复会话 resume-list")
+	p.expect(t, end, "Enter 发送")
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
 }
