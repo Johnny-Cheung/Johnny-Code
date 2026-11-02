@@ -134,11 +134,8 @@ func (m *terminalModel) resumeLines(width, maxRows int) []string {
 	hint := "↑↓ 选择 · Enter 恢复 · Esc 取消"
 	lines := []string{ansi.Truncate(header, width, "…")}
 
-	// 标题、目录、提示和可能的未完成说明各占一行，其余留给列表。
-	reserved := 3
-	if state.items[state.selected].Incomplete {
-		reserved++
-	}
+	// 标题、目录、提示、可能的前后省略提示和未完成说明，其余留给列表。
+	reserved := 6
 	rowLimit := max(1, maxRows-reserved)
 	start := 0
 	if state.selected >= rowLimit {
