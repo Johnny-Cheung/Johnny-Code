@@ -21,7 +21,7 @@ func useTUI(input io.Reader, output io.Writer) bool {
 	return inOK && outOK && term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
-func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel, sessionID string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store, children *terminalSubagents) (int, error) {
+func runTerminal(ctx context.Context, conversation *agent.Conversation, input io.Reader, output, stderr io.Writer, logs *sessionLogger, modelName, workDir, permissionLabel, sessionID, notice string, gate *tool.ApprovalGate, localCommand func(string) (localCommandResult, bool), compact func(context.Context, func(agent.Event) error) (string, error), skills *skill.Store, children *terminalSubagents) (int, error) {
 	var tuiLocalCommand func(string) (tui.LocalCommandResult, bool)
 	if localCommand != nil {
 		tuiLocalCommand = func(line string) (tui.LocalCommandResult, bool) {
@@ -73,7 +73,7 @@ func runTerminal(ctx context.Context, conversation *agent.Conversation, input io
 	err := tui.Run(ctx, tui.Options{
 		Input: input, Output: output, Model: modelName, WorkDir: workDir, Version: version, Mode: permissionLabel,
 		Gate: gate, LocalCommand: tuiLocalCommand, SlashCommands: tuiSlashCommands, RunCompact: tuiCompact,
-		Subagents: tuiSubagents, RunWake: tuiWake,
+		Subagents: tuiSubagents, RunWake: tuiWake, Notice: notice,
 		Sessions: func() ([]tui.SessionSummary, error) { return resumableSessions(workDir, sessionID) },
 		RunTurn: func(turnCtx context.Context, prompt string, emit func(tui.Event) error, notice func(string)) (agent.Result, error) {
 			logs.setStderr(noticeWriter{notice: notice})

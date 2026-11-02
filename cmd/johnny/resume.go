@@ -114,18 +114,19 @@ func resumeContextNote(state *session.ResumeState) string {
 	return note
 }
 
-func printResumeNotice(output io.Writer, state *session.ResumeState, mode permissionMode) {
+func resumeNoticeText(state *session.ResumeState, mode permissionMode) string {
 	if state == nil {
-		return
+		return ""
 	}
-	fmt.Fprintf(output, "已恢复会话 %s：%d 轮，权限 %s", state.Metadata.ID, state.UserTurn, mode.label())
+	text := fmt.Sprintf("已恢复会话 %s：%d 轮，权限 %s", state.Metadata.ID, state.UserTurn, mode.label())
 	if state.Summary != nil && state.Summary.CoveredThrough > 0 {
-		fmt.Fprintf(output, "，摘要覆盖到第 %d 轮", state.Summary.CoveredThrough)
+		text += fmt.Sprintf("，摘要覆盖到第 %d 轮", state.Summary.CoveredThrough)
 	}
-	fmt.Fprintln(output, "。")
+	text += "。"
 	if state.Dropped {
-		fmt.Fprintln(output, "上次有一轮未完成，已丢弃。")
+		text += " 上次有一轮未完成，已丢弃。"
 	}
+	return text
 }
 
 func restoreSummary(summary *session.ResumeSummary) *contextview.RestoreSummary {

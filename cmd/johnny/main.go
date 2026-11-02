@@ -187,7 +187,6 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 				resumeState.Metadata.API, resumeState.Metadata.Model, cfg.API, cfg.Model)
 			stripReplay(resumeState.Steps)
 		}
-		printResumeNotice(stderr, resumeState, mode)
 	}
 
 	skills := skill.Discover(runtime.WorkDir)
@@ -421,7 +420,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		if manager != nil {
 			children = &terminalSubagents{manager: manager, conversation: conversation, hub: subagentHub}
 		}
-		code, runErr := runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), sessionID, gate, localCommand, compact, skills, children)
+		code, runErr := runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), sessionID, resumeNoticeText(resumeState, mode), gate, localCommand, compact, skills, children)
 		return handleTerminalResult(code, runErr, input, output, stderr)
 	}
 	printPermissionNotice(stderr, mode)

@@ -57,6 +57,8 @@ type Options struct {
 	RunWake func(context.Context, func(Event) error, func(string)) (agent.Result, error)
 	// Sessions 返回 /resume 列表。nil 表示当前入口不支持恢复会话。
 	Sessions func() ([]SessionSummary, error)
+	// Notice 是在欢迎信息之后打印的一次性提示，用于“已恢复会话”等状态。
+	Notice string
 }
 
 // LocalCommandResult 表示本地命令的结果。Prompt 非空时作为本轮任务发送，
@@ -293,7 +295,12 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 // Init 打印页眉并启动事件读取链。读取链在整个会话期间保持存活（空闲时也是），
 // 这样后台子任务的审批请求随时都有接收方。
 func (m *terminalModel) Init() tea.Cmd {
-	return tea.Batch(tea.Println(wrap(m.headerText(), m.contentWidth())), m.waitEvent())
+	cmds := []tea.Cmd{tea.Println(wrap(m.headerText(), m.contentWidth()))}
+	if notice := strings.TrimSpace(m.options.Notice); notice != "" {
+		cmds = append(cmds, tea.Println(wrap(safeText(notice), m.contentWidth())))
+	}
+	cmds = append(cmds, m.waitEvent())
+	return tea.Batch(cmds...)
 }
 
 func (m *terminalModel) headerText() string {
