@@ -36,7 +36,7 @@ const (
 )
 
 var (
-	version          = "0.13.0"
+	version          = "0.14.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -262,9 +262,21 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		gate.SetAudit(logs.recordPermission)
 	}
 
+	historyPath, err := session.LogPath(sessionID)
+	if err != nil {
+		return reportError(stderr, "会话初始化失败：", err)
+	}
+	historyTool, err := tool.NewHistory(historyPath)
+	if err != nil {
+		return reportError(stderr, "历史查询初始化失败：", err)
+	}
+	toolRegistry, err := registry.With(historyTool)
+	if err != nil {
+		return reportError(stderr, "历史查询初始化失败：", err)
+	}
+
 	// task 工具只在 TUI 入口注册：子任务的状态、审批和唤醒都依赖终端界面。
 	tuiMode := interactive && useTUI(input, output)
-	toolRegistry := registry
 	var manager *subagent.Manager
 	subagentHub := &subagentEvents{}
 	if tuiMode {
@@ -300,7 +312,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		if err != nil {
 			return reportError(stderr, "子任务初始化失败：", err)
 		}
-		if toolRegistry, err = registry.With(taskTool, workflowTool); err != nil {
+		if toolRegistry, err = toolRegistry.With(taskTool, workflowTool); err != nil {
 			return reportError(stderr, "子任务初始化失败：", err)
 		}
 	}
@@ -324,7 +336,13 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 			return reportError(stderr, "子任务初始化失败：", err)
 		}
 	}
-	buildSystem := func() string { return mainSystemPrompt(runtime.WorkDir, mode, skills, manager != nil) }
+	buildSystem := func() string {
+		prompt := mainSystemPrompt(runtime.WorkDir, mode, skills, manager != nil)
+		if resumeState != nil {
+			prompt += "\n\n" + resumeContextNote(resumeState)
+		}
+		return prompt
+	}
 
 	display := newRenderer(output, stderr)
 	conversationOptions := agent.Options{

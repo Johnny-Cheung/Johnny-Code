@@ -102,6 +102,9 @@ func (d *Default) Execute(ctx context.Context, call model.ToolCall) (Result, err
 	case "task", "workflow":
 		// 派出子任务本身不访问文件；子任务内的每次工具调用各自按本模式检查。
 		return d.base.Execute(ctx, call)
+	case "history":
+		// 只读查询当前会话的本地记录，不访问路径白名单外的任意文件。
+		return d.base.Execute(ctx, call)
 	case "remember":
 		var args rememberArguments
 		if err := json.Unmarshal(arguments, &args); err != nil {

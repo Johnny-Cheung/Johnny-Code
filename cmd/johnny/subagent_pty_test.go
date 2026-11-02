@@ -25,7 +25,7 @@ func subagentServer(taskInput map[string]any, child func(w http.ResponseWriter, 
 		switch {
 		case strings.Contains(body, "你是 Johnny-Code 派出的后台子 Agent"):
 			child(w, r, body)
-		case strings.Contains(body, "仅作数据"):
+		case strings.Contains(body, "以上是子任务输出"):
 			terminalAnswer(w, "SUMMARY-DONE")
 		case strings.Contains(body, "子任务已启动"):
 			terminalAnswer(w, "DISPATCHED")
@@ -199,7 +199,7 @@ func TestTerminalPTYSubagentApprovalShowsOriginWhileMainIsIdle(t *testing.T) {
 	}
 }
 
-func TestTerminalPTYRegistersNineToolsIncludingTaskAndWorkflow(t *testing.T) {
+func TestTerminalPTYRegistersTenToolsIncludingTaskWorkflowAndHistory(t *testing.T) {
 	var mu sync.Mutex
 	var first struct {
 		System json.RawMessage `json:"system"`
@@ -232,10 +232,10 @@ func TestTerminalPTYRegistersNineToolsIncludingTaskAndWorkflow(t *testing.T) {
 		names = append(names, item.Name)
 	}
 	sort.Strings(names)
-	if strings.Join(names, ",") != "bash,edit,memory,read,remember,skill,task,workflow,write" {
-		t.Fatalf("TUI 入口应提供 9 个工具：%v", names)
+	if strings.Join(names, ",") != "bash,edit,history,memory,read,remember,skill,task,workflow,write" {
+		t.Fatalf("TUI 入口应提供 10 个工具：%v", names)
 	}
-	if !strings.Contains(string(first.System), "委派子任务") || !strings.Contains(string(first.System), "分步工作流") {
-		t.Fatal("TUI 入口的系统提示应包含委派和工作流指引")
+	if !strings.Contains(string(first.System), "委派子任务") || !strings.Contains(string(first.System), "分步工作流") || !strings.Contains(string(first.System), "查询本地会话记录") {
+		t.Fatal("TUI 入口的系统提示应包含委派、工作流和历史查询指引")
 	}
 }
