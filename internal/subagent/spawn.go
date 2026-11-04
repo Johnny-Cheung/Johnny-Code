@@ -107,7 +107,7 @@ func (m *Manager) prepareLocked(request tool.SpawnRequest, step *wfStep, slot in
 		ID: id, SessionID: fmt.Sprintf("%s-sub-%s", m.cfg.SessionID, id),
 		Description: strings.Join(strings.Fields(request.Description), " "),
 		Kind:        request.Kind, Access: request.Access, Paths: append([]string(nil), request.Paths...),
-		State: StateQueued,
+		State: StateQueued, MaxRequests: m.cfg.MaxRequests,
 	}
 	if step != nil {
 		info.Step, info.ReportBytes = step.no, step.reportBytes
@@ -181,6 +181,7 @@ func (m *Manager) newConversation(info Info, request tool.SpawnRequest) (*agent.
 	if info.Kind == tool.SpawnFork {
 		child, err := m.parent.Fork(agent.ForkOptions{
 			Tools: tools, SessionID: session, MaxTurns: m.cfg.MaxRequests, RequestTimeout: m.cfg.RequestTimeout,
+			MaxOutputTokens: m.cfg.MaxOutputTokens,
 		})
 		if err != nil {
 			return nil, "", err
@@ -211,8 +212,18 @@ func forkDirective(info Info, prompt string) string {
 	}
 	return fmt.Sprintf("[子任务指令]\n你现在是从以上对话派生出的后台子任务 %s，与主对话并行运行。不要继续或总结主对话，也不要向用户提问，只完成下面的任务。"+
 		"你看到的是派出那一刻的对话快照，之后主对话的进展你看不到。%s你不能使用 task、workflow 和 remember。\n"+
-		"你的最终回复就是交给主 Agent 的报告：写清结论、涉及的文件、执行过的命令和未解决项；不要建议用户重启或切换权限模式。%s\n\n任务：\n%s",
-		info.ID, scope, ReportLengthHint(info), prompt)
+		"你的最终回复就是交给主 Agent 的报告：写清结论、涉及的文件、执行过的命令和未解决项；不要建议用户重启或切换权限模式。%s %s\n\n任务：\n%s",
+		info.ID, scope, BudgetHint(info), ReportLengthHint(info), prompt)
+}
+
+// BudgetHint 把硬性的请求上限转成可执行的软预算：先批量读取、留出写报告的次数，
+// 避免把全部请求花在逐文件探索上。
+func BudgetHint(info Info) string {
+	if info.MaxRequests <= 0 {
+		return ""
+	}
+	soft := info.MaxRequests * 4 / 5
+	return fmt.Sprintf("请求预算：最多 %d 次模型请求；建议在约 %d 次前停止探索并写出最终报告，优先批量读取文件（例如一次读取多个文件或合并 grep），不要逐文件多轮探索。", info.MaxRequests, soft)
 }
 
 // ReportLengthHint 提醒工作流里的子 Agent：报告会和同一步其他任务的报告一起交给主 Agent，需要精简。

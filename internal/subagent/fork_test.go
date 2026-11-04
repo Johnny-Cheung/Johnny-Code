@@ -48,6 +48,9 @@ func TestForkTaskStartsFromParentSnapshotAndRejectsNestedTools(t *testing.T) {
 				if req.System != "PARENT-SYSTEM" || !strings.Contains(toolNames(req.Tools), "task") || !strings.Contains(toolNames(req.Tools), "write") {
 					t.Errorf("fork 应沿用父系统提示和工具定义：%q %s", req.System, toolNames(req.Tools))
 				}
+				if req.MaxOutputTokens != DefaultMaxOutputTokens {
+					t.Errorf("fork 子任务应使用 8192 输出下限：%d", req.MaxOutputTokens)
+				}
 				return callResponse("k1", "task", `{"description":"嵌套","prompt":"x","kind":"fresh"}`), nil
 			}
 			last := req.Messages[len(req.Messages)-1].Content[0].ToolResult
@@ -76,6 +79,15 @@ func TestForkTaskStartsFromParentSnapshotAndRejectsNestedTools(t *testing.T) {
 	}
 	if got := h.parent.ContextStats().Turns; got != 2 {
 		t.Fatalf("fork 不应改变父会话轮次：%d", got)
+	}
+}
+
+func TestForkDirectiveIncludesRequestBudget(t *testing.T) {
+	directive := forkDirective(Info{ID: "ab12", Access: tool.SpawnRead, MaxRequests: 100}, "按讨论方案实现")
+	for _, want := range []string{"最多 100 次模型请求", "约 80 次", "批量读取"} {
+		if !strings.Contains(directive, want) {
+			t.Fatalf("fork 指令缺少 %q：%s", want, directive)
+		}
 	}
 }
 

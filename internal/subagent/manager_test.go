@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
@@ -61,6 +62,9 @@ func TestFreshReadTaskRunsInBackgroundAndInjectsReport(t *testing.T) {
 	requests := h.childRequests()
 	if len(requests) != 1 || requests[0].System != "CHILD-SYSTEM" || len(requests[0].Messages) != 1 || requests[0].Messages[0].Content[0].Text != "找出失败原因" {
 		t.Fatalf("fresh 子任务只应看到自己的提示：%+v", requests)
+	}
+	if requests[0].MaxOutputTokens != DefaultMaxOutputTokens {
+		t.Fatalf("子任务应使用 8192 输出下限：%d", requests[0].MaxOutputTokens)
 	}
 	if names := toolNames(requests[0].Tools); names != "bash,read,skill" {
 		t.Fatalf("fresh 只读子任务的工具集合错误：%s", names)
@@ -120,6 +124,22 @@ func TestCancelAllStopsTasksWithoutInjecting(t *testing.T) {
 	}
 	if h.parent.InboxLen() != 0 || h.manager.Running() != 0 || len(h.manager.claims.Owners()) != 0 {
 		t.Fatal("取消后应清空收件箱、运行表和文件范围")
+	}
+}
+
+func TestManagerAppliesGenerousDefaults(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	if h.manager.cfg.MaxRequests != 100 {
+		t.Fatalf("默认请求次数 = %d，want 100", h.manager.cfg.MaxRequests)
+	}
+	if h.manager.cfg.TimeLimit != 30*time.Minute {
+		t.Fatalf("默认总时长 = %s，want 30m", h.manager.cfg.TimeLimit)
+	}
+	if h.manager.cfg.MaxOutputTokens != 8192 || h.manager.cfg.Budget.Output != 8192 {
+		t.Fatalf("默认输出上限 = %d，预算输出 = %d，want 8192", h.manager.cfg.MaxOutputTokens, h.manager.cfg.Budget.Output)
+	}
+	if MaxReportBytes != 16<<10 {
+		t.Fatalf("单份报告上限 = %d，want 16 KiB", MaxReportBytes)
 	}
 }
 

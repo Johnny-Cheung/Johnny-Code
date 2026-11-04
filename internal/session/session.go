@@ -38,6 +38,9 @@ type Metadata struct {
 	API            string
 	Model          string
 	PermissionMode string
+	// ParentPermissionMode 仅子会话使用：父会话的权限模式。子会话的
+	// PermissionMode 记录实际生效的模式（read 子任务为 read-only）。
+	ParentPermissionMode string
 	// 以下字段仅子 Agent 的会话记录使用，把它与父会话和子任务关联起来。
 	ParentID    string
 	SubagentID  string
@@ -191,20 +194,21 @@ func New(meta Metadata) (*Recorder, error) {
 
 	recorder := newRecorder(file, path)
 	metaRecord := metaEvent{
-		Type:           metaRecordType,
-		ID:             id,
-		Time:           recorder.timestamp(),
-		CWD:            meta.WorkDir,
-		API:            meta.API,
-		Model:          meta.Model,
-		PermissionMode: meta.PermissionMode,
-		ParentID:       meta.ParentID,
-		SubagentID:     meta.SubagentID,
-		Kind:           meta.Kind,
-		Access:         meta.Access,
-		Paths:          meta.Paths,
-		Description:    meta.Description,
-		WorkflowStep:   meta.WorkflowStep,
+		Type:                 metaRecordType,
+		ID:                   id,
+		Time:                 recorder.timestamp(),
+		CWD:                  meta.WorkDir,
+		API:                  meta.API,
+		Model:                meta.Model,
+		PermissionMode:       meta.PermissionMode,
+		ParentPermissionMode: meta.ParentPermissionMode,
+		ParentID:             meta.ParentID,
+		SubagentID:           meta.SubagentID,
+		Kind:                 meta.Kind,
+		Access:               meta.Access,
+		Paths:                meta.Paths,
+		Description:          meta.Description,
+		WorkflowStep:         meta.WorkflowStep,
 	}
 	if err := recorder.write(metaRecord); err != nil {
 		_ = recorder.Close()
@@ -438,13 +442,15 @@ type metaEvent struct {
 	API            string    `json:"api"`
 	Model          string    `json:"model"`
 	PermissionMode string    `json:"permission_mode,omitempty"`
-	ParentID       string    `json:"parent_id,omitempty"`
-	SubagentID     string    `json:"subagent_id,omitempty"`
-	Kind           string    `json:"kind,omitempty"`
-	Access         string    `json:"access,omitempty"`
-	Paths          []string  `json:"paths,omitempty"`
-	Description    string    `json:"description,omitempty"`
-	WorkflowStep   int       `json:"workflow_step,omitempty"`
+	// ParentPermissionMode 记录子会话的父权限模式，便于区分“子任务实际只读”和“父会话处于放行模式”。
+	ParentPermissionMode string   `json:"parent_permission_mode,omitempty"`
+	ParentID             string   `json:"parent_id,omitempty"`
+	SubagentID           string   `json:"subagent_id,omitempty"`
+	Kind                 string   `json:"kind,omitempty"`
+	Access               string   `json:"access,omitempty"`
+	Paths                []string `json:"paths,omitempty"`
+	Description          string   `json:"description,omitempty"`
+	WorkflowStep         int      `json:"workflow_step,omitempty"`
 }
 
 type subagentEvent struct {

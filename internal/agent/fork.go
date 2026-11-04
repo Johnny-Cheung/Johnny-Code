@@ -22,6 +22,9 @@ type ForkOptions struct {
 	SessionID      string
 	MaxTurns       int
 	RequestTimeout time.Duration
+	// MaxOutputTokens 为 0 时沿用父会话的输出上限；子任务管理器会传入更大的值，
+	// 让 fork 分身也有足够空间写完最终报告。
+	MaxOutputTokens int
 }
 
 // Fork 以父会话请求视图的快照创建子会话：截到最后一个完整消息边界，
@@ -49,6 +52,9 @@ func (c *Conversation) Fork(opts ForkOptions) (*Conversation, error) {
 	options.Tools = opts.Tools
 	options.MaxTurns = opts.MaxTurns
 	options.RequestTimeout = opts.RequestTimeout
+	if opts.MaxOutputTokens > 0 {
+		options.MaxOutputTokens = opts.MaxOutputTokens
+	}
 	options.ContextView = view
 	options.Pinned = nil
 	options.MemoryReview = nil

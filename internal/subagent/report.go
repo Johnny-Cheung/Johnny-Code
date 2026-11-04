@@ -8,8 +8,9 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 )
 
-// MaxReportBytes 是单条子任务报告正文的上限。
-const MaxReportBytes = 8 << 10
+// MaxReportBytes 是单条子任务报告正文的上限。调查类报告常带文件清单和逐条结论，
+// 8 KiB 容易在结论写完整前被截断。
+const MaxReportBytes = 16 << 10
 
 // StatusTimeLimit 表示子任务达到总时长上限。其余状态沿用 Agent Loop 的结束状态。
 const StatusTimeLimit agent.Status = "time_limit"

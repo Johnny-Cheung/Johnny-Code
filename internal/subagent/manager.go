@@ -16,9 +16,15 @@ import (
 )
 
 const (
-	MaxConcurrent      = 5
-	DefaultMaxRequests = 30
-	DefaultTimeLimit   = 20 * time.Minute
+	MaxConcurrent = 5
+	// DefaultMaxRequests 与主 Agent 的默认请求次数一致。子任务撞上限后不能续跑，
+	// 预算过低会让调查类任务在写报告前被截断，只能由主 Agent 重做。
+	DefaultMaxRequests = 100
+	// DefaultTimeLimit 是防止挂死占住并发名额的保险丝，不作为正常任务的预算。
+	DefaultTimeLimit = 30 * time.Minute
+	// DefaultMaxOutputTokens 是子 Agent 单次响应的下限。主 Agent 仍使用
+	// JOHNNY_MAX_OUTPUT_TOKENS；子任务的报告通常更长，需要有足够空间写完。
+	DefaultMaxOutputTokens = 8192
 )
 
 // State 是运行中子任务的可见状态。
@@ -45,6 +51,8 @@ type Info struct {
 	Step int
 	// ReportBytes 是工作流任务的报告正文上限，单个委派的任务为 0。
 	ReportBytes int
+	// MaxRequests 是子任务可用的模型请求次数，用于提示词里的软预算。
+	MaxRequests int
 }
 
 type EventType string
@@ -160,7 +168,15 @@ func NewManager(cfg Config) (*Manager, error) {
 		cfg.TimeLimit = DefaultTimeLimit
 	}
 	if cfg.MaxOutputTokens <= 0 {
-		cfg.MaxOutputTokens = contextview.DefaultOutputTokens
+		cfg.MaxOutputTokens = DefaultMaxOutputTokens
+	}
+	// 子 Agent 的报告通常比主 Agent 的一轮回答更长；不足下限时抬到 8192，
+	// 同时按同一个输出预留重建输入预算，避免请求上限和预算口径不一致。
+	if cfg.MaxOutputTokens < DefaultMaxOutputTokens {
+		cfg.MaxOutputTokens = DefaultMaxOutputTokens
+		if cfg.Budget.Window > 0 {
+			cfg.Budget = contextview.NewBudget(cfg.Budget.Window, cfg.MaxOutputTokens)
+		}
 	}
 	if !cfg.Budget.Valid() {
 		cfg.Budget = contextview.NewBudget(contextview.DefaultWindow, cfg.MaxOutputTokens)

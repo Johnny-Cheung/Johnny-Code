@@ -56,6 +56,9 @@ func childSystemPrompt(workDir string, mode permissionMode, info subagent.Info, 
 	builder.WriteString("你不能向用户提问，也不能派出子任务、使用工作流或写入长期记忆；所有交互都经过主 Agent，你的最终回复就是交给主 Agent 的报告。\n")
 	builder.WriteString("请使用可用工具实际读取文件、修改代码或执行命令来完成任务。只有在对应工具成功返回后，才能声称已经完成该操作；工具失败时根据错误继续处理或说明阻塞原因。\n")
 	builder.WriteString("最终报告请包含：结论、涉及的文件、执行过的命令和未解决项。不要建议用户重启或切换权限模式。")
+	if hint := subagent.BudgetHint(info); hint != "" {
+		builder.WriteString("\n" + hint)
+	}
 	if hint := subagent.ReportLengthHint(info); hint != "" {
 		builder.WriteString("\n" + hint)
 	}
@@ -122,6 +125,12 @@ func openChildLog(logs *sessionLogger, parent session.Metadata) func(subagent.In
 		meta.SubagentID = info.ID
 		meta.Kind = string(info.Kind)
 		meta.Access = string(info.Access)
+		// read 子任务不论父模式都用只读包装；写入类才沿用父模式。
+		meta.ParentPermissionMode = parent.PermissionMode
+		meta.PermissionMode = parent.PermissionMode
+		if info.Access == tool.SpawnRead {
+			meta.PermissionMode = "read-only"
+		}
 		meta.Paths = append([]string(nil), info.Paths...)
 		meta.Description = info.Description
 		meta.WorkflowStep = info.Step

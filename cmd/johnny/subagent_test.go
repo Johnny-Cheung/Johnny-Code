@@ -108,6 +108,9 @@ func TestOpenChildLogWritesLinkedSessionAndParentRecords(t *testing.T) {
 	if meta["id"] != "parent-sub-ab12" || meta["parent_id"] != "parent" || meta["subagent_id"] != "ab12" || meta["kind"] != "fresh" || meta["access"] != "write" || meta["description"] != "重构 pkg" {
 		t.Fatalf("子任务元数据错误：%v", meta)
 	}
+	if meta["permission_mode"] != "default" || meta["parent_permission_mode"] != "default" {
+		t.Fatalf("写入类子任务应沿用父权限模式：%v", meta)
+	}
 
 	logs.recordSubagent(subagentRecord(subagent.Event{Type: subagent.EventStarted, Info: info}))
 	logs.recordSubagent(subagentRecord(subagent.Event{Type: subagent.EventEnded, Info: info, Status: agent.StatusMaxTurns, Requests: 30, Duration: 2 * time.Second, Partial: true, Injected: true}))
@@ -190,6 +193,19 @@ func TestChildSystemPromptAddsReportLengthOnlyInsideWorkflow(t *testing.T) {
 	}
 }
 
+func TestChildSystemPromptAddsRequestBudget(t *testing.T) {
+	plain := childSystemPrompt("/tmp/work", permissionAllow, subagent.Info{Access: tool.SpawnRead}, nil)
+	if strings.Contains(plain, "请求预算") {
+		t.Fatal("没有请求预算时不应输出软预算提示")
+	}
+	prompt := childSystemPrompt("/tmp/work", permissionAllow, subagent.Info{Access: tool.SpawnRead, MaxRequests: 100}, nil)
+	for _, want := range []string{"最多 100 次模型请求", "约 80 次", "批量读取"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("子 Agent 提示缺少 %q：%s", want, prompt)
+		}
+	}
+}
+
 func TestWorkflowRecordCoversEveryPhase(t *testing.T) {
 	view := &subagent.WorkflowView{Title: "重构", Status: subagent.WorkflowEndedEarly, Reason: "方向不对", Steps: []subagent.StepView{
 		{No: 1, Title: "调研", State: subagent.StepDone, Total: 3, Counts: subagent.StepCounts{Completed: 2, Failed: 1}},
@@ -246,6 +262,9 @@ func TestWorkflowEventsReachParentLogAndChildMetadata(t *testing.T) {
 	child, err := os.ReadFile(home + "/.johnny/sessions/parent-sub-cd34.jsonl")
 	if err != nil || !strings.Contains(string(child), `"workflow_step":2`) {
 		t.Fatalf("子任务元数据应记录所属步骤：%v %s", err, child)
+	}
+	if !strings.Contains(string(child), `"permission_mode":"read-only"`) || !strings.Contains(string(child), `"parent_permission_mode":"default"`) {
+		t.Fatalf("只读子任务应记录实际只读和父权限模式：%s", child)
 	}
 
 	view := &subagent.WorkflowView{Title: "重构", Status: subagent.WorkflowCompleted, Steps: []subagent.StepView{{No: 1, Title: "调研", State: subagent.StepDone, Total: 1}}}
