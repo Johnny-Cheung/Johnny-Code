@@ -18,6 +18,7 @@ type Write struct {
 type writeArguments struct {
 	Path    *string `json:"path"`
 	Content *string `json:"content"`
+	Append  bool    `json:"append"`
 }
 
 func NewWrite(runtime Runtime) *Write {
@@ -27,8 +28,8 @@ func NewWrite(runtime Runtime) *Write {
 func (w *Write) Definition() model.ToolDefinition {
 	return model.ToolDefinition{
 		Name:        "write",
-		Description: "创建文件或整体写入已有文件内容。",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"文件路径"},"content":{"type":"string","description":"要写入的完整文本内容"}},"required":["path","content"]}`),
+		Description: "创建文件或整体写入已有文件内容。append=true 时把内容追加到文件末尾，文件不存在时创建。长报告或大文件应分多次写入，避免一次工具调用输出过长。",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"文件路径"},"content":{"type":"string","description":"要写入的文本内容"},"append":{"type":"boolean","description":"追加到文件末尾，默认 false；文件不存在时创建"}},"required":["path","content"]}`),
 	}
 }
 
@@ -77,8 +78,15 @@ func (w *Write) Execute(ctx context.Context, raw json.RawMessage) (Result, error
 	if err != nil {
 		return Result{}, executionError("write 无法解析目标路径", err)
 	}
-	if err := atomicWriteFile(target, []byte(*args.Content), mode); err != nil {
+	content := []byte(*args.Content)
+	if args.Append {
+		if err := atomicAppendFile(target, content, mode); err != nil {
+			return Result{}, executionError("write 追加文件失败", err)
+		}
+		return Result{Content: fmt.Sprintf("已追加到 %s（%d 字节）", *args.Path, len(content))}, nil
+	}
+	if err := atomicWriteFile(target, content, mode); err != nil {
 		return Result{}, executionError("write 写入文件失败", err)
 	}
-	return Result{Content: fmt.Sprintf("已写入 %s（%d 字节）", *args.Path, len(*args.Content))}, nil
+	return Result{Content: fmt.Sprintf("已写入 %s（%d 字节）", *args.Path, len(content))}, nil
 }

@@ -88,6 +88,35 @@ func resolveWriteTarget(path string) (string, error) {
 }
 
 func atomicWriteFile(path string, data []byte, mode fs.FileMode) (err error) {
+	return atomicWrite(path, mode, func(w io.Writer) error {
+		_, err := w.Write(data)
+		return err
+	})
+}
+
+// atomicAppendFile 把 data 追加到 path 的副本，再用 rename 替换目标。
+// 它不使用 O_APPEND 直接写原 inode：工作区内的硬链接可能指向外部文件，
+// 就地追加会绕过路径检查；临时文件 + rename 只替换工作区的目录项。
+// 同时，追加中途失败时原文件保持不变，不会留下半段内容。
+func atomicAppendFile(path string, data []byte, mode fs.FileMode) (err error) {
+	existing, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return atomicWriteFile(path, data, mode)
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = existing.Close() }()
+	return atomicWrite(path, mode, func(w io.Writer) error {
+		if _, err := io.Copy(w, existing); err != nil {
+			return err
+		}
+		_, err := w.Write(data)
+		return err
+	})
+}
+
+func atomicWrite(path string, mode fs.FileMode, fill func(io.Writer) error) (err error) {
 	dir := filepath.Dir(path)
 	file, err := os.CreateTemp(dir, ".johnny-tmp-*")
 	if err != nil {
@@ -104,7 +133,7 @@ func atomicWriteFile(path string, data []byte, mode fs.FileMode) (err error) {
 		_ = file.Close()
 		return err
 	}
-	if _, err := io.Copy(file, bytes.NewReader(data)); err != nil {
+	if err := fill(file); err != nil {
 		_ = file.Close()
 		return err
 	}

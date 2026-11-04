@@ -188,7 +188,11 @@ func fileArgument(toolName string, arguments json.RawMessage) (path, detail stri
 			path = *args.Path
 		}
 		if args.Content != nil {
-			detail = fmt.Sprintf("写入 %d 字节，内容 %s", len(*args.Content), previewForApproval(*args.Content))
+			action := "写入"
+			if args.Append {
+				action = "追加"
+			}
+			detail = fmt.Sprintf("%s %d 字节，内容 %s", action, len(*args.Content), previewForApproval(*args.Content))
 		}
 		return path, detail, nil
 	case "edit":
