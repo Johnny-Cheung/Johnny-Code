@@ -139,10 +139,16 @@ func (c *Conversation) fallbackCompaction(ctx context.Context, opts Options, def
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.view.DeterministicTrim(0, reason) {
+	// 摘要失败时优先保留最近几轮，不要立刻丢掉全部已完成轮次。只有保留
+	// 最近轮次仍放不下时，才退到 retain=0 的最终裁剪。
+	if c.view.DeterministicTrim(contextview.DefaultRetainTurns, reason) {
 		_ = emit(Event{Type: EventNotice, Notice: "已使用确定性裁剪保留最近轮次；完整记录仍在本地会话日志中。"})
 	}
 	if c.view.NeedsRequestCompaction(opts.System, definitions) {
+		c.view.EmergencyCompactCurrent()
+	}
+	if c.view.NeedsRequestCompaction(opts.System, definitions) && c.view.DeterministicTrim(0, reason) {
+		_ = emit(Event{Type: EventNotice, Notice: "最近轮次仍超出预算，已使用确定性裁剪省略更早对话；完整记录仍在本地会话日志中。"})
 		c.view.EmergencyCompactCurrent()
 	}
 	if c.view.NeedsRequestCompaction(opts.System, definitions) {
@@ -152,19 +158,32 @@ func (c *Conversation) fallbackCompaction(ctx context.Context, opts Options, def
 	return nil
 }
 
+var errSummaryIncomplete = errors.New("摘要响应不完整")
+
 func (c *Conversation) summarize(ctx context.Context, opts Options, messages []model.Message, previous string) (string, error) {
+	// 摘要需要先写 analysis，再写九段正文；输出上限压到 4096 很容易在
+	// 总结写完前截断，进而整次摘要失败。首次给足 8192，截断或格式不完整
+	// 时再用“省略 analysis”的精简指令重试一次。
+	summary, err := c.summarizeOnce(ctx, opts, messages, previous, false)
+	if err == nil || !errors.Is(err, errSummaryIncomplete) {
+		return summary, err
+	}
+	return c.summarizeOnce(ctx, opts, messages, previous, true)
+}
+
+func (c *Conversation) summarizeOnce(ctx context.Context, opts Options, messages []model.Message, previous string, concise bool) (string, error) {
 	timeout := opts.RequestTimeout
 	if timeout <= 0 {
 		timeout = DefaultRequestTimeout
 	}
-	maxOutput := opts.MaxOutputTokens
-	if maxOutput <= 0 || maxOutput > 4096 {
-		maxOutput = 4096
+	maxOutput := summaryOutputTokens
+	if concise {
+		maxOutput = summaryRetryOutputTokens
 	}
 	requestMessages := append([]model.Message(nil), messages...)
 	requestMessages = append(requestMessages, model.Message{
 		Role:    model.RoleUser,
-		Content: []model.ContentBlock{{Type: model.BlockText, Text: summaryInstruction(previous, opts.InteractionMode)}},
+		Content: []model.ContentBlock{{Type: model.BlockText, Text: summaryInstruction(previous, opts.InteractionMode, concise)}},
 	})
 	summaryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -177,6 +196,9 @@ func (c *Conversation) summarize(ctx context.Context, opts Options, messages []m
 	if err != nil {
 		return "", err
 	}
+	if response.StopReason == model.StopMaxTokens {
+		return "", fmt.Errorf("%w：输出达到上限", errSummaryIncomplete)
+	}
 	if response.StopReason != model.StopEndTurn {
 		return "", fmt.Errorf("摘要请求未正常结束（%s）", response.StopReason)
 	}
@@ -188,7 +210,11 @@ func (c *Conversation) summarize(ctx context.Context, opts Options, messages []m
 		return "", errors.New("摘要请求返回了工具调用")
 	}
 	text := assistantText(response.Message)
-	return extractSummary(text)
+	summary, err := extractSummary(text)
+	if err != nil {
+		return "", fmt.Errorf("%w：%v", errSummaryIncomplete, err)
+	}
+	return summary, nil
 }
 
 func assistantText(message model.Message) string {
@@ -225,18 +251,35 @@ func extractSummary(text string) (string, error) {
 	return "", errors.New("摘要缺少 <summary> 标记")
 }
 
+const (
+	// summaryOutputTokens 给 analysis 和九段摘要留出足够空间；上限过紧会
+	// 在总结完成前触发 max_tokens，导致整次摘要失败。
+	summaryOutputTokens = 8192
+	// summaryRetryOutputTokens 是精简重试的上限：省略 analysis，只写摘要。
+	summaryRetryOutputTokens = 4096
+)
+
 const summarySystemPrompt = `你是 Johnny-Code 的上下文压缩器。你的任务是把较早的 coding agent 对话压缩成一份可继续工作的摘要。
 你不能调用工具，也不能要求执行命令。只输出文本。
 先输出 <analysis> 进行整理，再输出 <summary>。运行时只保留 summary，analysis 会被丢弃。
-摘要目标 2～4k token，最多 4096 token。优先保留长期约束、禁止事项、已确认决策、文件路径、错误、待办和当前工作状态。
+摘要目标 2～4k token，最多 8192 token。优先保留长期约束、禁止事项、已确认决策、文件路径、错误、待办和当前工作状态。
 长期约束和用户明确要求的边界只增不减，尽量保留原文。`
 
-func summaryInstruction(previous, interactionMode string) string {
+func summaryInstruction(previous, interactionMode string, concise bool) string {
 	if strings.TrimSpace(previous) == "" {
 		previous = "（无）"
 	}
 	if strings.TrimSpace(interactionMode) == "" {
 		interactionMode = "未提供"
+	}
+	if concise {
+		return fmt.Sprintf(`上一次摘要响应没有在输出上限内完成。请重新生成，这次省略 <analysis>，直接输出 <summary>...</summary>，全文控制在 3000 token 以内。当前交互模式：%s。上一次摘要如下：
+
+<previous_summary>
+%s
+</previous_summary>
+
+<summary> 开头先单独写出“当前交互模式 / 等待用户决定”字段，随后写“历史摘要”小节，保留上一次摘要中仍然有效的约束、决策和待办和路径。九段内容可以合并，但必须保留：用户长期约束、已确认决策、关键文件路径、错误与修复、待办、当前工作状态、与最近轮次的衔接。只输出 <summary>...</summary>，不要输出其他内容。`, interactionMode, previous)
 	}
 	return fmt.Sprintf(`请根据上面的对话历史生成压缩摘要。当前交互模式：%s。上一次摘要如下：
 

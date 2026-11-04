@@ -285,6 +285,74 @@ func TestAutoSummaryAtTurnStart(t *testing.T) {
 	}
 }
 
+func TestSummaryRetriesConciseAfterTruncation(t *testing.T) {
+	manager := contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(32_768, 4096)})
+	populateTurns(manager, 8, 10_000)
+	var summaryRequests []model.Request
+	client := clientFunc(func(_ context.Context, req model.Request, _ func(model.Event) error) (model.Response, error) {
+		if req.System == summarySystemPrompt {
+			summaryRequests = append(summaryRequests, req)
+			if len(summaryRequests) == 1 {
+				return model.Response{
+					Message:    textMessage(model.RoleAssistant, "<analysis>写到一半"),
+					StopReason: model.StopMaxTokens,
+				}, nil
+			}
+			return model.Response{
+				Message:    textMessage(model.RoleAssistant, "<summary>精简摘要</summary>"),
+				StopReason: model.StopEndTurn,
+			}, nil
+		}
+		return finalResponse(), nil
+	})
+	_, err := NewConversation(Options{
+		Client: client, Tools: &testTools{}, Model: "model", ContextView: manager, MaxTurns: 2,
+	}).Run(context.Background(), "new-task", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaryRequests) < 2 {
+		t.Fatalf("摘要截断后应重试一次，实际请求 %d 次", len(summaryRequests))
+	}
+	if summaryRequests[0].MaxOutputTokens != summaryOutputTokens {
+		t.Fatalf("首次摘要输出上限应为 %d：%d", summaryOutputTokens, summaryRequests[0].MaxOutputTokens)
+	}
+	if summaryRequests[1].MaxOutputTokens != summaryRetryOutputTokens {
+		t.Fatalf("重试摘要输出上限应为 %d：%d", summaryRetryOutputTokens, summaryRequests[1].MaxOutputTokens)
+	}
+	last := summaryRequests[1].Messages[len(summaryRequests[1].Messages)-1]
+	if !strings.Contains(last.Content[0].Text, "省略 <analysis>") {
+		t.Fatalf("摘要重试未使用精简指令：%s", last.Content[0].Text)
+	}
+}
+
+func TestSummaryFailureKeepsRecentTurns(t *testing.T) {
+	manager := contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(32_768, 4096)})
+	populateTurns(manager, 6, 10_000)
+	var taskRequest model.Request
+	client := clientFunc(func(_ context.Context, req model.Request, _ func(model.Event) error) (model.Response, error) {
+		if req.System == summarySystemPrompt {
+			return model.Response{}, errors.New("摘要服务失败")
+		}
+		taskRequest = req
+		return finalResponse(), nil
+	})
+	_, err := NewConversation(Options{
+		Client: client, Tools: &testTools{}, Model: "model", ContextView: manager, MaxTurns: 2,
+	}).Run(context.Background(), "new-task", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := taskRequest.Messages[0]
+	if !strings.Contains(first.Content[0].Text, "上下文已裁剪") {
+		t.Fatalf("未降级为确定性裁剪：%+v", first)
+	}
+	joined := fmt.Sprint(taskRequest.Messages)
+	if !strings.Contains(joined, "task-2") || strings.Contains(joined, "task-1") {
+		t.Fatalf("确定性裁剪应保留最近轮次，实际消息：%s", joined)
+	}
+}
+
 func TestSummaryFailureFallsBackToDeterministicTrim(t *testing.T) {
 	manager := contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(32_768, 4096)})
 	populateTurns(manager, 6, 10_000)
