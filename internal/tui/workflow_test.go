@@ -337,6 +337,15 @@ func TestPlainWakesStayLimitedWhileWorkflowIsShown(t *testing.T) {
 	if m.busy || !m.wakeBlocked {
 		t.Fatalf("工作流显示期间普通唤醒仍只允许 %d 次：busy=%v blocked=%v", maxWakeRounds, m.busy, m.wakeBlocked)
 	}
+	// 普通结果熔断后，工作流步骤结束仍应继续唤醒。
+	control.mu.Lock()
+	control.pending = 1
+	control.mu.Unlock()
+	m.Update(subagentMsg{notice: SubagentNotice{Kind: SubagentStepEnd, Step: 2, Workflow: sampleWorkflow(2)}})
+	if !m.busy || m.stepWakes != 1 {
+		t.Fatalf("普通唤醒熔断不应阻断步骤唤醒：busy=%v stepWakes=%d", m.busy, m.stepWakes)
+	}
+	finish()
 }
 
 func TestApprovalHintNamesWorkflowCancellation(t *testing.T) {

@@ -147,13 +147,13 @@ func TestPromptCountAndBudget(t *testing.T) {
 func TestPromptMetadataBudget(t *testing.T) {
 	work, home := testDirs(t)
 	dir := filepath.Join(work, ".johnny", "skills")
-	description := strings.Repeat("a", 500)
-	for i := 0; i < 20; i++ {
+	description := strings.Repeat("a", 600)
+	for i := 0; i < MaxSkills; i++ {
 		writeSkill(t, dir, "budget-"+twoDigits(i), description, "body")
 	}
 	store := DiscoverWithHome(work, home)
 	stats := store.Stats()
-	if stats.Loaded != 20 || stats.Injected >= stats.Loaded {
+	if stats.Loaded != MaxSkills || stats.Injected >= stats.Loaded {
 		t.Fatalf("元数据预算应只注入部分 Skill：%+v", stats)
 	}
 	if stats.Omitted == 0 {
@@ -167,8 +167,12 @@ func TestPromptMetadataBudget(t *testing.T) {
 			t.Fatalf("未注入项不应标记为已注入：%s", omitted.Name)
 		}
 	}
-	if len(store.Prompt()) > MaxPromptBytes+512 {
-		t.Fatalf("系统提示元数据过大：%d", len(store.Prompt()))
+	prompt := store.Prompt()
+	if len(prompt) > MaxPromptBytes+MaxOmittedNamesBytes+512 {
+		t.Fatalf("系统提示元数据过大：%d", len(prompt))
+	}
+	if !strings.Contains(prompt, "未展开的 Skill 名称") {
+		t.Fatalf("系统提示缺少未展开 Skill 名称：%s", prompt)
 	}
 }
 

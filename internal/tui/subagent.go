@@ -18,12 +18,12 @@ const (
 )
 
 // maxWakeRounds 是同一次用户输入之后，普通子任务结果连续自动唤醒主 Agent 的上限，
-// 防止主 Agent 反复派出子任务、反复被唤醒。
-const maxWakeRounds = 5
+// 防止主 Agent 反复派出子任务、反复被唤醒。5 次对稍大的并行任务就偏紧。
+const maxWakeRounds = 20
 
 // maxStepWakes 是同一次用户输入之后，步骤结束连续自动唤醒主 Agent 的上限。
-// 一个工作流最多 10 步，留出两倍余量；连续起多个新工作流的循环最终也会被这里拦住。
-const maxStepWakes = 20
+// 一个工作流最多 10 步，留出四倍余量；连续起多个新工作流的循环最终也会被这里拦住。
+const maxStepWakes = 40
 
 // SubagentNotice 是子任务状态变化的有界展示数据，不含子任务的过程细节。
 type SubagentNotice struct {
@@ -205,7 +205,12 @@ func stopSubagentsAndQuit(control SubagentControl) tea.Cmd {
 // 用户正在输入时不抢占，结果留在收件箱，等下一次请求前注入。
 func (m *terminalModel) maybeWake() tea.Cmd {
 	control := m.options.Subagents
-	if control == nil || m.options.RunWake == nil || m.busy || m.quitting || m.approval != nil || m.wakeBlocked {
+	if control == nil || m.options.RunWake == nil || m.busy || m.quitting || m.approval != nil {
+		return nil
+	}
+	// 普通子任务结果达到上限后暂停自动唤醒，但工作流步骤结果仍继续唤醒；
+	// 否则一个工作流跑到一半会被普通任务的熔断卡住。
+	if m.wakeBlocked && !m.stepWake {
 		return nil
 	}
 	if m.input.Value() != "" || control.PendingResults() == 0 {
