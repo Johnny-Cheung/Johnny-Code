@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 type API string
@@ -25,6 +26,10 @@ type Options struct {
 	API     API
 	BaseURL string
 	APIKey  string
+	// MaxRetries 是 429、5xx 和网络错误的最大重试次数。0 使用默认值，负数禁用重试。
+	MaxRetries int
+	// RetryBackoff 是首次重试的等待时间，之后按指数增长；0 使用默认值。
+	RetryBackoff time.Duration
 }
 
 type Request struct {
@@ -152,6 +157,8 @@ const (
 type Error struct {
 	Kind       ErrorKind
 	StatusCode int
+	// RetryAfter 是服务端建议的等待时间；没有该响应头时为 0。
+	RetryAfter time.Duration
 	Message    string
 }
 

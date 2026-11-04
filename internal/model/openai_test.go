@@ -43,7 +43,7 @@ func openaiAssertRequest(t *testing.T, r *http.Request, path string) map[string]
 // openaiTestClient 构造指向测试服务的 OpenAI 客户端。
 func openaiTestClient(t *testing.T, api API, server *httptest.Server) Client {
 	t.Helper()
-	client, err := NewClient(Options{API: api, APIKey: "openai-key", BaseURL: server.URL + "/gateway"})
+	client, err := NewClient(Options{API: api, APIKey: "openai-key", BaseURL: server.URL + "/gateway", RetryBackoff: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

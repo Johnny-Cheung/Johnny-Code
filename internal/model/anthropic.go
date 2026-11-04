@@ -214,7 +214,7 @@ func (a *anthropicClient) Stream(ctx context.Context, req Request, emit func(Eve
 			if apiErr.StatusCode == 200 {
 				return c.response, &Error{Kind: ErrService, Message: "模型服务在流中返回错误，请检查 Key、额度、模型名或中转站状态"}
 			}
-			return c.response, httpError(apiErr.StatusCode)
+			return c.response, httpErrorAfter(apiErr.StatusCode, retryAfterDuration(apiErr.Response))
 		}
 		return c.response, &Error{Kind: ErrNetwork, Message: "模型请求或流式读取失败，请检查网络、代理及 API 协议"}
 	}

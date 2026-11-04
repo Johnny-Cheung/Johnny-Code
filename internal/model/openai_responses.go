@@ -468,7 +468,7 @@ func classifyOpenAIStreamError(ctx context.Context, err error) error {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
 		if apiErr.StatusCode >= http.StatusBadRequest {
-			return httpError(apiErr.StatusCode)
+			return httpErrorAfter(apiErr.StatusCode, retryAfterDuration(apiErr.Response))
 		}
 		return &Error{Kind: ErrService, Message: "模型服务在流中返回错误，请检查 Key、额度、模型名或中转站状态"}
 	}

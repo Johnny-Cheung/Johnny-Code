@@ -34,7 +34,7 @@ func sendStop(w io.Writer, reason string) {
 
 func makeTestClient(t *testing.T, server *httptest.Server) Client {
 	t.Helper()
-	client, err := NewClient(Options{API: AnthropicMessages, APIKey: "test-key", BaseURL: server.URL + "/gateway"})
+	client, err := NewClient(Options{API: AnthropicMessages, APIKey: "test-key", BaseURL: server.URL + "/gateway", RetryBackoff: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +269,72 @@ func TestAnthropicToolsAndThinkingRoundTrip(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatal("无效历史不应发请求")
+	}
+}
+
+func TestStreamRetriesRateLimitBeforeEvents(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		anthropicTextStart(w)
+		sendText(w, "重试成功")
+		sendStop(w, "end_turn")
+	}))
+	defer server.Close()
+	client, err := NewClient(Options{API: AnthropicMessages, APIKey: "test-key", BaseURL: server.URL + "/gateway", MaxRetries: 2, RetryBackoff: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Stream(context.Background(), textRequest(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("429 后应重试一次，实际请求 %d 次", hits)
+	}
+	if res.Message.Content[0].Text != "重试成功" {
+		t.Fatalf("重试响应错误：%+v", res.Message)
+	}
+}
+
+type scriptedClient struct {
+	calls int
+	emit  bool
+	err   error
+}
+
+func (s *scriptedClient) Stream(_ context.Context, _ Request, emit func(Event) error) (Response, error) {
+	s.calls++
+	if s.emit && emit != nil {
+		if err := emit(Event{Type: EventBlockDelta, Delta: "部分输出"}); err != nil {
+			return Response{}, err
+		}
+	}
+	return Response{}, s.err
+}
+
+func TestStreamDoesNotRetryAfterOutput(t *testing.T) {
+	for _, emitted := range []bool{true, false} {
+		t.Run(fmt.Sprint(emitted), func(t *testing.T) {
+			fake := &scriptedClient{emit: emitted, err: &Error{Kind: ErrNetwork, Message: "网络中断"}}
+			client := &validatedClient{client: fake, options: Options{MaxRetries: 3, RetryBackoff: time.Millisecond}}
+			_, err := client.Stream(context.Background(), textRequest(), func(Event) error { return nil })
+			if err == nil {
+				t.Fatal("应返回网络错误")
+			}
+			want := 4
+			if emitted {
+				want = 1
+			}
+			if fake.calls != want {
+				t.Fatalf("emitted=%t 时请求次数应为 %d，实际 %d", emitted, want, fake.calls)
+			}
+		})
 	}
 }
 
