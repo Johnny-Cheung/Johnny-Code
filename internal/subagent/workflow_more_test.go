@@ -90,6 +90,17 @@ func TestCancelAllDropsQueuedWorkflowTasks(t *testing.T) {
 	}
 }
 
+func TestStepReportLimitShrinksWithAvailableInput(t *testing.T) {
+	big := stepReportLimit(8, 1_000_000)
+	if big != 11264 {
+		t.Fatalf("大窗口每份报告上限 = %d，want 11264", big)
+	}
+	small := stepReportLimit(8, 8192)
+	if small >= big || small > 1024 {
+		t.Fatalf("小窗口整步报告应按可用输入缩小：small=%d big=%d", small, big)
+	}
+}
+
 func TestStepReportsShareTheBudget(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	children := newScriptedChildren(h)
@@ -113,7 +124,7 @@ func TestStepReportsShareTheBudget(t *testing.T) {
 		t.Fatalf("每份报告都应截断并保留数据声明：\n%.400s", message)
 	}
 	ended := h.eventsOf(EventEnded)[0]
-	if ended.Info.ReportBytes != stepReportLimit(len(labels)) || !ended.Truncated {
+	if ended.Info.ReportBytes != stepReportLimit(len(labels), h.manager.cfg.Budget.Usable) || !ended.Truncated {
 		t.Fatalf("事件应带每份报告的上限：%+v", ended.Info)
 	}
 }

@@ -11,7 +11,8 @@ import (
 )
 
 // StepReportBudget 是一步内所有任务报告正文的总量上限；任务多时每份报告相应变短。
-const StepReportBudget = 32 << 10
+// 96 KiB 能让 4–5 个任务的每份报告接近单份 16 KiB 上限；8 个任务时每份约 11 KiB。
+const StepReportBudget = 96 << 10
 
 type WorkflowStatus string
 

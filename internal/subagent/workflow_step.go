@@ -38,7 +38,7 @@ func (m *Manager) RunWorkflowStep(_ context.Context, step int, requests []tool.S
 	}
 	s := w.steps[step-1]
 	s.total, s.finished, s.counts = len(requests), 0, StepCounts{}
-	s.reportBytes = stepReportLimit(len(requests))
+	s.reportBytes = stepReportLimit(len(requests), m.cfg.Budget.Usable)
 	s.reports = make([]string, len(requests))
 	batch, err := m.enqueueBatchLocked(requests, s)
 	if err != nil {
@@ -128,8 +128,18 @@ const stepReportOverhead = 3 << 10 // 整条消息固定部分
 const reportOverhead = 640         // 每份报告的头尾和分隔
 
 // stepReportLimit 按任务数平分一步的报告预算：任务多时每份报告相应变短。
-func stepReportLimit(tasks int) int {
-	return max(1<<10, min(MaxReportBytes, (StepReportBudget-stepReportOverhead-tasks*reportOverhead)/tasks))
+// usableTokens 是主会话的可用输入预算；整步报告作为一条 user 消息注入，
+// 按中文约 3 字节/token 估算，最多占可用输入的三分之一，避免小窗口下
+// 报告本身就把当前轮撑爆，且当前轮 user 消息不能再被压缩。
+func stepReportLimit(tasks, usableTokens int) int {
+	if tasks < 1 {
+		tasks = 1
+	}
+	total := StepReportBudget
+	if usableTokens > 0 {
+		total = min(total, max(4<<10, usableTokens))
+	}
+	return max(1<<10, min(MaxReportBytes, (total-stepReportOverhead-tasks*reportOverhead)/tasks))
 }
 
 // stepMessage 把一步的所有报告和工作流进度拼成一条交给主 Agent 的消息。
