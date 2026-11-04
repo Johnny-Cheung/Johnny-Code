@@ -113,7 +113,8 @@ func TestTerminalPTYHistoryToolSearchesCurrentSession(t *testing.T) {
 
 	p := startTerminalMode(t, server.URL, "allow")
 	p.write(t, "请记住 NEEDLE 这个词\r")
-	p.expect(t, 0, "HISTORY-DONE")
+	end := p.expect(t, 0, "HISTORY-DONE")
+	p.expect(t, end, "空闲")
 	p.write(t, "/exit\r")
 	p.wait(t, 0)
 

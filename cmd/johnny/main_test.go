@@ -355,8 +355,9 @@ func TestInteractiveResetsMaxTurnsForEachUserInput(t *testing.T) {
 func TestInteractiveContinuesAfterFailedTurn(t *testing.T) {
 	var requests atomic.Int32
 	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// 401 不触发模型层重试，用来验证一轮失败后交互循环继续等待输入。
 		if requests.Add(1) == 1 {
-			http.Error(w, "boom", http.StatusInternalServerError)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		writeTextResponse(w, "recovered")

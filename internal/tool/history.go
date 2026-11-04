@@ -358,7 +358,11 @@ func historyChunk(text string, offset, limit int) (string, int) {
 		end--
 	}
 	if end <= offset {
-		end = offset + 1
+		_, size := utf8.DecodeRuneInString(text[offset:])
+		end = offset + max(1, size)
+		if end > len(text) {
+			end = len(text)
+		}
 	}
 	return text[offset:end], end
 }

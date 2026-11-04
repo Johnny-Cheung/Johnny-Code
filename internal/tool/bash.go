@@ -29,7 +29,7 @@ func (b *Bash) Definition() model.ToolDefinition {
 	return model.ToolDefinition{
 		Name:        "bash",
 		Description: "在工作目录中执行一条 shell 命令，并返回标准输出、错误输出和退出状态。",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"要执行的 shell 命令"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600,"description":"超时秒数，默认 600"}},"required":["command"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"要执行的 shell 命令"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600,"description":"超时秒数，默认 600；可用 JOHNNY_BASH_TIMEOUT 调整默认值"}},"required":["command"]}`),
 	}
 }
 
