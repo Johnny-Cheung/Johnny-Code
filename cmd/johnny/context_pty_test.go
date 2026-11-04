@@ -138,6 +138,8 @@ func TestTerminalAutoSummary(t *testing.T) {
 	var tasks, summaries atomic.Int32
 	server := contextSimulationServer(t, &tasks, &summaries)
 	defer server.Close()
+	// 最小窗口下默认输出按窗口降到 4096，保持可用输入预算；这里验证
+	// 自动摘要仍然可用，而不是退化成裁剪熔断。
 	p := startTerminalMode(t, server.URL, "allow", "JOHNNY_CONTEXT_WINDOW=32768")
 
 	end := runContextTurns(t, p, 7)

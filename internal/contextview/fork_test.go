@@ -101,6 +101,17 @@ func TestForkKeepsCompleteHistoryAndSummary(t *testing.T) {
 	}
 }
 
+func TestForkWithOutputRebuildsBudget(t *testing.T) {
+	manager := NewManager(Config{Budget: NewBudget(32_768, 4096), SessionID: "parent"})
+	child := manager.ForkWithOutput("child", DefaultOutputTokens)
+	if child.Budget().Window != 32_768 || child.Budget().Output != DefaultOutputTokens {
+		t.Fatalf("fork 输出预留未同步到预算：%+v", child.Budget())
+	}
+	if manager.Budget().Output != 4096 {
+		t.Fatalf("父视图预算不应被修改：%+v", manager.Budget())
+	}
+}
+
 func TestForkUsesSeparateArtifactNamespace(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(Config{WorkDir: dir, SessionID: "parent"})

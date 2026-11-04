@@ -32,7 +32,7 @@ func (c *Conversation) Compact(ctx context.Context, emit func(Event) error) (str
 		return "", errors.New("模型客户端、工具和模型名必须提供")
 	}
 	if opts.MaxOutputTokens == 0 {
-		opts.MaxOutputTokens = 4096
+		opts.MaxOutputTokens = contextview.DefaultOutputTokens
 	}
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = DefaultRequestTimeout

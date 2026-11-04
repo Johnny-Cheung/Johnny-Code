@@ -30,12 +30,22 @@ func contextConfigFromEnv(lookup func(string) (string, bool)) (contextConfig, er
 		}
 		config.Window = parsed
 	}
+	outputExplicit := false
 	if value, ok := lookup(maxOutputEnv); ok {
 		parsed, err := strconv.Atoi(strings.TrimSpace(value))
 		if err != nil || parsed < 1 {
 			return config, fmt.Errorf("%s 必须是正整数", maxOutputEnv)
 		}
 		config.OutputTokens = parsed
+		outputExplicit = true
+	}
+	if !outputExplicit {
+		// 默认输出预留提高后，最小窗口 32768 只留下 8192 token 输入预算。
+		// 未显式指定输出时按窗口的八分之一封顶，保持小窗口的自动摘要可用；
+		// 显式设置 JOHNNY_MAX_OUTPUT_TOKENS 时尊重用户选择。
+		if limit := config.Window / 8; limit > 0 && config.OutputTokens > limit {
+			config.OutputTokens = limit
+		}
 	}
 	if config.OutputTokens >= config.Window {
 		return config, fmt.Errorf("%s 必须小于 %s", maxOutputEnv, contextWindowEnv)

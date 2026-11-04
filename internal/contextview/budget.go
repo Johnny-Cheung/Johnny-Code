@@ -4,8 +4,10 @@
 package contextview
 
 const (
-	DefaultWindow       = 1_000_000
-	DefaultOutputTokens = 4096
+	DefaultWindow = 1_000_000
+	// DefaultOutputTokens 是主 Agent 每次请求的默认输出预留。长报告和一次性
+	// 文件写入也计入这里，4096 容易在工具参数写完前截断。
+	DefaultOutputTokens = 8192
 	MinSafetyTokens     = 16_384
 	DefaultPreviewBytes = 32 << 10
 	BashHeadBytes       = 24 << 10

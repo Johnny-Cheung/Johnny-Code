@@ -41,6 +41,27 @@ func TestContextConfigFromEnv(t *testing.T) {
 	}); err == nil {
 		t.Fatal("输出预留超过窗口应报错")
 	}
+	config, err = contextConfigFromEnv(func(key string) (string, bool) {
+		if key == contextWindowEnv {
+			return "32768", true
+		}
+		return "", false
+	})
+	if err != nil || config.OutputTokens != 4096 {
+		t.Fatalf("最小窗口应降低默认输出预留：%+v %v", config, err)
+	}
+	config, err = contextConfigFromEnv(func(key string) (string, bool) {
+		switch key {
+		case contextWindowEnv:
+			return "32768", true
+		case maxOutputEnv:
+			return "8192", true
+		}
+		return "", false
+	})
+	if err != nil || config.OutputTokens != 8192 {
+		t.Fatalf("显式输出预留应被尊重：%+v %v", config, err)
+	}
 }
 
 func TestContextStatsText(t *testing.T) {

@@ -23,11 +23,31 @@ func (m *Manager) Fork(sessionID string) *Manager {
 	if m == nil {
 		return nil
 	}
+	return m.fork(sessionID, m.budget)
+}
+
+// ForkWithOutput 返回一个使用指定输出预留的副本。子任务管理器会给 fork
+// 传更大的输出上限；这里同步重建预算，避免请求的输出预留和输入预算不一致。
+func (m *Manager) ForkWithOutput(sessionID string, outputTokens int) *Manager {
+	if m == nil {
+		return nil
+	}
+	budget := m.budget
+	if outputTokens > 0 {
+		budget = NewBudget(budget.Window, outputTokens)
+	}
+	return m.fork(sessionID, budget)
+}
+
+func (m *Manager) fork(sessionID string, budget Budget) *Manager {
+	if m == nil {
+		return nil
+	}
 	workDir := ""
 	if m.artifacts != nil {
 		workDir = m.artifacts.workDir
 	}
-	child := NewManager(Config{Budget: m.budget, WorkDir: workDir, SessionID: sessionID, PreviewBytes: m.previewBytes})
+	child := NewManager(Config{Budget: budget, WorkDir: workDir, SessionID: sessionID, PreviewBytes: m.previewBytes})
 	cut := completePrefix(m.request)
 	child.request = cloneMessages(m.request[:cut])
 	for _, turn := range m.turns {

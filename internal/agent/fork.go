@@ -43,7 +43,7 @@ func (c *Conversation) Fork(opts ForkOptions) (*Conversation, error) {
 	if c.options.Tools != nil {
 		definitions = c.options.Tools.Definitions()
 	}
-	view := c.view.Fork(opts.SessionID)
+	view := c.view.ForkWithOutput(opts.SessionID, opts.MaxOutputTokens)
 	if view.Estimate(c.system(), definitions)*100 > view.Budget().Usable*ForkMaxUsablePercent {
 		_ = view.Close()
 		return nil, ErrForkTooLarge

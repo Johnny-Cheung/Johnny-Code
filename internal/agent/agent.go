@@ -36,7 +36,7 @@ func NewConversation(opts Options) *Conversation {
 	if view == nil {
 		maxOutput := opts.MaxOutputTokens
 		if maxOutput <= 0 {
-			maxOutput = 4096
+			maxOutput = contextview.DefaultOutputTokens
 		}
 		view = contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(contextview.DefaultWindow, maxOutput)})
 	}
@@ -161,7 +161,7 @@ func (c *Conversation) run(ctx context.Context, prompt string, sources []string,
 		opts.RequestTimeout = DefaultRequestTimeout
 	}
 	if opts.MaxOutputTokens == 0 {
-		opts.MaxOutputTokens = 4096
+		opts.MaxOutputTokens = contextview.DefaultOutputTokens
 	}
 	if opts.Client == nil || opts.Tools == nil || strings.TrimSpace(opts.Model) == "" || strings.TrimSpace(prompt) == "" || opts.MaxTurns < 1 || opts.RequestTimeout < 0 || opts.MaxOutputTokens < 1 {
 		return result, fmt.Errorf("模型、工具、模型名、任务及正数执行上限必须提供")

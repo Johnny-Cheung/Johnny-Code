@@ -58,7 +58,8 @@ func (c *validatedClient) Stream(ctx context.Context, req Request, emit func(Eve
 		return Response{}, err
 	}
 	if req.MaxOutputTokens == 0 {
-		req.MaxOutputTokens = 4096
+		// 与对话层的默认输出预留保持一致；调用方通常已经显式传入。
+		req.MaxOutputTokens = 8192
 	}
 	if err := validateRequest(req, c.options); err != nil {
 		return Response{}, err

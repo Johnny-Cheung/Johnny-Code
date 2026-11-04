@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
@@ -66,7 +67,7 @@ func TestRunKeepsHistoryReplayAndSerialErrorResults(t *testing.T) {
 	var events []EventType
 	client := clientFunc(func(ctx context.Context, req model.Request, emit func(model.Event) error) (model.Response, error) {
 		requests++
-		if req.Model != "model" || req.System != "system" || len(req.Tools) != 1 || req.MaxOutputTokens != 4096 {
+		if req.Model != "model" || req.System != "system" || len(req.Tools) != 1 || req.MaxOutputTokens != contextview.DefaultOutputTokens {
 			t.Fatalf("请求配置丢失：%+v", req)
 		}
 		if _, ok := ctx.Deadline(); !ok {
