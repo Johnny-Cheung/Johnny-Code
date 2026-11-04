@@ -85,7 +85,7 @@ func TestPinnedContextRefreshesAfterCompactionPoint(t *testing.T) {
 
 func TestCompactRefreshesPinnedContext(t *testing.T) {
 	manager := contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(1_000_000, 4096)})
-	populateTurns(manager, 6, 1000)
+	populateTurns(manager, 10, 1000)
 	providerCalls := 0
 	client := clientFunc(func(_ context.Context, _ model.Request, _ func(model.Event) error) (model.Response, error) {
 		return model.Response{

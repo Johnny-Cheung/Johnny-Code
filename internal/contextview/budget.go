@@ -12,14 +12,14 @@ const (
 	DefaultPreviewBytes = 32 << 10
 	BashHeadBytes       = 24 << 10
 	BashTailBytes       = 8 << 10
-	CompactPreviewBytes = 1024
+	CompactPreviewBytes = 2 << 10
 	EmergencyBytes      = 512
 	// TurnPreviewBudget 是一轮内工具预览的基础上限；窗口较大时按可用输入
 	// 继续放大，避免 1M 窗口下几个大结果之后所有预览都被压到很小。
 	TurnPreviewBudget   = 128 << 10
 	MaxTurnPreviewBytes = 4 << 20
 	LimitedPreviewBytes = 16 << 10
-	DefaultRetainTurns  = 5
+	DefaultRetainTurns  = 8
 
 	TurnTriggerPercent    = 90
 	RequestTriggerPercent = 95

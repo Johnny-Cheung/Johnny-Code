@@ -343,20 +343,23 @@ func TestSummaryFailureKeepsRecentTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := taskRequest.Messages[0]
-	if !strings.Contains(first.Content[0].Text, "上下文已裁剪") {
-		t.Fatalf("未降级为确定性裁剪：%+v", first)
-	}
 	joined := fmt.Sprint(taskRequest.Messages)
-	if !strings.Contains(joined, "task-2") || strings.Contains(joined, "task-1") {
-		t.Fatalf("确定性裁剪应保留最近轮次，实际消息：%s", joined)
+	if strings.Contains(joined, "上下文已裁剪") {
+		t.Fatalf("摘要失败后工具结果压缩足够时不应丢弃已完成轮次：%s", joined)
+	}
+	if !strings.Contains(joined, "task-1") || !strings.Contains(joined, "task-6") {
+		t.Fatalf("摘要失败后应保留最近轮次：%s", joined)
 	}
 }
 
 func TestSummaryFailureFallsBackToDeterministicTrim(t *testing.T) {
 	manager := contextview.NewManager(contextview.Config{Budget: contextview.NewBudget(32_768, 4096)})
-	populateTurns(manager, 6, 10_000)
-	tools := &testTools{}
+	// 纯文本轮次没有可继续压缩的工具结果，只能最终降级为确定性裁剪。
+	for turn := 1; turn <= 12; turn++ {
+		manager.BeginTurn(turn, textMessage(model.RoleUser, strings.Repeat("长", 3000)))
+		manager.AppendAssistant(textMessage(model.RoleAssistant, strings.Repeat("答", 3000)))
+		manager.FinishTurn()
+	}
 	var taskRequest model.Request
 	client := clientFunc(func(_ context.Context, req model.Request, _ func(model.Event) error) (model.Response, error) {
 		if req.System == summarySystemPrompt {
@@ -366,14 +369,14 @@ func TestSummaryFailureFallsBackToDeterministicTrim(t *testing.T) {
 		return finalResponse(), nil
 	})
 	_, err := NewConversation(Options{
-		Client: client, Tools: tools, Model: "model", ContextView: manager, MaxTurns: 2,
+		Client: client, Tools: &testTools{}, Model: "model", ContextView: manager, MaxTurns: 2,
 	}).Run(context.Background(), "new-task", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first := taskRequest.Messages[0]
 	if !strings.Contains(first.Content[0].Text, "上下文已裁剪") {
-		t.Fatalf("未降级为确定性裁剪：%+v", first)
+		t.Fatalf("无法靠工具结果压缩时仍未降级为确定性裁剪：%+v", first)
 	}
 }
 

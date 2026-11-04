@@ -163,7 +163,7 @@ func TestStoreRejectsInvalidAndSecretWrites(t *testing.T) {
 func TestStoreIndexBudgetTruncates(t *testing.T) {
 	store, _, _ := testStore(t)
 	ctx := context.Background()
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 100; i++ {
 		name := fmt.Sprintf("item-%02d", i)
 		item := projectItem(name, strings.Repeat("中", 40), "正文")
 		if _, err := store.Write(ctx, item); err != nil {

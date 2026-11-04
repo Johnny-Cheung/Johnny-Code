@@ -121,7 +121,7 @@ func TestForkRejectsLargeParentContext(t *testing.T) {
 	}
 	before := len(view.Messages())
 	if _, err := parent.Fork(ForkOptions{Tools: &testTools{}, SessionID: "child-3"}); !errors.Is(err, ErrForkTooLarge) {
-		t.Fatalf("超过 50%% 预算应拒绝 fork：%v", err)
+		t.Fatalf("超过 fork 预算应拒绝：%v", err)
 	}
 	if len(view.Messages()) != before {
 		t.Fatal("拒绝 fork 不应改动父视图")

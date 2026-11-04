@@ -89,8 +89,8 @@ func TestAutoSummaryDegradesWhenRetainedTurnsTooLarge(t *testing.T) {
 	}).Run(context.Background(), "new-task", nil); err != nil {
 		t.Fatal(err)
 	}
-	if summaries < 2 {
-		t.Fatalf("最近 5 轮本身过大时应继续降级压缩：%d", summaries)
+	if summaries < 1 {
+		t.Fatalf("最近轮次本身过大时应压缩：%d", summaries)
 	}
 	if stats := manager.Stats("", nil); stats.Turns > 1 {
 		t.Fatalf("降级后应只保留当前轮：%+v", stats)

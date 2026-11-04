@@ -16,8 +16,8 @@ import (
 const (
 	IndexFileName = "MEMORY.md"
 
-	UserIndexTokens     = 1000
-	ProjectIndexTokens  = 2000
+	UserIndexTokens     = 2000
+	ProjectIndexTokens  = 4000
 	MaxEntriesPerScope  = 256
 	WarnEntriesPerScope = 200
 	SearchLimit         = 10

@@ -18,10 +18,10 @@ const (
 	// AgentsFileName 是用户级和项目级规则文件统一使用的文件名。
 	AgentsFileName = "AGENTS.md"
 
-	MaxUserAgentsLines     = 100
-	MaxUserAgentsTokens    = 1000
-	MaxProjectAgentsLines  = 200
-	MaxProjectAgentsTokens = 2000
+	MaxUserAgentsLines     = 200
+	MaxUserAgentsTokens    = 2000
+	MaxProjectAgentsLines  = 500
+	MaxProjectAgentsTokens = 4000
 
 	agentsReadLimit  = 1 << 20
 	gitLookupTimeout = 2 * time.Second

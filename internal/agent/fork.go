@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
@@ -9,9 +10,10 @@ import (
 
 // ForkMaxUsablePercent 是 fork 允许的父请求视图占可用输入预算的上限。
 // 超过时拒绝 fork，因为此时父会话正处于一轮中间，不能为了 fork 去压缩它。
-const ForkMaxUsablePercent = 50
+// 50% 会让一半以上的正常大任务无法 fork，70% 仍给子任务留出足够空间。
+const ForkMaxUsablePercent = 70
 
-var ErrForkTooLarge = errors.New("主对话上下文已超过可用输入预算的 50%，不适合 fork，请改用 fresh")
+var ErrForkTooLarge = fmt.Errorf("主对话上下文已超过可用输入预算的 %d%%，不适合 fork，请改用 fresh", ForkMaxUsablePercent)
 
 // ForkOptions 描述 fork 子会话的运行参数。模型客户端、模型名、系统提示和
 // 输出上限沿用父会话。
