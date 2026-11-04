@@ -20,7 +20,9 @@ type Config struct {
 type Manager struct {
 	budget       Budget
 	previewBytes int
-	artifacts    *ArtifactStore
+	// turnPreviewBudget 随可用输入预算缩放：1M 窗口下不应继续沿用 128 KiB。
+	turnPreviewBudget int
+	artifacts         *ArtifactStore
 
 	request []model.Message
 	turns   []Turn
@@ -108,12 +110,27 @@ func NewManager(cfg Config) *Manager {
 		cfg.PreviewBytes = DefaultPreviewBytes
 	}
 	return &Manager{
-		budget:       cfg.Budget,
-		previewBytes: cfg.PreviewBytes,
-		artifacts:    NewArtifactStore(cfg.WorkDir, cfg.SessionID),
-		current:      -1,
-		calibration:  1,
+		budget:            cfg.Budget,
+		previewBytes:      cfg.PreviewBytes,
+		turnPreviewBudget: turnPreviewBytes(cfg.Budget),
+		artifacts:         NewArtifactStore(cfg.WorkDir, cfg.SessionID),
+		current:           -1,
+		calibration:       1,
 	}
+}
+
+// turnPreviewBytes 把一轮内的累计预览上限缩放到可用输入预算。1 token 粗略
+// 按 1 字节预留，给单轮工具结果最多约占可用输入的一半；小窗口仍保留
+// TurnPreviewBudget 的基础值，实际保护由请求级压缩负责。
+func turnPreviewBytes(budget Budget) int {
+	limit := TurnPreviewBudget
+	if scaled := budget.Usable; scaled > limit {
+		limit = scaled
+	}
+	if limit > MaxTurnPreviewBytes {
+		limit = MaxTurnPreviewBytes
+	}
+	return limit
 }
 
 func (m *Manager) Budget() Budget { return m.budget }
@@ -156,7 +173,7 @@ func (m *Manager) AppendToolResult(userTurn int, call model.ToolCall, result mod
 	}
 	m.callSeq++
 	limit := m.previewBytes
-	if m.current >= 0 && m.turns[m.current].PreviewBytes >= TurnPreviewBudget {
+	if m.current >= 0 && m.turns[m.current].PreviewBytes >= m.turnPreviewBudget {
 		limit = min(limit, LimitedPreviewBytes)
 		m.turns[m.current].PreviewLimited = true
 	}

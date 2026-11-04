@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 )
 
 const (
-	contextWindowEnv = "JOHNNY_CONTEXT_WINDOW"
-	maxOutputEnv     = "JOHNNY_MAX_OUTPUT_TOKENS"
+	contextWindowEnv  = "JOHNNY_CONTEXT_WINDOW"
+	maxOutputEnv      = "JOHNNY_MAX_OUTPUT_TOKENS"
+	requestTimeoutEnv = "JOHNNY_REQUEST_TIMEOUT"
 )
 
 type contextConfig struct {
@@ -51,6 +54,22 @@ func contextConfigFromEnv(lookup func(string) (string, bool)) (contextConfig, er
 		return config, fmt.Errorf("%s 必须小于 %s", maxOutputEnv, contextWindowEnv)
 	}
 	return config, nil
+}
+
+func requestTimeoutFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
+	timeout := agent.DefaultRequestTimeout
+	if lookup == nil {
+		return timeout, nil
+	}
+	value, ok := lookup(requestTimeoutEnv)
+	if !ok {
+		return timeout, nil
+	}
+	parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return timeout, fmt.Errorf("%s 必须是大于 0 的时长，例如 10m 或 90s", requestTimeoutEnv)
+	}
+	return parsed, nil
 }
 
 func contextStatsText(stats contextview.Stats) string {

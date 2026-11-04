@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	DefaultMaxTurns       = 100
-	DefaultRequestTimeout = 5 * time.Minute
+	DefaultMaxTurns = 100
+	// DefaultRequestTimeout 是单次模型请求的总时限。长任务、长报告和慢速
+	// 中转站需要更宽的时间；可用 JOHNNY_REQUEST_TIMEOUT 覆盖。
+	DefaultRequestTimeout = 10 * time.Minute
 )
 
 type Tools interface {

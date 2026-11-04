@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
 )
 
@@ -61,6 +63,28 @@ func TestContextConfigFromEnv(t *testing.T) {
 	})
 	if err != nil || config.OutputTokens != 8192 {
 		t.Fatalf("显式输出预留应被尊重：%+v %v", config, err)
+	}
+}
+
+func TestRequestTimeoutFromEnv(t *testing.T) {
+	timeout, err := requestTimeoutFromEnv(func(string) (string, bool) { return "", false })
+	if err != nil || timeout != agent.DefaultRequestTimeout {
+		t.Fatalf("默认请求超时错误：%v %v", timeout, err)
+	}
+	timeout, err = requestTimeoutFromEnv(func(key string) (string, bool) {
+		if key == requestTimeoutEnv {
+			return "90m", true
+		}
+		return "", false
+	})
+	if err != nil || timeout != 90*time.Minute {
+		t.Fatalf("请求超时覆盖错误：%v %v", timeout, err)
+	}
+	for _, value := range []string{"0", "-1m", "abc", ""} {
+		value := value
+		if _, err := requestTimeoutFromEnv(func(string) (string, bool) { return value, true }); err == nil {
+			t.Fatalf("非法请求超时应报错：%q", value)
+		}
 	}
 }
 

@@ -144,6 +144,9 @@ func TestTurnCompactionOnlyCompactsLargeResults(t *testing.T) {
 
 func TestTurnPreviewBudgetLimitsLaterResults(t *testing.T) {
 	manager := NewManager(Config{Budget: NewBudget(1_000_000, 4096)})
+	if manager.turnPreviewBudget <= TurnPreviewBudget {
+		t.Fatalf("大窗口的轮内预览预算应随可用输入放大：%d", manager.turnPreviewBudget)
+	}
 	manager.BeginTurn(1, userMessage("task"))
 	for i := 0; i < 6; i++ {
 		manager.AppendToolResult(1, model.ToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"demo"}`)}, model.ToolResult{
@@ -153,11 +156,38 @@ func TestTurnPreviewBudgetLimitsLaterResults(t *testing.T) {
 	}
 	messages := manager.Messages()
 	last := messages[len(messages)-1].Content[0].ToolResult.Content
-	if len(last) > 12_000 {
-		t.Fatalf("轮内预览预算用尽后应使用小预览：%d", len(last))
+	if !strings.Contains(last, "32 KiB") {
+		t.Fatalf("大窗口下前几个结果应使用正常预览：%s", last[:min(200, len(last))])
 	}
-	if !strings.Contains(last, "8 KiB") {
+	for i := 0; i < 30; i++ {
+		manager.AppendToolResult(1, model.ToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"demo"}`)}, model.ToolResult{
+			ToolCallID: strconv.Itoa(100 + i),
+			Content:    strings.Repeat("q", 40_000),
+		})
+	}
+	messages = manager.Messages()
+	last = messages[len(messages)-1].Content[0].ToolResult.Content
+	if len(last) >= 32_000 {
+		t.Fatalf("轮内预览预算用尽后应使用较小预览：%d", len(last))
+	}
+	if !strings.Contains(last, "16 KiB") {
 		t.Fatalf("小预览标记错误：%s", last[:min(200, len(last))])
+	}
+}
+
+func TestTurnPreviewBudgetScalesWithWindow(t *testing.T) {
+	for _, tc := range []struct {
+		window      int
+		wantAtLeast int
+	}{
+		{1_000_000, 900_000},
+		{100_000, TurnPreviewBudget},
+		{32_768, TurnPreviewBudget},
+	} {
+		manager := NewManager(Config{Budget: NewBudget(tc.window, 4096)})
+		if manager.turnPreviewBudget < tc.wantAtLeast {
+			t.Fatalf("window=%d 预算过小：%d", tc.window, manager.turnPreviewBudget)
+		}
 	}
 }
 

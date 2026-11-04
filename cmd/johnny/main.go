@@ -148,6 +148,10 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
 	}
+	requestTimeout, err := requestTimeoutFromEnv(os.LookupEnv)
+	if err != nil {
+		return reportError(stderr, "配置错误：", err)
+	}
 	sessionID, err := session.NewID()
 	if err != nil {
 		return reportError(stderr, "会话初始化失败：", err)
@@ -282,9 +286,10 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		manager, err = subagent.NewManager(subagent.Config{
 			WorkDir: runtime.WorkDir, SessionID: sessionID, InteractionMode: mode.label(),
 			Client: client, Model: cfg.Model, MaxOutputTokens: contextCfg.OutputTokens,
-			Budget:  contextview.NewBudget(contextCfg.Window, contextCfg.OutputTokens),
-			Toolbox: subagent.Toolbox{Runtime: runtime, Registry: registry, Mode: subagent.Mode(mode), Rules: rules, Gate: gate},
-			Pinned:  memoryContext.Load,
+			RequestTimeout: requestTimeout,
+			Budget:         contextview.NewBudget(contextCfg.Window, contextCfg.OutputTokens),
+			Toolbox:        subagent.Toolbox{Runtime: runtime, Registry: registry, Mode: subagent.Mode(mode), Rules: rules, Gate: gate},
+			Pinned:         memoryContext.Load,
 			System: func(info subagent.Info) string {
 				return childSystemPrompt(runtime.WorkDir, mode, info, skills)
 			},
@@ -351,7 +356,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		System:          buildSystem(),
 		InteractionMode: mode.label(),
 		MaxTurns:        *maxTurns,
-		RequestTimeout:  agent.DefaultRequestTimeout,
+		RequestTimeout:  requestTimeout,
 		MaxOutputTokens: contextCfg.OutputTokens,
 		ContextView:     view,
 		Pinned:          memoryContext.Load,
@@ -1103,6 +1108,7 @@ func printHelp(output io.Writer) {
 上下文预算：
   JOHNNY_CONTEXT_WINDOW 模型上下文窗口，默认 1000000
   JOHNNY_MAX_OUTPUT_TOKENS 每次请求输出预留，默认 8192；子 Agent 不低于 8192
+  JOHNNY_REQUEST_TIMEOUT 单次模型请求总时限，默认 10m
   JOHNNY_MEMORY_AUTO=off 关闭轮末自动记忆审查
   用户级 ~/.johnny/AGENTS.md 和项目根 AGENTS.md 在会话启动和压缩后加载
   单次工具结果模型可见预览最多 32 KiB；bash 大输出保存到 .johnny/artifacts/<会话ID>/
