@@ -29,7 +29,7 @@ func (b *Bash) Definition() model.ToolDefinition {
 	return model.ToolDefinition{
 		Name:        "bash",
 		Description: "在工作目录中执行一条 shell 命令，并返回标准输出、错误输出和退出状态。",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"要执行的 shell 命令"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600,"description":"超时秒数，默认 120"}},"required":["command"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"要执行的 shell 命令"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600,"description":"超时秒数，默认 600"}},"required":["command"]}`),
 	}
 }
 
@@ -50,12 +50,9 @@ func (b *Bash) Execute(ctx context.Context, raw json.RawMessage) (Result, error)
 	if strings.TrimSpace(args.Command) == "" {
 		return Result{}, invalidArguments("bash 的 command 不能为空", nil)
 	}
-	timeout := b.runtime.CommandTimeout
-	if args.TimeoutSeconds != nil {
-		if *args.TimeoutSeconds < 1 || *args.TimeoutSeconds > 600 {
-			return Result{}, invalidArguments("bash 的 timeout_seconds 必须在 1 到 600 之间", nil)
-		}
-		timeout = time.Duration(*args.TimeoutSeconds) * time.Second
+	timeout, err := commandTimeout(b.runtime, args.TimeoutSeconds)
+	if err != nil {
+		return Result{}, err
 	}
 	shell := "bash"
 	if _, err := exec.LookPath(shell); err != nil {

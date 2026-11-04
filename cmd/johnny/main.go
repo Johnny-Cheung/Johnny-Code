@@ -152,6 +152,10 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "配置错误：", err)
 	}
+	commandTimeout, err := commandTimeoutFromEnv(os.LookupEnv)
+	if err != nil {
+		return reportError(stderr, "配置错误：", err)
+	}
 	sessionID, err := session.NewID()
 	if err != nil {
 		return reportError(stderr, "会话初始化失败：", err)
@@ -165,6 +169,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	if err != nil {
 		return reportError(stderr, "工具初始化失败：", err)
 	}
+	runtime.CommandTimeout = commandTimeout
 
 	// 恢复会话必须在构建工具、请求视图和日志之前完成：要沿用原会话 ID、
 	// 原权限模式和原消息历史。恢复失败时不创建新会话，避免静默丢失上下文。
@@ -1109,6 +1114,7 @@ func printHelp(output io.Writer) {
   JOHNNY_CONTEXT_WINDOW 模型上下文窗口，默认 1000000
   JOHNNY_MAX_OUTPUT_TOKENS 每次请求输出预留，默认 8192；子 Agent 不低于 8192
   JOHNNY_REQUEST_TIMEOUT 单次模型请求总时限，默认 10m
+  JOHNNY_BASH_TIMEOUT bash 默认超时，默认 10m；单次最多 1h
   JOHNNY_MEMORY_AUTO=off 关闭轮末自动记忆审查
   用户级 ~/.johnny/AGENTS.md 和项目根 AGENTS.md 在会话启动和压缩后加载
   单次工具结果模型可见预览最多 32 KiB；bash 大输出保存到 .johnny/artifacts/<会话ID>/

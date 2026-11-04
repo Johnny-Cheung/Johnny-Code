@@ -83,7 +83,7 @@ func TestBashRejectsInvalidArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	bash := NewBash(runtime)
-	for _, input := range []string{`{"command":""}`, `{"command":"true","timeout_seconds":0}`, `{"command":"true","timeout_seconds":601}`, `{"command":"true","timeout_seconds":"1"}`} {
+	for _, input := range []string{`{"command":""}`, `{"command":"true","timeout_seconds":0}`, `{"command":"true","timeout_seconds":3601}`, `{"command":"true","timeout_seconds":"1"}`} {
 		if _, err := bash.Execute(context.Background(), []byte(input)); err == nil {
 			t.Fatalf("非法 bash 参数应失败：%s", input)
 		}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
 
 func TestContextConfigFromEnv(t *testing.T) {
@@ -84,6 +85,28 @@ func TestRequestTimeoutFromEnv(t *testing.T) {
 		value := value
 		if _, err := requestTimeoutFromEnv(func(string) (string, bool) { return value, true }); err == nil {
 			t.Fatalf("非法请求超时应报错：%q", value)
+		}
+	}
+}
+
+func TestCommandTimeoutFromEnv(t *testing.T) {
+	timeout, err := commandTimeoutFromEnv(func(string) (string, bool) { return "", false })
+	if err != nil || timeout != tool.DefaultCommandTimeout {
+		t.Fatalf("默认 bash 超时错误：%v %v", timeout, err)
+	}
+	timeout, err = commandTimeoutFromEnv(func(key string) (string, bool) {
+		if key == commandTimeoutEnv {
+			return "30m", true
+		}
+		return "", false
+	})
+	if err != nil || timeout != 30*time.Minute {
+		t.Fatalf("bash 超时覆盖错误：%v %v", timeout, err)
+	}
+	for _, value := range []string{"0", "-1m", "abc", "", "2h"} {
+		value := value
+		if _, err := commandTimeoutFromEnv(func(string) (string, bool) { return value, true }); err == nil {
+			t.Fatalf("非法 bash 超时应报错：%q", value)
 		}
 	}
 }

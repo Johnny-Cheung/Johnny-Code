@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,10 +109,10 @@ func TestHistoryMissingFile(t *testing.T) {
 	}
 }
 
-func TestHistoryHugeMatchReportsLineInsteadOfEmpty(t *testing.T) {
+func TestHistoryHugeRecordPaginatesByOffset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "huge.jsonl")
-	huge := strings.Repeat("x", 14<<10) + "NEEDLE" + strings.Repeat("y", 1<<10)
+	huge := strings.Repeat("x", 24<<10) + "NEEDLE" + strings.Repeat("y", 1<<10)
 	line := `{"type":"tool_end","time":"2026-10-31T10:00:03Z","user_turn":1,"turn":1,"call":{"id":"c1","name":"bash","arguments_raw":"{}"},"result":{"tool_call_id":"c1","content":"` + huge + `"}}`
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -128,7 +129,18 @@ func TestHistoryHugeMatchReportsLineInsteadOfEmpty(t *testing.T) {
 		t.Fatalf("大记录应返回行号和匹配片段：%s", result.Content)
 	}
 	read := runHistory(t, tool, `{"action":"read","from":1,"to":1}`)
-	if !strings.Contains(read.Content, "第 1 行") || !strings.Contains(read.Content, "内容已截断") {
-		t.Fatalf("大记录读取应截断并保留行号：%s", read.Content)
+	if !strings.Contains(read.Content, "第 1 行") || !strings.Contains(read.Content, "本行还有内容") {
+		t.Fatalf("大记录读取应提示继续读取：%s", read.Content)
+	}
+	if strings.Contains(read.Content, "NEEDLE") {
+		t.Fatalf("第一段不应包含后半段内容：%s", read.Content)
+	}
+	offset := historyReadEntryBytes
+	continued := runHistory(t, tool, `{"action":"read","from":1,"to":1,"offset":`+strconv.Itoa(offset)+`}`)
+	if !strings.Contains(continued.Content, "NEEDLE") {
+		t.Fatalf("offset 未能读取记录后半段：%s", continued.Content)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"read","from":1,"to":2,"offset":10}`)); err == nil {
+		t.Fatal("offset 配合多行范围应报错")
 	}
 }

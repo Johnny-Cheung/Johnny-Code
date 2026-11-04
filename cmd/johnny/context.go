@@ -8,12 +8,14 @@ import (
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/tool"
 )
 
 const (
 	contextWindowEnv  = "JOHNNY_CONTEXT_WINDOW"
 	maxOutputEnv      = "JOHNNY_MAX_OUTPUT_TOKENS"
 	requestTimeoutEnv = "JOHNNY_REQUEST_TIMEOUT"
+	commandTimeoutEnv = "JOHNNY_BASH_TIMEOUT"
 )
 
 type contextConfig struct {
@@ -68,6 +70,22 @@ func requestTimeoutFromEnv(lookup func(string) (string, bool)) (time.Duration, e
 	parsed, err := time.ParseDuration(strings.TrimSpace(value))
 	if err != nil || parsed <= 0 {
 		return timeout, fmt.Errorf("%s 必须是大于 0 的时长，例如 10m 或 90s", requestTimeoutEnv)
+	}
+	return parsed, nil
+}
+
+func commandTimeoutFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
+	timeout := tool.DefaultCommandTimeout
+	if lookup == nil {
+		return timeout, nil
+	}
+	value, ok := lookup(commandTimeoutEnv)
+	if !ok {
+		return timeout, nil
+	}
+	parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 || parsed > tool.MaxCommandTimeout {
+		return timeout, fmt.Errorf("%s 必须是大于 0 且不超过 %s 的时长，例如 10m 或 90s", commandTimeoutEnv, tool.MaxCommandTimeout)
 	}
 	return parsed, nil
 }

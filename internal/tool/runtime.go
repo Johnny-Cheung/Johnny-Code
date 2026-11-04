@@ -8,7 +8,11 @@ import (
 )
 
 const (
-	DefaultCommandTimeout = 2 * time.Minute
+	// DefaultCommandTimeout 是 bash 和固定查询的默认超时。长测试、构建和
+	// 依赖安装经常超过 2 分钟，2 分钟会把正常任务误杀。
+	DefaultCommandTimeout = 10 * time.Minute
+	// MaxCommandTimeout 是单条命令允许显式指定的上限。
+	MaxCommandTimeout     = time.Hour
 	DefaultMaxOutputBytes = 256 << 10
 )
 
