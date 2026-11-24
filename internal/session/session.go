@@ -38,6 +38,9 @@ type Metadata struct {
 	API            string
 	Model          string
 	PermissionMode string
+	// Sandbox/SandboxNetwork 记录会话级 bash 执行边界：seatbelt 或 off。
+	Sandbox        string
+	SandboxNetwork string
 	// ParentPermissionMode 仅子会话使用：父会话的权限模式。子会话的
 	// PermissionMode 记录实际生效的模式（read 子任务为 read-only）。
 	ParentPermissionMode string
@@ -210,6 +213,8 @@ func New(meta Metadata) (*Recorder, error) {
 		API:                  meta.API,
 		Model:                meta.Model,
 		PermissionMode:       meta.PermissionMode,
+		Sandbox:              meta.Sandbox,
+		SandboxNetwork:       meta.SandboxNetwork,
 		ParentPermissionMode: meta.ParentPermissionMode,
 		ParentID:             meta.ParentID,
 		SubagentID:           meta.SubagentID,
@@ -458,6 +463,8 @@ type metaEvent struct {
 	API            string    `json:"api"`
 	Model          string    `json:"model"`
 	PermissionMode string    `json:"permission_mode,omitempty"`
+	Sandbox        string    `json:"sandbox,omitempty"`
+	SandboxNetwork string    `json:"sandbox_network,omitempty"`
 	// ParentPermissionMode 记录子会话的父权限模式，便于区分“子任务实际只读”和“父会话处于放行模式”。
 	ParentPermissionMode string   `json:"parent_permission_mode,omitempty"`
 	ParentID             string   `json:"parent_id,omitempty"`

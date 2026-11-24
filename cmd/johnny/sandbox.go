@@ -71,3 +71,15 @@ func sandboxPromptNote(runner sandbox.Runner) string {
 	}
 	return fmt.Sprintf("\n\n执行环境：bash 运行在 %s 沙箱中，只能写工作目录、临时目录和缓存目录。", runner.Describe())
 }
+
+func sandboxMetadata(runner sandbox.Runner) (string, string) {
+	if runner == nil {
+		return "off", "off"
+	}
+	info := runner.Info()
+	network := "off"
+	if info.Network {
+		network = "on"
+	}
+	return info.Name, network
+}

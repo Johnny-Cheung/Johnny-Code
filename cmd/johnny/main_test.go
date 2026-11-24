@@ -849,12 +849,14 @@ func TestJEVModeAllowsBashThroughClassifier(t *testing.T) {
 	}
 	objects := readSessionObjects(t, os.Getenv("HOME"))
 	var permission map[string]json.RawMessage
-	metadataMode := ""
+	metadataMode, metadataSandbox, metadataNetwork := "", "", ""
 	for _, object := range objects {
 		var recordType string
 		_ = json.Unmarshal(object["type"], &recordType)
 		if recordType == "meta" {
 			_ = json.Unmarshal(object["permission_mode"], &metadataMode)
+			_ = json.Unmarshal(object["sandbox"], &metadataSandbox)
+			_ = json.Unmarshal(object["sandbox_network"], &metadataNetwork)
 		}
 		if recordType == "permission" {
 			permission = object
@@ -876,6 +878,9 @@ func TestJEVModeAllowsBashThroughClassifier(t *testing.T) {
 		t.Fatalf("JEV 审计记录异常：decision=%q source=%q classifier=%q classified=%q model=%q", decision, source, classifier, classifiedDecision, classifiedModel)
 	}
 	if goos.GOOS == "darwin" {
+		if metadataSandbox != "seatbelt" || metadataNetwork != "on" {
+			t.Fatalf("会话元数据缺少沙箱字段：sandbox=%q network=%q", metadataSandbox, metadataNetwork)
+		}
 		var sandboxName, sandboxNetwork string
 		_ = json.Unmarshal(permission["sandbox"], &sandboxName)
 		_ = json.Unmarshal(permission["sandbox_network"], &sandboxNetwork)

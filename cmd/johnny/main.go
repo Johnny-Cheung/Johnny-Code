@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	version          = "0.16.2"
+	version          = "0.16.3"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -282,11 +282,12 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
 	// 恢复会话时直接续写原文件，由 Record 继续追加。
+	sandboxName, sandboxNetwork := sandboxMetadata(runtime.Sandbox)
 	var logs *sessionLogger
 	if resumeState != nil {
 		logs = newSessionLogger(resumeState.Recorder, stderr)
 	} else {
-		logs = openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}, stderr)
+		logs = openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode), Sandbox: sandboxName, SandboxNetwork: sandboxNetwork}, stderr)
 	}
 	defer logs.close()
 	if memoryContext.Store != nil {
@@ -337,7 +338,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 			System: func(info subagent.Info) string {
 				return childSystemPrompt(runtime.WorkDir, mode, info, skills) + sandboxPromptNote(runtime.Sandbox)
 			},
-			OpenLog: openChildLog(logs, session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}),
+			OpenLog: openChildLog(logs, session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode), Sandbox: sandboxName, SandboxNetwork: sandboxNetwork}),
 			OnEvent: func(event subagent.Event) {
 				if event.Type == subagent.EventStarted || event.Type == subagent.EventEnded {
 					logs.recordSubagent(subagentRecord(event))

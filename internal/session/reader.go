@@ -237,6 +237,8 @@ func LoadResumePath(path string) (*ResumeState, error) {
 			API:            header.meta.API,
 			Model:          header.meta.Model,
 			PermissionMode: header.meta.PermissionMode,
+			Sandbox:        header.meta.Sandbox,
+			SandboxNetwork: header.meta.SandboxNetwork,
 		},
 		Path:       path,
 		Steps:      steps,
