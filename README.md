@@ -114,5 +114,5 @@ johnny --resume <会话ID>  # 启动时直接恢复指定会话
 | [权限模型](docs/permissions.md) | 四种模式、固定查询、分段器、审批与边界 |
 | [开发](docs/development.md) | 本地运行、测试、代码结构和手动验证工具 |
 | [路线图](docs/johnny-code-roadmap.md) | 版本顺序、范围与各版验收状态 |
-| [版本文档](docs/versions/) | v0.1 – v0.14 的设计、取舍和验收记录 |
+| [版本文档](docs/versions/) | v0.1 – v0.15 的设计、取舍和验收记录 |
 
