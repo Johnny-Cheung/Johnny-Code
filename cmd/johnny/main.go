@@ -937,10 +937,15 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 		Source:     audit.Source,
 		Reason:     audit.Reason,
 		// 请求为什么需要审批，和用户的决策原因分开记录。
-		RequestReason: audit.RequestReason,
-		RequestDetail: audit.RequestDetail,
-		Prefixes:      clonePermissionPrefixes(audit.Prefixes),
-		Origin:        audit.Origin.ID,
+		RequestReason:           audit.RequestReason,
+		RequestDetail:           audit.RequestDetail,
+		Prefixes:                clonePermissionPrefixes(audit.Prefixes),
+		Origin:                  audit.Origin.ID,
+		Classifier:              audit.Classifier,
+		ClassifiedModel:         audit.ClassifiedModel,
+		ClassifiedDecision:      audit.ClassifiedDecision,
+		ClassifiedReason:        audit.ClassifiedReason,
+		ClassifiedProbabilities: cloneFloatProbabilities(audit.ClassifiedProbabilities),
 	}
 	for _, path := range audit.Paths {
 		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})
@@ -995,6 +1000,17 @@ func clonePermissionPrefixes(prefixes [][]string) [][]string {
 	cloned := make([][]string, len(prefixes))
 	for i, prefix := range prefixes {
 		cloned[i] = append([]string(nil), prefix...)
+	}
+	return cloned
+}
+
+func cloneFloatProbabilities(values map[string]float64) map[string]float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]float64, len(values))
+	for key, value := range values {
+		cloned[key] = value
 	}
 	return cloned
 }

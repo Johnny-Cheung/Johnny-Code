@@ -30,6 +30,13 @@ type ApprovalRequest struct {
 	SessionPaths    []PathRule
 	// Origin 非零表示请求来自子 Agent，由 Default.approve 根据 context 填写。
 	Origin Origin
+	// Classifier 等字段只用于审计，不参与授权判断。JEV 模式在请求进入
+	// 审批面板或直接放行时填写，便于事后解释模型为什么这样判断。
+	Classifier              string
+	ClassifiedModel         string
+	ClassifiedDecision      string
+	ClassifiedReason        string
+	ClassifiedProbabilities map[string]float64
 }
 
 func (r ApprovalRequest) CanRecord() bool {
@@ -138,6 +145,12 @@ type ApprovalAudit struct {
 	SessionCommands []CommandGrant
 	SessionPaths    []PathRule
 	Origin          Origin
+	// Classifier 等字段来自 JEV 分类，仅用于审计和解释，不影响用户决策。
+	Classifier              string
+	ClassifiedModel         string
+	ClassifiedDecision      string
+	ClassifiedReason        string
+	ClassifiedProbabilities map[string]float64
 }
 
 type ApprovalFunc func(context.Context, ApprovalRequest) (ApprovalDecision, error)
@@ -358,19 +371,24 @@ func auditDecision(audit AuditFunc, request ApprovalRequest, decision ApprovalDe
 		sessionPaths = append([]PathRule(nil), request.SessionPaths...)
 	}
 	audit(ApprovalAudit{
-		ToolCallID:      request.ToolCallID,
-		Tool:            request.Tool,
-		Target:          approvalTarget(request),
-		Decision:        result,
-		Source:          decision.Source,
-		Reason:          decision.Reason,
-		RequestReason:   request.Reason,
-		RequestDetail:   request.Detail,
-		Prefixes:        prefixes,
-		Paths:           paths,
-		SessionCommands: sessionCommands,
-		SessionPaths:    sessionPaths,
-		Origin:          request.Origin,
+		ToolCallID:              request.ToolCallID,
+		Tool:                    request.Tool,
+		Target:                  approvalTarget(request),
+		Decision:                result,
+		Source:                  decision.Source,
+		Reason:                  decision.Reason,
+		RequestReason:           request.Reason,
+		RequestDetail:           request.Detail,
+		Prefixes:                prefixes,
+		Paths:                   paths,
+		SessionCommands:         sessionCommands,
+		SessionPaths:            sessionPaths,
+		Origin:                  request.Origin,
+		Classifier:              request.Classifier,
+		ClassifiedModel:         request.ClassifiedModel,
+		ClassifiedDecision:      request.ClassifiedDecision,
+		ClassifiedReason:        request.ClassifiedReason,
+		ClassifiedProbabilities: cloneProbabilities(request.ClassifiedProbabilities),
 	})
 }
 

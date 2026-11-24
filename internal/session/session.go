@@ -111,6 +111,12 @@ type PermissionRecord struct {
 	SessionPaths    []PermissionPath         `json:"session_paths,omitempty"`
 	// Origin 是发起请求的子任务 ID；主 Agent 的请求为空。
 	Origin string `json:"origin,omitempty"`
+	// Classifier 等字段记录 JEV 等分类器的判断，仅用于解释和审计。
+	Classifier              string             `json:"classifier,omitempty"`
+	ClassifiedModel         string             `json:"classifier_model,omitempty"`
+	ClassifiedDecision      string             `json:"classified_decision,omitempty"`
+	ClassifiedReason        string             `json:"classified_reason,omitempty"`
+	ClassifiedProbabilities map[string]float64 `json:"classified_probabilities,omitempty"`
 }
 
 // PermissionCommandGrant 是一条会话命令授权的审计键。Prefix 和 Argv 互斥：
@@ -293,21 +299,26 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 		return errRecorderClosed
 	}
 	return r.write(permissionEvent{
-		Type:            "permission",
-		Time:            r.timestamp(),
-		ToolCallID:      record.ToolCallID,
-		Tool:            record.Tool,
-		Target:          record.Target,
-		Decision:        record.Decision,
-		Source:          record.Source,
-		Reason:          record.Reason,
-		RequestReason:   record.RequestReason,
-		RequestDetail:   record.RequestDetail,
-		Prefixes:        clonePermissionPrefixes(record.Prefixes),
-		Paths:           record.Paths,
-		SessionCommands: clonePermissionCommandGrants(record.SessionCommands),
-		SessionPaths:    record.SessionPaths,
-		Origin:          record.Origin,
+		Type:                    "permission",
+		Time:                    r.timestamp(),
+		ToolCallID:              record.ToolCallID,
+		Tool:                    record.Tool,
+		Target:                  record.Target,
+		Decision:                record.Decision,
+		Source:                  record.Source,
+		Reason:                  record.Reason,
+		RequestReason:           record.RequestReason,
+		RequestDetail:           record.RequestDetail,
+		Prefixes:                clonePermissionPrefixes(record.Prefixes),
+		Paths:                   record.Paths,
+		SessionCommands:         clonePermissionCommandGrants(record.SessionCommands),
+		SessionPaths:            record.SessionPaths,
+		Origin:                  record.Origin,
+		Classifier:              record.Classifier,
+		ClassifiedModel:         record.ClassifiedModel,
+		ClassifiedDecision:      record.ClassifiedDecision,
+		ClassifiedReason:        record.ClassifiedReason,
+		ClassifiedProbabilities: cloneFloatMap(record.ClassifiedProbabilities),
 	})
 }
 
@@ -526,21 +537,37 @@ func newSummary(summary *agent.SummaryInfo) *summaryRecord {
 }
 
 type permissionEvent struct {
-	Type            string                   `json:"type"`
-	Time            time.Time                `json:"time"`
-	ToolCallID      string                   `json:"tool_call_id"`
-	Tool            string                   `json:"tool"`
-	Target          string                   `json:"target"`
-	Decision        string                   `json:"decision"`
-	Source          string                   `json:"source,omitempty"`
-	Reason          string                   `json:"reason,omitempty"`
-	RequestReason   string                   `json:"request_reason,omitempty"`
-	RequestDetail   string                   `json:"request_detail,omitempty"`
-	Prefixes        [][]string               `json:"recorded_prefixes,omitempty"`
-	Paths           []PermissionPath         `json:"recorded_paths,omitempty"`
-	SessionCommands []PermissionCommandGrant `json:"session_commands,omitempty"`
-	SessionPaths    []PermissionPath         `json:"session_paths,omitempty"`
-	Origin          string                   `json:"origin,omitempty"`
+	Type                    string                   `json:"type"`
+	Time                    time.Time                `json:"time"`
+	ToolCallID              string                   `json:"tool_call_id"`
+	Tool                    string                   `json:"tool"`
+	Target                  string                   `json:"target"`
+	Decision                string                   `json:"decision"`
+	Source                  string                   `json:"source,omitempty"`
+	Reason                  string                   `json:"reason,omitempty"`
+	RequestReason           string                   `json:"request_reason,omitempty"`
+	RequestDetail           string                   `json:"request_detail,omitempty"`
+	Prefixes                [][]string               `json:"recorded_prefixes,omitempty"`
+	Paths                   []PermissionPath         `json:"recorded_paths,omitempty"`
+	SessionCommands         []PermissionCommandGrant `json:"session_commands,omitempty"`
+	SessionPaths            []PermissionPath         `json:"session_paths,omitempty"`
+	Origin                  string                   `json:"origin,omitempty"`
+	Classifier              string                   `json:"classifier,omitempty"`
+	ClassifiedModel         string                   `json:"classifier_model,omitempty"`
+	ClassifiedDecision      string                   `json:"classified_decision,omitempty"`
+	ClassifiedReason        string                   `json:"classified_reason,omitempty"`
+	ClassifiedProbabilities map[string]float64       `json:"classified_probabilities,omitempty"`
+}
+
+func cloneFloatMap(values map[string]float64) map[string]float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]float64, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func clonePermissionCommandGrants(grants []PermissionCommandGrant) []PermissionCommandGrant {
