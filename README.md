@@ -4,7 +4,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
-![Version](https://img.shields.io/badge/version-v0.15.0-blue)
+![Version](https://img.shields.io/badge/version-v0.16.0-blue)
 
 在任意项目目录运行 `johnny`，用自然语言描述任务，它会反复调用文件与命令工具——读实现、改代码、跑测试、查日志——直到给出结论。支持 Anthropic Messages、OpenAI Responses 和 OpenAI Chat Completions 三种协议。
 
@@ -15,6 +15,7 @@
 - **终端原生 TUI**：流式回复、Markdown 与语法高亮、真实终端光标、中文输入法、工具过程折叠与回看。
 - **四种权限模式**：默认逐次审批、只读、放行、JEV 判断；审批可只允许本次、本会话内允许或写入项目规则。
 - **JEV 模式**：`--jev` 把每条 bash 命令原样交给 JEV 判断 allow/ask/deny；JEV 不可用时回退默认权限策略。
+- **macOS Seatbelt 沙箱**：所有模式的 bash 默认在系统沙箱中执行；只允许写工作目录、临时目录和缓存目录，网络默认关闭，不依赖 Docker。
 - **受控命令执行**：21 个固定查询命令、项目命令前缀、最多 16 段的管道与 `&&`/`||`/`;` 分段器，不经过 shell。
 - **后台子 Agent**：`fresh` 或 `fork` 起点，最多 5 个并行；结果自动注入下一轮或唤醒空闲的主 Agent。
 - **Workflow**：主 Agent 先声明分步大纲，再逐步并行执行，整步报告合并送回，适合前后依赖的任务。
@@ -28,6 +29,8 @@
 ## 快速开始
 
 需要 **Go 1.26 或更新版本**，macOS 或 Linux。Windows 需要手动构建，见[开发](docs/development.md)。
+
+macOS 会默认使用系统自带的 Seatbelt 沙箱，不需要安装 Docker；Linux 版本暂未接入沙箱，启动时会提示是否继续。
 
 ```sh
 git clone git@github.com:Johnny-Cheung/Johnny-Code.git
@@ -60,6 +63,8 @@ JOHNNY_MODEL=服务提供的模型名
 | `JOHNNY_BASE_URL` | 服务根地址或以 `/v1` 结尾的地址；不要填 `/v1/messages` 这类完整接口路径 |
 | `JOHNNY_MODEL` | 服务实际提供的模型标识 |
 | `JOHNNY_API` | `anthropic-messages`（默认）、`openai-responses`、`openai-chat-completions` |
+| `JOHNNY_SANDBOX` | `off` 关闭 macOS Seatbelt 沙箱；默认开启 |
+| `JOHNNY_SANDBOX_NETWORK` | `on` 允许沙箱内 bash 联网；默认关闭 |
 
 使用 `--jev` 时再填写 JEV 配置；其他模式可以留空：
 
@@ -90,6 +95,8 @@ johnny --resume <会话ID>  # 启动时直接恢复指定会话
 | `allow` | 工具直接执行，不逐次确认 |
 | `jev` | 所有 bash 命令原样交给 JEV：allow 直接执行、ask 审批、deny 拒绝；JEV 不可用时回退 default |
 
+macOS 上四种模式的 bash 都默认在 Seatbelt 沙箱里执行：工作目录、临时目录和缓存目录可写，工作目录外只读，Johnny 项目配置禁止 bash 写入，网络默认关闭。启动时如果系统不支持沙箱，会提示“退出 / 重试 / 本次不使用沙箱继续”；选择继续需要明确确认。需要联网时设置 `JOHNNY_SANDBOX_NETWORK=on`，需要用宿主机权限时设置 `JOHNNY_SANDBOX=off` 后重启。
+
 常用操作：
 
 | 操作 | 行为 |
@@ -114,5 +121,5 @@ johnny --resume <会话ID>  # 启动时直接恢复指定会话
 | [权限模型](docs/permissions.md) | 四种模式、固定查询、分段器、审批与边界 |
 | [开发](docs/development.md) | 本地运行、测试、代码结构和手动验证工具 |
 | [路线图](docs/johnny-code-roadmap.md) | 版本顺序、范围与各版验收状态 |
-| [版本文档](docs/versions/) | v0.1 – v0.15 的设计、取舍和验收记录 |
+| [版本文档](docs/versions/) | v0.1 – v0.16 的设计、取舍和验收记录 |
 

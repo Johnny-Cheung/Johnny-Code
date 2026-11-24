@@ -33,6 +33,21 @@ Johnny-Code 只支持在终端直接运行 `johnny` 进入 TUI。参数任务（
 
 包含空格的模型名用引号包围。`--model` 只替换模型名，`--api` 只替换协议，服务地址和 Key 继续使用当前配置。
 
+## 沙箱
+
+macOS 上四种权限模式的 `bash` 默认在系统 Seatbelt 沙箱中执行，不需要 Docker 或额外安装。启动时会自动检测 `sandbox-exec`，并在界面提示当前沙箱状态：
+
+```text
+沙箱：Seatbelt（网络关闭）
+```
+
+- 工作目录、临时目录和缓存目录可写；工作目录外只读；项目内 `.johnny` 禁止 bash 写入。
+- 网络默认关闭，`curl`、`npm install`、`go mod download` 会失败；需要时设置 `JOHNNY_SANDBOX_NETWORK=on` 后重启。
+- 沙箱只包 `bash`；`read`、`write`、`edit` 仍走权限模式，`allow` 模式下仍可访问工作目录外。
+- 如果 `sandbox-exec` 不可用，交互终端会显示“退出 / 重试 / 本次不使用沙箱继续”，默认退出；选择继续会明确提示风险。
+- `JOHNNY_SANDBOX=off` 可以显式关闭沙箱，状态栏和系统提示会标注“沙箱关闭”。
+- 当前只适配 macOS；Linux 启动时会走同一套“不使用沙箱继续”的提示。
+
 ## 输入与编辑
 
 | 操作 | 行为 |

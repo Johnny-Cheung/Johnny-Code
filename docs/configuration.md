@@ -53,6 +53,28 @@ JEV 配置只在 `--jev` 模式下校验；其他模式可以不填。配置缺�
 
 命令发送前会脱敏常见的 `Bearer`、`sk-`、`token=...`、`password=...` 片段；真正执行的命令不受影响。JEV 只能看到命令文本和工作目录，看不到脚本内容、文件内容或工具输出。
 
+## macOS Seatbelt 沙箱
+
+macOS 上所有权限模式的 `bash` 默认通过系统自带的 `sandbox-exec` 执行，不需要 Docker 或镜像。Johnny 会按工作目录、临时目录和缓存目录生成 SBPL profile，用户不需要维护策略文件。
+
+- **可写**：工作目录、会话临时目录、`~/Library/Caches`、`~/go/pkg/mod`、`~/.cache`（存在时）。
+- **禁止写入**：工作目录外的其他路径、项目内 `.johnny`。
+- **禁止读取**：`~/.johnny` 和 Docker/Colima/OrbStack 的 socket。
+- **网络**：默认关闭；沙箱内的 `curl`、`npm install`、`go mod download` 会失败。
+- **读文件**：默认放开；沙箱主要限制写入和网络，不限制读取。
+
+启动时先做 `sandbox-exec` 自检。失败时交互终端会提示：
+
+```text
+[Enter] 退出并处理沙箱（推荐）
+[r]     重试检测
+[c]     本次不使用沙箱继续（不安全）
+```
+
+参数模式没有交互，会直接报错退出。`JOHNNY_SANDBOX=off` 可以显式关闭；启动时和系统提示都会标注“沙箱关闭”。`JOHNNY_SANDBOX_NETWORK=on` 允许沙箱内命令联网；开启后项目里的 `.env` 等文件可能被读取并外发，需要自行评估。
+
+沙箱只包 `bash`；`read`、`write`、`edit` 仍在宿主机按权限模式执行。`allow` 模式下文件工具仍能访问工作目录外，沙箱也不会阻止 `rm -rf .` 删除项目本身。当前实现只适配 macOS；Linux 启动时会提示是否本次不使用沙箱继续。`sandbox-exec` 已被 Apple 标记为 deprecated，未来可能移除。
+
 ## 优先级
 
 1. 命令行 `--api`、`--model`；
@@ -91,6 +113,8 @@ johnny --api openai-chat-completions --model "服务提供的模型名"
 | `JOHNNY_MAX_OUTPUT_TOKENS` | `8192` | 每次请求的输出预留 `O`；子 Agent 不低于 8192。窗口较小时未显式设置的值会按窗口八分之一降低 |
 | `JOHNNY_REQUEST_TIMEOUT` | `10m` | 单次模型请求的总时限，使用 Go 时长格式，例如 `90s`、`20m` |
 | `JOHNNY_BASH_TIMEOUT` | `10m` | `bash` 和固定查询的默认超时，最大 `1h`；工具参数 `timeout_seconds` 仍可覆盖单次调用 |
+| `JOHNNY_SANDBOX` | 开 | `off` 关闭 macOS Seatbelt 沙箱；启动时会警告 |
+| `JOHNNY_SANDBOX_NETWORK` | 关 | `on` 允许沙箱内 bash 联网；默认关闭 |
 | `JOHNNY_JEV_BASE_URL` | 无 | 仅 `--jev`：JEV 服务根地址 |
 | `JOHNNY_JEV_API_KEY` | 无 | 仅 `--jev`：JEV Bearer Token |
 | `JOHNNY_JEV_MODEL` | `jev-latest` | 仅 `--jev`：JEV 模型标识 |
