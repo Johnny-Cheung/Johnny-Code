@@ -32,7 +32,7 @@ func useConfigPath(t *testing.T, path string) {
 	t.Cleanup(func() { configFileBase64 = previous })
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("JOHNNY_MEMORY_AUTO", "off")
-	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL"} {
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL", "JOHNNY_SANDBOX", "JOHNNY_SANDBOX_NETWORK"} {
 		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
@@ -697,6 +697,36 @@ func TestDefaultModeNonInteractiveDeniesApproval(t *testing.T) {
 	}
 	if requestReason == "" {
 		t.Fatalf("权限记录缺少请求原因：%s", permission["request_reason"])
+	}
+}
+
+func TestSandboxDeniesBashWriteOutsideWorkspace(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
+		t.Skip("当前平台没有 sandbox-exec")
+	}
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "outside.txt")
+	t.Setenv("OUTSIDE", outsideFile)
+
+	var requests atomic.Int32
+	newCLITestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			writeToolUseResponse(w, "", "sandbox-bash", "bash", `{"command":"echo no > \"$OUTSIDE\""}`)
+			return
+		}
+		writeTextResponse(w, "DONE")
+	})
+
+	var output, stderr bytes.Buffer
+	code := runLegacy(context.Background(), []string{"--skip", "run"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || !strings.Contains(output.String(), "DONE") {
+		t.Fatalf("沙箱任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
+	}
+	if _, err := os.Stat(outsideFile); !os.IsNotExist(err) {
+		t.Fatalf("沙箱外文件不应存在：%v", err)
+	}
+	if !strings.Contains(stderr.String(), "沙箱：Seatbelt") {
+		t.Fatalf("启动应提示沙箱状态：%s", stderr.String())
 	}
 }
 

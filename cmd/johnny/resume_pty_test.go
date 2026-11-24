@@ -76,7 +76,8 @@ func TestTerminalPTYResumeSendsSummaryAndRetainedTurns(t *testing.T) {
 	p := startTerminalModeAt(t, server.URL, "allow", dir, home, "JOHNNY_TUI_TEST_RESUME=resume-history")
 	p.expect(t, 0, "已恢复会话 resume-history")
 	p.write(t, "NEW-PROMPT\r")
-	p.expect(t, 0, "RESUMED-OK")
+	end := p.expect(t, 0, "RESUMED-OK")
+	p.expect(t, end, "空闲")
 	p.write(t, "/exit\r")
 	p.wait(t, 0)
 

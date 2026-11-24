@@ -44,7 +44,7 @@ func TestLoadDotEnvAndEnvironmentOverride(t *testing.T) {
 
 func TestLoadJEVConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jev.env")
-	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL"} {
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL", "JOHNNY_SANDBOX", "JOHNNY_SANDBOX_NETWORK"} {
 		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
@@ -78,7 +78,7 @@ func TestLoadJEVConfig(t *testing.T) {
 
 func TestLoadJEVConfigOptional(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "no-jev.env")
-	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL"} {
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL", "JOHNNY_SANDBOX", "JOHNNY_SANDBOX_NETWORK"} {
 		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
@@ -94,6 +94,37 @@ func TestLoadJEVConfigOptional(t *testing.T) {
 	}
 	if cfg.JEV.Configured() {
 		t.Fatal("未填写 JEV 配置时不应视为已配置")
+	}
+}
+
+func TestLoadSandboxConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sandbox.env")
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL", "JOHNNY_SANDBOX", "JOHNNY_SANDBOX_NETWORK"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := "JOHNNY_API_KEY=file-key\nJOHNNY_BASE_URL=https://relay.example\nJOHNNY_MODEL=relay-model\n" +
+		"JOHNNY_SANDBOX=off\nJOHNNY_SANDBOX_NETWORK=on\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sandbox.Disabled || !cfg.Sandbox.Network {
+		t.Fatalf("沙箱配置读取错误：%+v", cfg.Sandbox)
+	}
+	t.Setenv("JOHNNY_SANDBOX", "on")
+	t.Setenv("JOHNNY_SANDBOX_NETWORK", "off")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sandbox.Disabled || cfg.Sandbox.Network {
+		t.Fatalf("环境变量应覆盖沙箱文件配置：%+v", cfg.Sandbox)
 	}
 }
 

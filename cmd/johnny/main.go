@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	version          = "0.15.0"
+	version          = "0.16.0"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -200,6 +200,17 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		}
 	}
 
+	sandboxEnabled, err := prepareSandbox(&runtime, interactive, input, stderr, cfg.Sandbox.Disabled, cfg.Sandbox.Network)
+	if errors.Is(err, errSandboxExit) {
+		return 0
+	}
+	if err != nil {
+		return reportError(stderr, "沙箱初始化失败：", err)
+	}
+	if runtime.Sandbox != nil {
+		defer func() { _ = runtime.Sandbox.Close() }()
+	}
+
 	var classifier tool.BashClassifier
 	var onJEVFallback func(error)
 	if mode == permissionJEV {
@@ -324,7 +335,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 			Toolbox:        subagent.Toolbox{Runtime: runtime, Registry: registry, Mode: subagent.Mode(mode), Rules: rules, Gate: gate, Classifier: classifier, OnJEVFallback: onJEVFallback},
 			Pinned:         memoryContext.Load,
 			System: func(info subagent.Info) string {
-				return childSystemPrompt(runtime.WorkDir, mode, info, skills)
+				return childSystemPrompt(runtime.WorkDir, mode, info, skills) + sandboxPromptNote(runtime.Sandbox)
 			},
 			OpenLog: openChildLog(logs, session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode)}),
 			OnEvent: func(event subagent.Event) {
@@ -385,6 +396,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	}
 	buildSystem := func() string {
 		prompt := mainSystemPrompt(runtime.WorkDir, mode, skills, manager != nil)
+		prompt += sandboxPromptNote(runtime.Sandbox)
 		if resumeState != nil {
 			prompt += "\n\n" + resumeContextNote(resumeState)
 		}
@@ -468,7 +480,11 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		if manager != nil {
 			children = &terminalSubagents{manager: manager, conversation: conversation, hub: subagentHub}
 		}
-		code, runErr := runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), sessionID, resumeNoticeText(resumeState, mode), gate, localCommand, compact, skills, children)
+		notice := resumeNoticeText(resumeState, mode)
+		if sandboxEnabled && runtime.Sandbox != nil {
+			notice = strings.TrimSpace(notice + "\n沙箱：" + runtime.Sandbox.Describe())
+		}
+		code, runErr := runTerminal(ctx, conversation, input, output, stderr, logs, cfg.Model, runtime.WorkDir, mode.label(), sessionID, notice, gate, localCommand, compact, skills, children)
 		return handleTerminalResult(code, runErr, input, output, stderr)
 	}
 	printPermissionNotice(stderr, mode)
@@ -1187,6 +1203,8 @@ func printHelp(output io.Writer) {
   JOHNNY_MAX_OUTPUT_TOKENS 每次请求输出预留，默认 8192；子 Agent 不低于 8192
   JOHNNY_REQUEST_TIMEOUT 单次模型请求总时限，默认 10m
   JOHNNY_BASH_TIMEOUT bash 默认超时，默认 10m；单次最多 1h
+  JOHNNY_SANDBOX=off 关闭 macOS Seatbelt 沙箱（默认开启；不支持的系统会提示）
+  JOHNNY_SANDBOX_NETWORK=on 允许沙箱内 bash 联网（默认关闭）
   JOHNNY_JEV_BASE_URL / JOHNNY_JEV_API_KEY / JOHNNY_JEV_MODEL  JEV 模式配置，模型默认 jev-latest
   JOHNNY_MEMORY_AUTO=off 关闭轮末自动记忆审查
   用户级 ~/.johnny/AGENTS.md 和项目根 AGENTS.md 在会话启动和压缩后加载

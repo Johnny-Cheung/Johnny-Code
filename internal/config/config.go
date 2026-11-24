@@ -16,6 +16,13 @@ type Config struct {
 	Model   string
 	API     string
 	JEV     JEVConfig
+	Sandbox SandboxConfig
+}
+
+// SandboxConfig 是 macOS Seatbelt 沙箱的可选配置。默认启用，网络默认关闭。
+type SandboxConfig struct {
+	Disabled bool
+	Network  bool
 }
 
 // JEVConfig 是 JEV 权限模式的可选配置；其他模式不要求填写。
@@ -61,6 +68,10 @@ func LoadWithOverrides(path string, overrides Overrides) (Config, error) {
 			APIKey:  get("JOHNNY_JEV_API_KEY"),
 			Model:   get("JOHNNY_JEV_MODEL"),
 		},
+		Sandbox: SandboxConfig{
+			Disabled: boolSetting(get("JOHNNY_SANDBOX"), "off", "0", "false", "no"),
+			Network:  boolSetting(get("JOHNNY_SANDBOX_NETWORK"), "on", "1", "true", "yes"),
+		},
 	}
 	_, fileAPI := values["JOHNNY_API"]
 	_, envAPI := os.LookupEnv("JOHNNY_API")
@@ -105,4 +116,14 @@ func LoadWithOverrides(path string, overrides Overrides) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func boolSetting(value string, truthy ...string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, item := range truthy {
+		if value == item {
+			return true
+		}
+	}
+	return false
 }
