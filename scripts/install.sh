@@ -31,7 +31,8 @@ fi
 revision="unknown"
 if command -v git >/dev/null 2>&1 && git -C "$project_root" rev-parse --verify HEAD >/dev/null 2>&1; then
   revision="$(git -C "$project_root" rev-parse --short HEAD)"
-  if [[ -n "$(git -C "$project_root" status --porcelain --untracked-files=normal)" ]]; then
+  # 未跟踪文件不参与构建，不把本地分析目录等标记成 dirty。
+  if [[ -n "$(git -C "$project_root" status --porcelain --untracked-files=no)" ]]; then
     revision="${revision}-dirty"
   fi
 fi

@@ -221,7 +221,8 @@ func TestTerminalPTYRegistersTenToolsIncludingTaskWorkflowAndHistory(t *testing.
 	defer server.Close()
 	p := startTerminalMode(t, server.URL, "allow")
 	p.write(t, "你好\r")
-	p.expect(t, 0, "OK")
+	end := p.expect(t, 0, "OK")
+	p.expect(t, end, "空闲")
 	p.write(t, "/exit\r")
 	p.wait(t, 0)
 
