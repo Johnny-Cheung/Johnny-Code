@@ -45,7 +45,7 @@ macOS 上四种权限模式的 `bash` 默认在系统 Seatbelt 沙箱中执行�
 - 网络默认关闭，`curl`、`npm install`、`go mod download` 会失败；需要时设置 `JOHNNY_SANDBOX_NETWORK=on` 后重启。
 - 沙箱只包 `bash`；`read`、`write`、`edit` 仍走权限模式，`allow` 模式下仍可访问工作目录外。
 - 如果 `sandbox-exec` 不可用，交互终端会显示“退出 / 重试 / 本次不使用沙箱继续”，默认退出；选择继续会明确提示风险。
-- `JOHNNY_SANDBOX=off` 可以显式关闭沙箱，状态栏和系统提示会标注“沙箱关闭”。
+- `JOHNNY_SANDBOX=off` 可以显式关闭沙箱，启动提示和系统提示会标注“沙箱关闭”。
 - 当前只适配 macOS；Linux 启动时会走同一套“不使用沙箱继续”的提示。
 
 ## 输入与编辑
