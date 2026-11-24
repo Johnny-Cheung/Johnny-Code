@@ -42,6 +42,61 @@ func TestLoadDotEnvAndEnvironmentOverride(t *testing.T) {
 	}
 }
 
+func TestLoadJEVConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jev.env")
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := "JOHNNY_API_KEY=file-key\nJOHNNY_BASE_URL=https://relay.example/gateway\nJOHNNY_MODEL=relay-model\n" +
+		"JOHNNY_JEV_BASE_URL=https://jev.example\nJOHNNY_JEV_API_KEY=jev-file-key\nJOHNNY_JEV_MODEL=jev-latest\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.JEV.BaseURL != "https://jev.example" || cfg.JEV.APIKey != "jev-file-key" || cfg.JEV.Model != "jev-latest" {
+		t.Fatalf("JEV 配置读取错误：%+v", cfg.JEV)
+	}
+	if !cfg.JEV.Configured() {
+		t.Fatal("JEV 配置应视为已填写")
+	}
+	t.Setenv("JOHNNY_JEV_BASE_URL", "https://env-jev.example")
+	t.Setenv("JOHNNY_JEV_API_KEY", "jev-env-key")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.JEV.BaseURL != "https://env-jev.example" || cfg.JEV.APIKey != "jev-env-key" {
+		t.Fatalf("JEV 环境变量未覆盖文件：%+v", cfg.JEV)
+	}
+}
+
+func TestLoadJEVConfigOptional(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "no-jev.env")
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := "JOHNNY_API_KEY=file-key\nJOHNNY_BASE_URL=https://relay.example\nJOHNNY_MODEL=relay-model\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.JEV.Configured() {
+		t.Fatal("未填写 JEV 配置时不应视为已配置")
+	}
+}
+
 func TestLoadRejectsMissingConfigAndMessageURL(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("JOHNNY_API_KEY", "")

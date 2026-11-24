@@ -15,6 +15,18 @@ type Config struct {
 	BaseURL string
 	Model   string
 	API     string
+	JEV     JEVConfig
+}
+
+// JEVConfig 是 JEV 权限模式的可选配置；其他模式不要求填写。
+type JEVConfig struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+}
+
+func (c JEVConfig) Configured() bool {
+	return c.BaseURL != "" && c.APIKey != ""
 }
 
 type Overrides struct {
@@ -44,6 +56,11 @@ func LoadWithOverrides(path string, overrides Overrides) (Config, error) {
 		BaseURL: get("JOHNNY_BASE_URL"),
 		Model:   get("JOHNNY_MODEL"),
 		API:     get("JOHNNY_API"),
+		JEV: JEVConfig{
+			BaseURL: get("JOHNNY_JEV_BASE_URL"),
+			APIKey:  get("JOHNNY_JEV_API_KEY"),
+			Model:   get("JOHNNY_JEV_MODEL"),
+		},
 	}
 	_, fileAPI := values["JOHNNY_API"]
 	_, envAPI := os.LookupEnv("JOHNNY_API")
