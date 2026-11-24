@@ -21,6 +21,7 @@ import (
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/config"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/contextview"
+	"github.com/Johnny-Cheung/Johnny-Code/internal/jev"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/memory"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/model"
 	"github.com/Johnny-Cheung/Johnny-Code/internal/session"
@@ -71,7 +72,8 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	maxTurns := flags.Int("max-turns", agent.DefaultMaxTurns, "每轮任务最多模型请求次数")
 	readOnlyFlag := flags.Bool("read", false, "只读模式")
 	skipFlag := flags.Bool("skip", false, "放行模式：跳过逐次审批")
-	permissionFlag := flags.String("permission-mode", "", "权限模式长写法：default、read-only 或 allow")
+	jevFlag := flags.Bool("jev", false, "JEV 模式：所有 bash 命令交给 JEV 判断")
+	permissionFlag := flags.String("permission-mode", "", "权限模式长写法：default、read-only、allow 或 jev")
 	resumeFlag := flags.String("resume", "", "恢复指定会话 ID")
 	flags.Usage = func() { printHelp(stderr) }
 	if err := flags.Parse(args); err != nil {
@@ -96,11 +98,11 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		case "permission-mode":
 			permissionSet = true
 			permissionExplicit = true
-		case "read", "skip":
+		case "read", "skip", "jev":
 			permissionExplicit = true
 		}
 	})
-	mode, err := resolvePermissionMode(*permissionFlag, permissionSet, *readOnlyFlag, *skipFlag)
+	mode, err := resolvePermissionMode(*permissionFlag, permissionSet, *readOnlyFlag, *skipFlag, *jevFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -198,6 +200,32 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		}
 	}
 
+	var classifier tool.BashClassifier
+	var onJEVFallback func(error)
+	if mode == permissionJEV {
+		if !cfg.JEV.Configured() {
+			return reportError(stderr, "配置错误：", errors.New("--jev 需要 JOHNNY_JEV_BASE_URL 和 JOHNNY_JEV_API_KEY；JOHNNY_JEV_MODEL 可选，默认 jev-latest"))
+		}
+		jevClient, err := jev.NewClient(jev.Options{
+			BaseURL: cfg.JEV.BaseURL,
+			APIKey:  cfg.JEV.APIKey,
+			Model:   cfg.JEV.Model,
+		})
+		if err != nil {
+			return reportError(stderr, "配置错误：", err)
+		}
+		classifier = &jevClassifier{client: jevClient}
+		var warnOnce sync.Once
+		var warnMu sync.Mutex
+		onJEVFallback = func(err error) {
+			warnOnce.Do(func() {
+				warnMu.Lock()
+				defer warnMu.Unlock()
+				fmt.Fprintf(stderr, "警告：JEV 不可用，bash 命令将按默认权限策略处理：%s\n", escapeTerminal(err.Error()))
+			})
+		}
+	}
+
 	skills := skill.Discover(runtime.WorkDir)
 	printSkillNotice(stderr, skills)
 	memoryContext := memory.NewContext(runtime.WorkDir)
@@ -212,7 +240,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 	}
 	var rules *tool.ProjectRules
 	var gate *tool.ApprovalGate
-	if mode == permissionDefault {
+	if mode == permissionDefault || mode == permissionJEV {
 		rules, err = loadProjectPermissions(runtime.WorkDir, interactive && interactiveReader(input), input, stderr)
 		if err != nil {
 			return reportError(stderr, "项目权限规则初始化失败：", err)
@@ -293,7 +321,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 			Client: client, Model: cfg.Model, MaxOutputTokens: contextCfg.OutputTokens,
 			RequestTimeout: requestTimeout,
 			Budget:         contextview.NewBudget(contextCfg.Window, contextCfg.OutputTokens),
-			Toolbox:        subagent.Toolbox{Runtime: runtime, Registry: registry, Mode: subagent.Mode(mode), Rules: rules, Gate: gate},
+			Toolbox:        subagent.Toolbox{Runtime: runtime, Registry: registry, Mode: subagent.Mode(mode), Rules: rules, Gate: gate, Classifier: classifier, OnJEVFallback: onJEVFallback},
 			Pinned:         memoryContext.Load,
 			System: func(info subagent.Info) string {
 				return childSystemPrompt(runtime.WorkDir, mode, info, skills)
@@ -339,6 +367,16 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 			return reportError(stderr, "默认模式初始化失败：", err)
 		}
 		tools = permissioned
+	case permissionJEV:
+		permissioned, err := tool.NewDefault(toolRegistry, runtime, rules, gate)
+		if err != nil {
+			return reportError(stderr, "JEV 模式初始化失败：", err)
+		}
+		jevTools, err := tool.NewJEV(permissioned, classifier, onJEVFallback)
+		if err != nil {
+			return reportError(stderr, "JEV 模式初始化失败：", err)
+		}
+		tools = jevTools
 	}
 	if manager != nil {
 		if tools, err = manager.GuardMain(tools); err != nil {
@@ -548,6 +586,8 @@ func printPermissionNotice(output io.Writer, mode permissionMode) {
 		fmt.Fprintln(output, "权限模式：只读（仅允许 read 和受限查询；不是系统沙箱）。")
 	case permissionDefault:
 		fmt.Fprintln(output, "权限模式：默认（路径白名单内自动；其他操作需要审批；当前非 TUI 入口的审批会被拒绝）。")
+	case permissionJEV:
+		fmt.Fprintln(output, "权限模式：JEV（所有 bash 命令由 JEV 判断；完全信任模型结果；JEV 不可用时回退默认策略；不是系统沙箱）。")
 	case permissionAllow:
 		fmt.Fprintln(output, "权限模式：放行（工具直接执行，不逐次审批）。")
 	}
@@ -571,6 +611,20 @@ func systemPromptBase(workDir string, mode permissionMode) string {
 请使用相对路径或工作目录内的绝对路径；不要尝试 write、edit，也不要执行任意 shell、构建或测试命令。查询时可以使用固定查询命令组成的多段管道、&&/||/; 链、虚拟 cd 和 2>&1、/dev/null 尾部重定向，例如 find . -name '*.go' | head -n 20。通配符不会被展开：查找文件请用 find -name '模式'，不要给文件通配符加引号后当成文件列表；不要使用变量、命令替换或其他重定向。
 如果任务需要修改文件或执行未开放的命令，请清楚说明原因，并建议用户重新启动 johnny 进入默认模式，由审批决定；放行模式需要用户显式使用 --skip。
 只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
+展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
+完成任务后，用简洁的中文总结结果。`, workDir)
+	}
+	if mode == permissionJEV {
+		return fmt.Sprintf(`你是 Johnny-Code，一个在用户本地工作目录中执行任务的编程助手。
+当前工作目录：%s
+当前权限模式：JEV。
+
+所有 bash 命令会先交给 JEV 判断：allow 直接执行，ask 等待用户审批，deny 拒绝。JEV 模式不使用固定查询白名单、项目命令前缀或危险后缀名单；可以使用完整 shell 语法，包括管道、&&/||/;、重定向、通配符、变量、子 shell 和脚本。JEV 不可用时，这条命令回退默认权限策略。
+被 JEV 拒绝时不要重复同一命令，也不要尝试绕过；换一种方案或说明阻塞原因。需要审批时等待工具结果，用户拒绝后改用已授权的方案。
+read、write、edit 仍按工作目录和项目路径白名单执行；remember 仍需要审批。
+Bash 已经在当前工作目录执行，优先使用相对路径或绝对路径。不要为了省事把多条无关操作拼成一条命令；一条命令保持可读，失败后更容易定位。
+只有在工具成功返回后，才能声称完成了操作；工具失败时根据错误继续处理或说明阻塞原因。
+写大文件或长报告时，单次 write 的 content 控制在约 8 KiB 内；先写开头，再用 write 的 append=true 追加，最后在回复里给出摘要。不要把整份长报告塞进一次工具调用，否则参数可能撞上输出上限而整次写入丢失。
 展示目录树等依赖对齐的纯文本时，请使用 text 类型的围栏代码块包裹，避免被 Markdown 重排。
 完成任务后，用简洁的中文总结结果。`, workDir)
 	}
@@ -1099,6 +1153,7 @@ func printHelp(output io.Writer) {
   johnny            在终端进入 TUI 交互模式，默认逐次审批，直到 /exit 或 EOF
   johnny --read     只读模式
   johnny --skip     放行模式，跳过逐次审批
+  johnny --jev      JEV 模式，所有 bash 命令交给 JEV 判断
 
 选项：
   -h, --help        显示帮助
@@ -1107,7 +1162,8 @@ func printHelp(output io.Writer) {
   --api 协议        anthropic-messages、openai-responses、openai-chat-completions
   --read            只读模式：拒绝写入，bash 只允许固定查询
   --skip            放行模式：工具直接执行，不逐次审批
-  --permission-mode 模式  等价的长写法：default、read-only 或 allow；与 --read/--skip 同时使用时必须一致
+  --jev             JEV 模式：所有 bash 命令由 JEV 判断 allow/ask/deny；不可用时回退默认策略
+  --permission-mode 模式  等价的长写法：default、read-only、allow 或 jev；与 --read/--skip/--jev 同时使用时必须一致
   --max-turns 次数  每轮用户输入最多模型请求次数（默认 %d，必须是正整数）
   --resume 会话ID   恢复指定会话；省略时进入 TUI 后用 /resume 选择
 
@@ -1131,6 +1187,7 @@ func printHelp(output io.Writer) {
   JOHNNY_MAX_OUTPUT_TOKENS 每次请求输出预留，默认 8192；子 Agent 不低于 8192
   JOHNNY_REQUEST_TIMEOUT 单次模型请求总时限，默认 10m
   JOHNNY_BASH_TIMEOUT bash 默认超时，默认 10m；单次最多 1h
+  JOHNNY_JEV_BASE_URL / JOHNNY_JEV_API_KEY / JOHNNY_JEV_MODEL  JEV 模式配置，模型默认 jev-latest
   JOHNNY_MEMORY_AUTO=off 关闭轮末自动记忆审查
   用户级 ~/.johnny/AGENTS.md 和项目根 AGENTS.md 在会话启动和压缩后加载
   单次工具结果模型可见预览最多 32 KiB；bash 大输出保存到 .johnny/artifacts/<会话ID>/

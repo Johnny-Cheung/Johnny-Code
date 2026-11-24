@@ -47,8 +47,11 @@ func childSystemPrompt(workDir string, mode permissionMode, info subagent.Info, 
 	fmt.Fprintf(&builder, "你是 Johnny-Code 派出的后台子 Agent，在用户本地工作目录中完成主 Agent 委派给你的一个任务。\n当前工作目录：%s\n", workDir)
 	if info.Access == tool.SpawnWrite {
 		fmt.Fprintf(&builder, "访问级别：可写。你只能修改这些路径：%s；范围外的 write/edit 会被拒绝。\n", strings.Join(info.Paths, "、"))
-		if mode == permissionDefault {
+		if mode == permissionDefault || mode == permissionJEV {
 			builder.WriteString("需要审批的操作会暂停等待用户决定；被拒绝时不要重复同一操作，也不要尝试绕过权限层。\n")
+			if mode == permissionJEV {
+				builder.WriteString("你的 bash 命令会先由 JEV 判断；JEV 拒绝时换一种方案，不要重复同一命令。\n")
+			}
 		}
 	} else {
 		builder.WriteString("访问级别：只读。你只能用 read 读取工作目录内的文件，并用受限查询命令（echo、pwd、ls、find、grep、cat、head、tail、wc、stat、du、diff）了解项目，不能修改文件。\n")

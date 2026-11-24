@@ -143,7 +143,7 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 		}
 	}
 	names := []string{"go.mod", "go.sum", "scripts/install.sh"}
-	for _, packageDir := range []string{"cmd/johnny", "internal/config", "internal/model", "internal/tool", "internal/agent", "internal/contextview", "internal/memory", "internal/session", "internal/skill", "internal/subagent", "internal/tui"} {
+	for _, packageDir := range []string{"cmd/johnny", "internal/config", "internal/model", "internal/tool", "internal/agent", "internal/contextview", "internal/jev", "internal/memory", "internal/session", "internal/skill", "internal/subagent", "internal/tui"} {
 		err := filepath.WalkDir(filepath.Join(root, packageDir), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -199,7 +199,7 @@ func TestInstallUpdateAndCollision(t *testing.T) {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name != "JOHNNY_API_KEY" && name != "JOHNNY_BASE_URL" && name != "JOHNNY_MODEL" && name != "JOHNNY_API" && name != "ZDOTDIR" {
+		if name != "JOHNNY_API_KEY" && name != "JOHNNY_BASE_URL" && name != "JOHNNY_MODEL" && name != "JOHNNY_API" && name != "JOHNNY_JEV_BASE_URL" && name != "JOHNNY_JEV_API_KEY" && name != "JOHNNY_JEV_MODEL" && name != "ZDOTDIR" {
 			env = append(env, entry)
 		}
 	}

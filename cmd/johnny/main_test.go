@@ -32,7 +32,7 @@ func useConfigPath(t *testing.T, path string) {
 	t.Cleanup(func() { configFileBase64 = previous })
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("JOHNNY_MEMORY_AUTO", "off")
-	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API"} {
+	for _, name := range []string{"JOHNNY_API_KEY", "JOHNNY_BASE_URL", "JOHNNY_MODEL", "JOHNNY_API", "JOHNNY_JEV_BASE_URL", "JOHNNY_JEV_API_KEY", "JOHNNY_JEV_MODEL"} {
 		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
@@ -135,7 +135,7 @@ func TestHelpAndVersionWithoutConfigOrLogs(t *testing.T) {
 			if !strings.Contains(output.String(), "v"+version) || !strings.Contains(output.String(), commit) {
 				t.Fatal("版本输出缺少构建信息")
 			}
-		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--read") || !strings.Contains(output.String(), "--skip") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "--resume") || !strings.Contains(output.String(), "/resume") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
+		} else if !strings.Contains(output.String(), path) || !strings.Contains(output.String(), "johnny") || !strings.Contains(output.String(), "--max-turns") || !strings.Contains(output.String(), "--read") || !strings.Contains(output.String(), "--skip") || !strings.Contains(output.String(), "--jev") || !strings.Contains(output.String(), "--permission-mode") || !strings.Contains(output.String(), "--resume") || !strings.Contains(output.String(), "/resume") || !strings.Contains(output.String(), "/exit") || !strings.Contains(output.String(), "EOF") || !strings.Contains(output.String(), "只支持在终端") || !strings.Contains(output.String(), "管道和重定向会被拒绝") {
 			t.Fatal("帮助输出缺少 TUI 入口、退出方式或现有配置位置")
 		}
 		if stderr.Len() != 0 {
@@ -167,6 +167,9 @@ func TestInvalidFlagsDoNotRequestOrCreateLogs(t *testing.T) {
 		{"--permission-mode", "bad", "你好"},
 		{"--permission-mode", "", "你好"},
 		{"--read", "--skip", "你好"},
+		{"--jev", "--read", "你好"},
+		{"--jev", "--skip", "你好"},
+		{"--jev", "--permission-mode", "default", "你好"},
 		{"--read", "--permission-mode", "allow", "你好"},
 	} {
 		var output, stderr bytes.Buffer
@@ -697,6 +700,148 @@ func TestDefaultModeNonInteractiveDeniesApproval(t *testing.T) {
 	}
 }
 
+func TestJEVModeRequiresConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing config.env")
+	data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=https://relay.example\nJOHNNY_MODEL=test-model\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	useConfigPath(t, path)
+	t.Chdir(t.TempDir())
+	var output, stderr bytes.Buffer
+	code := runLegacy(context.Background(), []string{"--jev", "run"}, strings.NewReader(""), &output, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "JOHNNY_JEV") {
+		t.Fatalf("缺少 JEV 配置应启动失败：code=%d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestJEVModeFallsBackToDefault(t *testing.T) {
+	var modelRequests atomic.Int32
+	var secondBody string
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if modelRequests.Add(1) == 1 {
+			writeToolUseResponse(w, "", "fallback-bash", "bash", `{"command":"pwd"}`)
+			return
+		}
+		secondBody = string(body)
+		writeTextResponse(w, "DONE")
+	}))
+	defer modelServer.Close()
+	jevServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "relay down", http.StatusBadGateway)
+	}))
+	defer jevServer.Close()
+
+	path := filepath.Join(t.TempDir(), "existing config.env")
+	data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=" + modelServer.URL + "\nJOHNNY_MODEL=test-model\n" +
+		"JOHNNY_JEV_BASE_URL=" + jevServer.URL + "\nJOHNNY_JEV_API_KEY=jev-key\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	useConfigPath(t, path)
+	t.Chdir(t.TempDir())
+
+	var output, stderr bytes.Buffer
+	code := runLegacy(context.Background(), []string{"--permission-mode", "jev", "run"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || !strings.Contains(output.String(), "DONE") {
+		t.Fatalf("JEV 降级任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "JEV 不可用") {
+		t.Fatalf("缺少降级提示：%s", stderr.String())
+	}
+	if !strings.Contains(secondBody, "JEV") && !strings.Contains(secondBody, "pwd") {
+		t.Fatalf("降级后工具结果没有回到模型：%s", secondBody)
+	}
+}
+
+func TestJEVModeAllowsBashThroughClassifier(t *testing.T) {
+	var modelRequests atomic.Int32
+	var secondBody string
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if modelRequests.Add(1) == 1 {
+			writeToolUseResponse(w, "", "jev-bash", "bash", `{"command":"printf 'JEV-CLI-OK\\n'"}`)
+			return
+		}
+		secondBody = string(body)
+		writeTextResponse(w, "DONE")
+	}))
+	defer modelServer.Close()
+
+	var jevMu sync.Mutex
+	var jevCommand string
+	jevServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/systemone" {
+			t.Errorf("JEV path = %q", r.URL.Path)
+		}
+		var payload struct {
+			State struct {
+				Command string `json:"command"`
+			} `json:"state"`
+		}
+		data, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(data, &payload)
+		jevMu.Lock()
+		jevCommand = payload.State.Command
+		jevMu.Unlock()
+		_, _ = w.Write([]byte(`{"answers":{"decision":{"type":"choice","choice":"allow","probabilities":{"allow":0.99,"ask":0.01,"deny":0}},"reason":{"type":"choice","choice":"read_only"}},"model":"jev-1.14.0","usage":{"input_tokens":10,"output_tokens":2}}`))
+	}))
+	defer jevServer.Close()
+
+	path := filepath.Join(t.TempDir(), "existing config.env")
+	data := "JOHNNY_API_KEY=test-key\nJOHNNY_BASE_URL=" + modelServer.URL + "\nJOHNNY_MODEL=test-model\n" +
+		"JOHNNY_JEV_BASE_URL=" + jevServer.URL + "\nJOHNNY_JEV_API_KEY=jev-key\nJOHNNY_JEV_MODEL=jev-latest\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	useConfigPath(t, path)
+	t.Chdir(t.TempDir())
+
+	var output, stderr bytes.Buffer
+	code := runLegacy(context.Background(), []string{"--jev", "run"}, strings.NewReader(""), &output, &stderr)
+	if code != 0 || !strings.Contains(output.String(), "DONE") {
+		t.Fatalf("JEV 模式任务失败：code=%d output=%q stderr=%s", code, output.String(), stderr.String())
+	}
+	jevMu.Lock()
+	command := jevCommand
+	jevMu.Unlock()
+	if !strings.Contains(command, "JEV-CLI-OK") {
+		t.Fatalf("JEV 未收到原始命令：%q", command)
+	}
+	if !strings.Contains(secondBody, "JEV-CLI-OK") {
+		t.Fatalf("工具结果没有回到模型：%s", secondBody)
+	}
+	objects := readSessionObjects(t, os.Getenv("HOME"))
+	var permission map[string]json.RawMessage
+	metadataMode := ""
+	for _, object := range objects {
+		var recordType string
+		_ = json.Unmarshal(object["type"], &recordType)
+		if recordType == "meta" {
+			_ = json.Unmarshal(object["permission_mode"], &metadataMode)
+		}
+		if recordType == "permission" {
+			permission = object
+		}
+	}
+	if metadataMode != "jev" {
+		t.Fatalf("会话元数据权限模式错误：%q", metadataMode)
+	}
+	if permission == nil {
+		t.Fatal("缺少 JEV 权限审计记录")
+	}
+	var decision, source, classifier, classifiedDecision, classifiedModel string
+	_ = json.Unmarshal(permission["decision"], &decision)
+	_ = json.Unmarshal(permission["source"], &source)
+	_ = json.Unmarshal(permission["classifier"], &classifier)
+	_ = json.Unmarshal(permission["classified_decision"], &classifiedDecision)
+	_ = json.Unmarshal(permission["classifier_model"], &classifiedModel)
+	if decision != "allow" || source != "jev" || classifier != "jev" || classifiedDecision != "allow" || classifiedModel != "jev-1.14.0" {
+		t.Fatalf("JEV 审计记录异常：decision=%q source=%q classifier=%q classified=%q model=%q", decision, source, classifier, classifiedDecision, classifiedModel)
+	}
+}
+
 func TestDefaultModeAutoAllowsWhitelistQuery(t *testing.T) {
 	var requests atomic.Int32
 	var secondBody string
@@ -797,6 +942,12 @@ func TestSystemPromptIncludesWorkDirAndToolGuidance(t *testing.T) {
 	for _, want := range []string{"/tmp/johnny work", "权限模式：默认", "路径白名单", "审批", "通配符不会被展开", "find -name", "不超过 16 段", "避免命令替换", "不要尝试绕过权限层"} {
 		if !strings.Contains(defaultPrompt, want) {
 			t.Fatalf("默认模式系统提示缺少 %q：%s", want, defaultPrompt)
+		}
+	}
+	jevPrompt := systemPrompt("/tmp/johnny work", permissionJEV, nil)
+	for _, want := range []string{"/tmp/johnny work", "权限模式：JEV", "allow 直接执行", "ask 等待用户审批", "deny 拒绝", "不使用固定查询白名单", "回退默认权限策略", "read、write、edit 仍按"} {
+		if !strings.Contains(jevPrompt, want) {
+			t.Fatalf("JEV 模式系统提示缺少 %q：%s", want, jevPrompt)
 		}
 	}
 }

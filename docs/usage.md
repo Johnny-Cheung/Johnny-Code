@@ -8,9 +8,10 @@
 johnny           # 默认模式：逐次审批
 johnny --read    # 只读模式
 johnny --skip    # 放行模式
+johnny --jev     # JEV 模式：bash 交给 JEV 判断
 ```
 
-`--permission-mode default|read-only|allow` 是等价的长写法；同时使用短选项和长写法时必须一致，否则启动报错。
+`--permission-mode default|read-only|allow|jev` 是等价的长写法；同时使用短选项和长写法时必须一致，否则启动报错。
 
 Johnny-Code 只支持在终端直接运行 `johnny` 进入 TUI。参数任务（`johnny "做一个任务"`）、管道和重定向会在读取配置前被拒绝，不请求模型，也不打开 `/dev/tty`。
 
@@ -24,8 +25,8 @@ Johnny-Code 只支持在终端直接运行 `johnny` 进入 TUI。参数任务（
 | --- | --- |
 | `--model 名称` | 临时覆盖模型名，不改 `.env` |
 | `--api 协议` | 临时覆盖协议：`anthropic-messages`、`openai-responses`、`openai-chat-completions` |
-| `--read` / `--skip` | 选择只读 / 放行模式 |
-| `--permission-mode 模式` | `default`、`read-only`、`allow` |
+| `--read` / `--skip` / `--jev` | 选择只读 / 放行 / JEV 模式 |
+| `--permission-mode 模式` | `default`、`read-only`、`allow`、`jev` |
 | `--max-turns 次数` | 每轮用户输入最多请求模型的次数，默认 100 |
 | `--resume 会话ID` | 启动时直接恢复指定会话；不带 ID 时进入 TUI 后用 `/resume` 选择 |
 | `--help` / `--version` | 显示帮助 / 版本与构建提交号；不读取模型配置 |
@@ -79,7 +80,7 @@ workflow 重构日志模块  2/4
 
 ## 审批
 
-`default` 模式下，需要审批的操作会独占动态区域显示审批面板。来自子任务或 workflow 任务的请求标明来源，多个请求按先进先出排队；主 Agent 空闲时也能响应。
+`default` 模式下，需要审批的操作会独占动态区域显示审批面板；`--jev` 模式下 JEV 返回 `ask` 时也使用同一个面板。来自子任务或 workflow 任务的请求标明来源，多个请求按先进先出排队；主 Agent 空闲时也能响应。
 
 | 操作 | 行为 |
 | --- | --- |
@@ -87,12 +88,14 @@ workflow 重构日志模块  2/4
 | `Enter` | 确认当前选项 |
 | `Ctrl+C` | 取消本轮和全部子任务，丢弃全部待审批请求，不执行待审批操作 |
 
-四个选项：
+`default` 模式提供四个选项：
 
 1. **允许本次**：只执行这一次。
 2. **拒绝本次**：默认焦点；不执行，并把拒绝原因告诉模型。
 3. **本会话内允许**：只在当前 johnny 进程内有效，不写项目规则；主 Agent、子任务和 workflow 任务共享。只在请求带有可记住的授权键时出现。
 4. **批准并记录**：写入项目规则 `.johnny/permissions.local.json`，后续同前缀自动执行；只在可记录时出现。
+
+`--jev` 模式下 JEV 的 `ask` 只提供“允许本次”和“拒绝本次”，不提供本会话或项目记录，避免把模型判断变成新的白名单。
 
 命中危险后缀和 `remember` 始终每次询问。队列中同键的待审批请求在显示前会重新检查；已经命中授权的请求自动放行。
 
@@ -134,7 +137,7 @@ workflow 重构日志模块  2/4
 - 只恢复到最后一个有 `end` 的完整轮次。执行到一半退出或损坏的尾部会被丢弃，列表里标记为「未完成」；丢弃的尾部不会再进入后续日志。
 - 恢复的是关闭前的请求视图：最近一次摘要 + 摘要覆盖轮次之后的消息，不会把完整历史重新灌回去再压缩一遍。
 - 恢复后 `userTurn` 接着编号，后续记录继续追加到同一份 JSONL，并加文件锁防止两个进程同时写。
-- 权限模式按会话记录恢复；显式 `--read` / `--skip` / `--permission-mode` 覆盖。**不恢复**「本会话内允许」授权，项目规则会重新校验。
+- 权限模式按会话记录恢复；显式 `--read` / `--skip` / `--jev` / `--permission-mode` 覆盖。**不恢复**「本会话内允许」授权，项目规则会重新校验。
 - 系统提示、AGENTS、memory 和 Skill 用当前文件重新构建，不使用旧快照。
 - 子 Agent 和 Workflow 不恢复，只标记为因恢复中断。
 - 当前会话有后台子任务、工作流或未汇总的子任务结果时，`/resume` 会拒绝切换，先取消或处理完再试。

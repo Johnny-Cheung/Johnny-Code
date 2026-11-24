@@ -175,8 +175,7 @@ func (c *Client) Classify(ctx context.Context, command, workDir string) (Result,
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	command = strings.TrimSpace(command)
-	if command == "" {
+	if strings.TrimSpace(command) == "" {
 		return Result{}, errors.New("JEV 判断的命令不能为空")
 	}
 	if len(command) > MaxCommandBytes {

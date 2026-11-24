@@ -16,6 +16,11 @@ JOHNNY_API_KEY=你的 Token
 JOHNNY_BASE_URL=https://你的中转站地址
 JOHNNY_MODEL=服务提供的模型名
 JOHNNY_API=anthropic-messages
+
+# 可选：仅 johnny --jev 使用
+JOHNNY_JEV_BASE_URL=https://你的 JEV 服务地址
+JOHNNY_JEV_API_KEY=你的 JEV Token
+JOHNNY_JEV_MODEL=jev-latest
 ```
 
 | 变量 | 必填 | 说明 |
@@ -24,6 +29,9 @@ JOHNNY_API=anthropic-messages
 | `JOHNNY_BASE_URL` | 是 | 服务根地址或以 `/v1` 结尾的 API 根地址；程序按协议追加接口路径，避免重复 `/v1`。不支持填写完整接口地址 |
 | `JOHNNY_MODEL` | 是 | 服务实际提供的模型标识 |
 | `JOHNNY_API` | 否 | 未配置时为 `anthropic-messages` |
+| `JOHNNY_JEV_BASE_URL` | 仅 `--jev` | JEV 服务根地址；程序追加 `/v1/systemone` |
+| `JOHNNY_JEV_API_KEY` | 仅 `--jev` | JEV 的 Bearer Token |
+| `JOHNNY_JEV_MODEL` | 否 | JEV 模型，默认 `jev-latest` |
 
 协议与接口：
 
@@ -32,6 +40,18 @@ JOHNNY_API=anthropic-messages
 | `anthropic-messages` | `/v1/messages` |
 | `openai-responses` | `/v1/responses`，使用 `store: false` |
 | `openai-chat-completions` | `/v1/chat/completions` |
+
+## JEV 模式
+
+`johnny --jev` 会把每条 bash 命令发给 JEV 的 `POST /v1/systemone`，由 JEV 返回：
+
+- `allow`：直接执行；
+- `ask`：进入审批面板；
+- `deny`：拒绝执行。
+
+JEV 配置只在 `--jev` 模式下校验；其他模式可以不填。配置缺失时启动报错，不会静默改用默认模式。JEV 请求失败（超时、网络错误、5xx/429、响应格式异常）时，这条命令回退 `default` 策略；连续失败 3 次后本会话停用 JEV。
+
+命令发送前会脱敏常见的 `Bearer`、`sk-`、`token=...`、`password=...` 片段；真正执行的命令不受影响。JEV 只能看到命令文本和工作目录，看不到脚本内容、文件内容或工具输出。
 
 ## 优先级
 
@@ -71,6 +91,9 @@ johnny --api openai-chat-completions --model "服务提供的模型名"
 | `JOHNNY_MAX_OUTPUT_TOKENS` | `8192` | 每次请求的输出预留 `O`；子 Agent 不低于 8192。窗口较小时未显式设置的值会按窗口八分之一降低 |
 | `JOHNNY_REQUEST_TIMEOUT` | `10m` | 单次模型请求的总时限，使用 Go 时长格式，例如 `90s`、`20m` |
 | `JOHNNY_BASH_TIMEOUT` | `10m` | `bash` 和固定查询的默认超时，最大 `1h`；工具参数 `timeout_seconds` 仍可覆盖单次调用 |
+| `JOHNNY_JEV_BASE_URL` | 无 | 仅 `--jev`：JEV 服务根地址 |
+| `JOHNNY_JEV_API_KEY` | 无 | 仅 `--jev`：JEV Bearer Token |
+| `JOHNNY_JEV_MODEL` | `jev-latest` | 仅 `--jev`：JEV 模型标识 |
 | `JOHNNY_MEMORY_AUTO=off` | 开 | 关闭轮末自动记忆审查；显式 `remember`、`/remember` 和 `/memory` 仍可用 |
 
 预算口径：`S = max(16384, W × 5%)`，可用输入预算 `U = W - O - S`。默认输出预留为 8192；窗口较小时会按窗口自动降低默认输出预留，避免挤空输入。

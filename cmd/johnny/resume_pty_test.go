@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/agent"
@@ -20,9 +21,14 @@ import (
 
 func writeResumeHistoryFixture(t *testing.T, home, dir, id string) {
 	t.Helper()
+	writeResumeHistoryFixtureWithMode(t, home, dir, id, "allow")
+}
+
+func writeResumeHistoryFixtureWithMode(t *testing.T, home, dir, id, mode string) {
+	t.Helper()
 	t.Setenv("HOME", home)
 	recorder, err := session.New(session.Metadata{
-		ID: id, WorkDir: dir, API: "anthropic-messages", Model: "terminal-test", PermissionMode: "allow",
+		ID: id, WorkDir: dir, API: "anthropic-messages", Model: "terminal-test", PermissionMode: mode,
 	})
 	if err != nil {
 		t.Fatalf("create session fixture: %v", err)
@@ -86,6 +92,57 @@ func TestTerminalPTYResumeSendsSummaryAndRetainedTurns(t *testing.T) {
 		if strings.Contains(request, gone) {
 			t.Fatalf("已压缩轮次不应出现在请求中：%q", gone)
 		}
+	}
+}
+
+func TestTerminalPTYResumeRestoresJEVMode(t *testing.T) {
+	var modelRequests atomic.Int32
+	var jevMu sync.Mutex
+	var jevCommand string
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelRequests.Add(1) == 1 {
+			terminalTools(w, []map[string]any{{
+				"type": "tool_use", "id": "resume-jev-1", "name": "bash",
+				"input": map[string]any{"command": "printf 'RESUME-JEV-OK\\n'"},
+			}})
+			return
+		}
+		terminalAnswer(w, "RESUME-JEV-DONE")
+	}))
+	defer modelServer.Close()
+	jevServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			State struct {
+				Command string `json:"command"`
+			} `json:"state"`
+		}
+		data, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(data, &payload)
+		jevMu.Lock()
+		jevCommand = payload.State.Command
+		jevMu.Unlock()
+		_, _ = w.Write([]byte(`{"answers":{"decision":{"type":"choice","choice":"allow","probabilities":{"allow":0.99}},"reason":{"type":"choice","choice":"read_only"}},"model":"jev-1.14.0"}`))
+	}))
+	defer jevServer.Close()
+
+	dir, home := t.TempDir(), t.TempDir()
+	writeResumeHistoryFixtureWithMode(t, home, dir, "resume-jev", "jev")
+	p := startTerminalModeAt(t, modelServer.URL, "default", dir, home,
+		"JOHNNY_TUI_TEST_RESUME=resume-jev",
+		"JOHNNY_JEV_BASE_URL="+jevServer.URL,
+		"JOHNNY_JEV_API_KEY=jev-key")
+	p.expect(t, 0, "已恢复会话 resume-jev")
+	p.write(t, "NEW-PROMPT\r")
+	end := p.expect(t, 0, "RESUME-JEV-DONE")
+	p.expect(t, end, "空闲")
+	p.write(t, "/exit\r")
+	p.wait(t, 0)
+
+	jevMu.Lock()
+	command := jevCommand
+	jevMu.Unlock()
+	if !strings.Contains(command, "RESUME-JEV-OK") {
+		t.Fatalf("恢复后没有使用 JEV 模式：command=%q", command)
 	}
 }
 

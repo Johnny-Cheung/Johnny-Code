@@ -11,6 +11,7 @@ const (
 	permissionDefault  permissionMode = "default"
 	permissionAllow    permissionMode = "allow"
 	permissionReadOnly permissionMode = "read-only"
+	permissionJEV      permissionMode = "jev"
 )
 
 func parsePermissionMode(value string) (permissionMode, error) {
@@ -21,17 +22,22 @@ func parsePermissionMode(value string) (permissionMode, error) {
 		return permissionAllow, nil
 	case string(permissionReadOnly):
 		return permissionReadOnly, nil
+	case string(permissionJEV):
+		return permissionJEV, nil
 	default:
-		return "", fmt.Errorf("--permission-mode 只能是 %q、%q 或 %q", permissionDefault, permissionReadOnly, permissionAllow)
+		return "", fmt.Errorf("--permission-mode 只能是 %q、%q、%q 或 %q", permissionDefault, permissionReadOnly, permissionAllow, permissionJEV)
 	}
 }
 
 // resolvePermissionMode 把短选项映射到权限模式。不传任何权限参数时使用
-// 默认模式；--read 对应只读，--skip 对应放行。长写法 --permission-mode
-// 继续保留，与短选项同时出现时必须一致。
-func resolvePermissionMode(value string, set, readOnly, skip bool) (permissionMode, error) {
+// 默认模式；--read 对应只读，--skip 对应放行，--jev 对应 JEV 判断。
+// 长写法 --permission-mode 继续保留，与短选项同时出现时必须一致。
+func resolvePermissionMode(value string, set, readOnly, skip, jev bool) (permissionMode, error) {
 	if readOnly && skip {
 		return "", fmt.Errorf("--read 和 --skip 不能同时使用")
+	}
+	if jev && (readOnly || skip) {
+		return "", fmt.Errorf("--jev 不能和 --read 或 --skip 同时使用")
 	}
 	shortcut := permissionMode("")
 	switch {
@@ -39,6 +45,8 @@ func resolvePermissionMode(value string, set, readOnly, skip bool) (permissionMo
 		shortcut = permissionReadOnly
 	case skip:
 		shortcut = permissionAllow
+	case jev:
+		shortcut = permissionJEV
 	}
 	explicit := permissionMode("")
 	if set {
@@ -49,7 +57,7 @@ func resolvePermissionMode(value string, set, readOnly, skip bool) (permissionMo
 		explicit = parsed
 	}
 	if explicit != "" && shortcut != "" && explicit != shortcut {
-		return "", fmt.Errorf("--permission-mode %q 与 --read/--skip 指定的模式冲突", value)
+		return "", fmt.Errorf("--permission-mode %q 与 --read/--skip/--jev 指定的模式冲突", value)
 	}
 	if explicit != "" {
 		return explicit, nil
@@ -66,6 +74,8 @@ func (m permissionMode) label() string {
 		return "只读"
 	case permissionDefault:
 		return "默认"
+	case permissionJEV:
+		return "JEV"
 	default:
 		return "放行"
 	}

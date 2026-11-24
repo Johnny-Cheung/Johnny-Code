@@ -13,7 +13,8 @@
 ## 特性
 
 - **终端原生 TUI**：流式回复、Markdown 与语法高亮、真实终端光标、中文输入法、工具过程折叠与回看。
-- **三种权限模式**：默认逐次审批、只读、放行；审批可只允许本次、本会话内允许或写入项目规则。
+- **四种权限模式**：默认逐次审批、只读、放行、JEV 判断；审批可只允许本次、本会话内允许或写入项目规则。
+- **JEV 模式**：`--jev` 把每条 bash 命令原样交给 JEV 判断 allow/ask/deny；JEV 不可用时回退默认权限策略。
 - **受控命令执行**：21 个固定查询命令、项目命令前缀、最多 16 段的管道与 `&&`/`||`/`;` 分段器，不经过 shell。
 - **后台子 Agent**：`fresh` 或 `fork` 起点，最多 5 个并行；结果自动注入下一轮或唤醒空闲的主 Agent。
 - **Workflow**：主 Agent 先声明分步大纲，再逐步并行执行，整步报告合并送回，适合前后依赖的任务。
@@ -60,6 +61,14 @@ JOHNNY_MODEL=服务提供的模型名
 | `JOHNNY_MODEL` | 服务实际提供的模型标识 |
 | `JOHNNY_API` | `anthropic-messages`（默认）、`openai-responses`、`openai-chat-completions` |
 
+使用 `--jev` 时再填写 JEV 配置；其他模式可以留空：
+
+```dotenv
+JOHNNY_JEV_BASE_URL=https://你的 JEV 服务地址
+JOHNNY_JEV_API_KEY=你的 JEV Token
+JOHNNY_JEV_MODEL=jev-latest
+```
+
 `.env` 被 Git 忽略，仓库只带 `.env.example`。环境变量按字段优先于文件，`--api` / `--model` 优先于两者。安装脚本把 **clone 目录下 `.env` 的路径**写进二进制，所以 clone 目录不要移动或删除；移动后重新安装即可，也可以完全改用环境变量。
 
 更多配置项、目录和日志说明见[配置](docs/configuration.md)。
@@ -70,6 +79,7 @@ JOHNNY_MODEL=服务提供的模型名
 johnny                  # 默认模式：逐次审批
 johnny --read           # 只读模式
 johnny --skip           # 放行模式：跳过逐次审批
+johnny --jev            # JEV 模式：bash 交给 JEV 判断
 johnny --resume <会话ID>  # 启动时直接恢复指定会话
 ```
 
@@ -78,6 +88,7 @@ johnny --resume <会话ID>  # 启动时直接恢复指定会话
 | `default` | 工作目录内的文件读写、固定查询命令自动执行；其余操作逐次审批 |
 | `read-only` | 拒绝写入；`bash` 只允许固定查询；不弹审批，直接拒绝 |
 | `allow` | 工具直接执行，不逐次确认 |
+| `jev` | 所有 bash 命令原样交给 JEV：allow 直接执行、ask 审批、deny 拒绝；JEV 不可用时回退 default |
 
 常用操作：
 
@@ -100,7 +111,7 @@ johnny --resume <会话ID>  # 启动时直接恢复指定会话
 | --- | --- |
 | [使用手册](docs/usage.md) | 按键、内置命令、审批、任务区、输出与退出 |
 | [配置](docs/configuration.md) | `.env`、协议、环境变量、会话日志与本地目录 |
-| [权限模型](docs/permissions.md) | 三种模式、固定查询、分段器、审批与边界 |
+| [权限模型](docs/permissions.md) | 四种模式、固定查询、分段器、审批与边界 |
 | [开发](docs/development.md) | 本地运行、测试、代码结构和手动验证工具 |
 | [路线图](docs/johnny-code-roadmap.md) | 版本顺序、范围与各版验收状态 |
 | [版本文档](docs/versions/) | v0.1 – v0.14 的设计、取舍和验收记录 |

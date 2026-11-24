@@ -17,6 +17,7 @@ const (
 	ModeReadOnly Mode = "read-only"
 	ModeDefault  Mode = "default"
 	ModeAllow    Mode = "allow"
+	ModeJEV      Mode = "jev"
 )
 
 // Toolbox 为子任务构造工具集合。Registry 是父会话的完整注册表（含 remember、task）。
@@ -24,9 +25,13 @@ type Toolbox struct {
 	Runtime  tool.Runtime
 	Registry *tool.Registry
 	Mode     Mode
-	// Rules 和 Gate 仅 default 模式使用，写入类子任务与父会话共享项目规则和审批队列。
+	// Rules 和 Gate 仅 default/JEV 模式使用，写入类子任务与父会话共享项目规则和审批队列。
 	Rules *tool.ProjectRules
 	Gate  *tool.ApprovalGate
+	// Classifier 和 OnJEVFallback 仅 JEV 模式使用；子任务的 bash 与主会话
+	// 走同一个分类器和降级回调。
+	Classifier    tool.BashClassifier
+	OnJEVFallback func(error)
 	// Claims 由 Manager 填写。
 	Claims *tool.FileClaims
 	// Definitions 返回父会话看到的工具定义，fork 子会话沿用它以保持请求前缀一致。
@@ -82,6 +87,16 @@ func (b Toolbox) build(kind tool.SpawnKind, access tool.SpawnAccess, owner strin
 				return nil, err
 			}
 			tools = permissioned
+		case ModeJEV:
+			permissioned, err := tool.NewDefault(registry, b.Runtime, b.Rules, b.Gate)
+			if err != nil {
+				return nil, err
+			}
+			jevTools, err := tool.NewJEV(permissioned, b.Classifier, b.OnJEVFallback)
+			if err != nil {
+				return nil, err
+			}
+			tools = jevTools
 		case ModeAllow:
 			tools = registry
 		default:

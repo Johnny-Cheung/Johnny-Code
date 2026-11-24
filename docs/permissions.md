@@ -1,16 +1,17 @@
 # 权限模型
 
-Johnny-Code 有三个权限模式：`default`、`read-only`、`allow`。三种模式都是**应用层策略，不是操作系统沙箱**；它们的目的是让日常操作保持流畅，同时把写入、任意命令和范围外访问交给用户决定。
+Johnny-Code 有四个权限模式：`default`、`read-only`、`allow`、`jev`。四种模式都是**应用层策略，不是操作系统沙箱**；它们的目的是让日常操作保持流畅，同时把写入、任意命令和范围外访问交给用户决定。
 
 | 模式 | 启动方式 | 文件读写 | `bash` | 审批 |
 | --- | --- | --- | --- | --- |
 | `default` | `johnny` 或 `--permission-mode default` | 工作目录白名单内自动执行 | 固定查询、项目前缀和会话授权自动执行，其余审批 | 逐次请求 |
 | `read-only` | `--read` 或 `--permission-mode read-only` | 只能读启动工作目录内的文件 | 只允许固定查询 | 不请求，直接拒绝 |
 | `allow` | `--skip` 或 `--permission-mode allow` | 直接执行 | 直接执行 | 不请求 |
+| `jev` | `--jev` 或 `--permission-mode jev` | 沿用 `default` 的路径规则 | 原始命令交给 JEV 判断 `allow`/`ask`/`deny` | JEV 为 `ask` 时逐次请求 |
 
-`history` 工具只读当前会话的本地 JSONL 记录，不接受任意路径，在三种模式下都不会触发审批；它不扩大文件访问范围。
+`history` 工具只读当前会话的本地 JSONL 记录，不接受任意路径，在四种模式下都不会触发审批；它不扩大文件访问范围。
 
-`--permission-mode` 与 `--read`/`--skip` 同时使用时必须一致，否则启动报错。
+`--permission-mode` 与 `--read`/`--skip`/`--jev` 同时使用时必须一致，否则启动报错。
 
 ## 默认模式
 
@@ -93,6 +94,21 @@ Johnny-Code 有三个权限模式：`default`、`read-only`、`allow`。三种�
 - 不应用路径规则。
 - 仍然受工具自身约束，例如 `task` 的文件范围、超时和输出上限。
 
+## JEV 模式
+
+`--jev` 或 `--permission-mode jev`：
+
+- **只接管 `bash`。** `read`、`write`、`edit` 仍沿用 `default` 的路径白名单；`remember` 仍需审批；`skill`、`memory`、`history` 仍自动执行。
+- **不使用固定查询白名单、项目命令前缀或危险后缀黑名单。** 模型生成的原始命令直接发给 JEV，完整 shell 语法（管道、`&&`/`||`/`;`、重定向、通配符、变量、子 shell、脚本）都可以使用。
+- JEV 返回 `allow` 时用完整 `bash -c` 执行；`ask` 时进入审批面板，只提供“允许本次/拒绝本次”，不提供本会话或项目记录；`deny` 时直接拒绝并返回原因。
+- `deny` 的错误信息会提示改用 `--permission-mode default` 或 `--skip` 重新运行；当前模式内不提供覆盖按钮。
+- JEV 请求失败（超时、网络错误、5xx/429、响应格式异常、未知决策）时，这条命令回退 `default` 策略处理；连续失败 3 次后本会话停用 JEV，全部回退 `default`。
+- JEV 配置缺失时启动报错，不静默降级。配置项：`JOHNNY_JEV_BASE_URL`、`JOHNNY_JEV_API_KEY`、`JOHNNY_JEV_MODEL`（默认 `jev-latest`）。
+- `access=read` 的子任务仍然是只读；JEV 只影响写入类子任务和主 Agent 的 bash。
+- 每次 JEV 决策都会写入 `permission` 审计事件，包含 `classifier=jev`、实际模型版本、`classified_decision`、概率和原因。
+
+`--jev` 是用户显式选择的信任级别：JEV 说 `allow` 就直接执行，误判也会执行。它比 `--skip` 多了模型否决权和审批机会，但仍然不是安全边界。
+
 ## 路径与敏感文件
 
 - 默认模式路径白名单包含启动工作目录和项目路径规则。
@@ -104,7 +120,8 @@ Johnny-Code 有三个权限模式：`default`、`read-only`、`allow`。三种�
 1. **不是 OS 沙箱。** 默认模式的 Bash 仍以当前用户权限运行，脚本内部行为不受路径检查限制。
 2. **只读是策略性只读。** 允许读取范围内的 `.env`、私钥、`.git` 等文件但拒绝写入；被允许程序的内部行为不在应用层路径检查范围内。
 3. **封闭参数表不等于零副作用。** 例如 `sort` 在输入超过内存缓冲时仍可能向系统临时目录写临时文件；`stat`、`file` 等程序的可用选项按平台不同。
-4. **参数任务在入口被拒绝。** `johnny "任务"`、管道和重定向不会进入 TUI，也不会进入审批。
+4. **JEV 是判断，不是沙箱。** JEV 只看命令文本和工作目录，看不到脚本内容和文件内容；模型误判或提示注入可能让危险命令被放行。`--jev` 由用户显式选择，风险高于 `default`，低于或接近 `--skip`。
+5. **参数任务在入口被拒绝。** `johnny "任务"`、管道和重定向不会进入 TUI，也不会进入审批。
 
 完整的设计背景和收口记录见 [v0.7 设计文档](versions/v0.7.md)。
 

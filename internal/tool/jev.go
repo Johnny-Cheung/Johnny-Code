@@ -169,6 +169,10 @@ func (j *JEV) classify(ctx context.Context, command string) (Classification, err
 		return Classification{}, errJEVDisabled
 	}
 	classification, err := j.classifier.Classify(ctx, command, j.base.runtime.WorkDir)
+	if err != nil && ctx != nil && ctx.Err() != nil {
+		// 用户取消或本轮取消不是 JEV 故障，不参与连续失败熔断。
+		return Classification{}, err
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if err != nil {
