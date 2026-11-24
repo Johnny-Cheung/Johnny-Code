@@ -1,10 +1,14 @@
 package tool
 
 import (
+	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/Johnny-Cheung/Johnny-Code/internal/sandbox"
 )
 
 const (
@@ -21,6 +25,16 @@ type Runtime struct {
 	CommandTimeout time.Duration
 	MaxOutputBytes int
 	Env            []string
+	// Sandbox 非空时，bash 命令通过它包装执行；权限判断仍由各模式决定。
+	Sandbox sandbox.Runner
+}
+
+// CommandContext 构造一条命令。沙箱只改变执行位置，不改变权限判断。
+func (r Runtime) CommandContext(ctx context.Context, program string, args ...string) *exec.Cmd {
+	if r.Sandbox != nil {
+		return r.Sandbox.CommandContext(ctx, program, args...)
+	}
+	return exec.CommandContext(ctx, program, args...)
 }
 
 func NewRuntime(workDir string) (Runtime, error) {

@@ -230,8 +230,12 @@ func executeControlledPipeline(parentCtx, commandCtx context.Context, runtime Ru
 	for index, segment := range pipeline.segments {
 		segmentCtx, segmentCancel := context.WithCancel(commandCtx)
 		cancels[index] = segmentCancel
-		command := exec.CommandContext(segmentCtx, segment.program, segment.args...)
-		command.Path = resolvedPrograms[index]
+		command := runtime.CommandContext(segmentCtx, segment.program, segment.args...)
+		// 沙箱执行时 Path 指向 sandbox-exec，不能覆盖成宿主程序路径；
+		// 未启用沙箱时保留原有的精确路径解析。
+		if runtime.Sandbox == nil {
+			command.Path = resolvedPrograms[index]
+		}
 		command.Dir = segment.dir
 		if command.Dir == "" {
 			command.Dir = runtime.WorkDir

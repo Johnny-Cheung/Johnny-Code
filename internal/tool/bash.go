@@ -60,7 +60,7 @@ func (b *Bash) Execute(ctx context.Context, raw json.RawMessage) (Result, error)
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(commandCtx, shell, "-c", args.Command)
+	cmd := b.runtime.CommandContext(commandCtx, shell, "-c", args.Command)
 	cmd.Dir = b.runtime.WorkDir
 	cmd.Env = b.runtime.Env
 	cmd.WaitDelay = time.Second
