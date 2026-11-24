@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	version          = "0.16.0"
+	version          = "0.16.1"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -1204,7 +1204,7 @@ func printHelp(output io.Writer) {
   JOHNNY_REQUEST_TIMEOUT 单次模型请求总时限，默认 10m
   JOHNNY_BASH_TIMEOUT bash 默认超时，默认 10m；单次最多 1h
   JOHNNY_SANDBOX=off 关闭 macOS Seatbelt 沙箱（默认开启；不支持的系统会提示）
-  JOHNNY_SANDBOX_NETWORK=on 允许沙箱内 bash 联网（默认关闭）
+  JOHNNY_SANDBOX_NETWORK=off 关闭沙箱内 bash 联网（默认开启）
   JOHNNY_JEV_BASE_URL / JOHNNY_JEV_API_KEY / JOHNNY_JEV_MODEL  JEV 模式配置，模型默认 jev-latest
   JOHNNY_MEMORY_AUTO=off 关闭轮末自动记忆审查
   用户级 ~/.johnny/AGENTS.md 和项目根 AGENTS.md 在会话启动和压缩后加载

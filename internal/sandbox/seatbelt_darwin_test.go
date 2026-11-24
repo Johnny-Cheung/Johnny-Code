@@ -105,7 +105,7 @@ func TestSeatbeltAllowsGitInitAndProtectsJohnnyConfig(t *testing.T) {
 	}
 }
 
-func TestSeatbeltDeniesNetworkByDefault(t *testing.T) {
+func TestSeatbeltDeniesNetworkWhenDisabled(t *testing.T) {
 	if err := Available(); err != nil {
 		t.Skipf("sandbox-exec 不可用：%v", err)
 	}

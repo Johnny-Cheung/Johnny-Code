@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/sandbox"
@@ -19,12 +18,10 @@ func prepareSandbox(runtime *tool.Runtime, interactive bool, input io.Reader, ou
 	if runtime == nil {
 		return false, errors.New("工具运行时不能为空")
 	}
-	disabled = disabled || disabledByEnv()
 	if disabled {
 		fmt.Fprintln(output, "警告：沙箱已关闭（JOHNNY_SANDBOX=off）；bash 将直接在宿主机执行。")
 		return false, nil
 	}
-	network = network || sandboxNetworkEnabled()
 	for {
 		err := sandbox.Available()
 		if err == nil {
@@ -46,7 +43,7 @@ func prepareSandbox(runtime *tool.Runtime, interactive bool, input io.Reader, ou
 
 		fmt.Fprintf(output, "沙箱不可用：%s\n", escapeTerminal(err.Error()))
 		fmt.Fprintln(output, "沙箱用于把 bash 限制在工作目录、临时目录和缓存目录内，")
-		fmt.Fprintln(output, "避免误删项目外文件；网络默认关闭。")
+		fmt.Fprintln(output, "避免误删项目外文件；网络默认开启。")
 		fmt.Fprintln(output, "没有沙箱时，bash 会直接在宿主机执行，模型生成的命令可能修改或删除项目外的文件。")
 		fmt.Fprintln(output)
 		fmt.Fprintln(output, "[Enter] 退出并处理沙箱（推荐）")
@@ -65,24 +62,6 @@ func prepareSandbox(runtime *tool.Runtime, interactive bool, input io.Reader, ou
 		default:
 			return false, errSandboxExit
 		}
-	}
-}
-
-func disabledByEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("JOHNNY_SANDBOX"))) {
-	case "off", "0", "false", "no":
-		return true
-	default:
-		return false
-	}
-}
-
-func sandboxNetworkEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("JOHNNY_SANDBOX_NETWORK"))) {
-	case "on", "1", "true", "yes":
-		return true
-	default:
-		return false
 	}
 }
 

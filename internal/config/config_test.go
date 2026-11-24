@@ -106,7 +106,7 @@ func TestLoadSandboxConfig(t *testing.T) {
 		}
 	}
 	data := "JOHNNY_API_KEY=file-key\nJOHNNY_BASE_URL=https://relay.example\nJOHNNY_MODEL=relay-model\n" +
-		"JOHNNY_SANDBOX=off\nJOHNNY_SANDBOX_NETWORK=on\n"
+		"JOHNNY_SANDBOX=off\n"
 	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}

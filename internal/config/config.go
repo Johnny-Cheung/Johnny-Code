@@ -19,7 +19,7 @@ type Config struct {
 	Sandbox SandboxConfig
 }
 
-// SandboxConfig 是 macOS Seatbelt 沙箱的可选配置。默认启用，网络默认关闭。
+// SandboxConfig 是 macOS Seatbelt 沙箱的可选配置。默认启用，网络默认开启。
 type SandboxConfig struct {
 	Disabled bool
 	Network  bool
@@ -70,7 +70,7 @@ func LoadWithOverrides(path string, overrides Overrides) (Config, error) {
 		},
 		Sandbox: SandboxConfig{
 			Disabled: boolSetting(get("JOHNNY_SANDBOX"), "off", "0", "false", "no"),
-			Network:  boolSetting(get("JOHNNY_SANDBOX_NETWORK"), "on", "1", "true", "yes"),
+			Network:  !boolSetting(get("JOHNNY_SANDBOX_NETWORK"), "off", "0", "false", "no"),
 		},
 	}
 	_, fileAPI := values["JOHNNY_API"]

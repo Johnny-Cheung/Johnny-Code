@@ -20,7 +20,7 @@ macOS 上，四种模式的 `bash` 都默认在系统自带的 Seatbelt 沙箱�
 - **可写**：启动工作目录、会话临时目录、缓存目录（`~/Library/Caches`、`~/go/pkg/mod` 等，存在时）。
 - **禁止写入**：工作目录外的其他路径、项目内 `.johnny`。
 - **禁止读取**：Johnny 自己的 `~/.johnny`，以及 Docker/Colima/OrbStack 的 socket，避免借容器逃逸。
-- **网络**：默认关闭；`JOHNNY_SANDBOX_NETWORK=on` 可开启。
+- **网络**：默认开启；`JOHNNY_SANDBOX_NETWORK=off` 可关闭。
 - **读文件**：默认放开，包括工作目录内的 `.env` 和工作目录外的普通文件；沙箱主要限制写入和网络。
 - **不依赖 Docker**：使用 `/usr/bin/sandbox-exec` 和运行时生成的 SBPL profile；用户不需要维护镜像或策略文件。
 
