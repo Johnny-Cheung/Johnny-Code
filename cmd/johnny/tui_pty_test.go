@@ -295,6 +295,7 @@ func TestTerminalPTYDefaultModeApproval(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(p.dir, "approved.txt")); err != nil {
 		t.Fatalf("批准后命令未执行：%v", err)
 	}
+	p.expect(t, end, "空闲")
 	p.write(t, "/exit\r")
 	p.wait(t, 0)
 	logs, _ := filepath.Glob(filepath.Join(p.home, ".johnny", "sessions", "*.jsonl"))

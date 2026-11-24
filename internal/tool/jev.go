@@ -128,6 +128,7 @@ func (j *JEV) Execute(ctx context.Context, call model.ToolCall) (Result, error) 
 		ClassifiedProbabilities: cloneProbabilities(classification.Probabilities),
 	}
 	request.Origin = OriginFrom(ctx)
+	applySandboxInfo(j.base.runtime, &request)
 
 	switch classification.Decision {
 	case ClassificationAllow:

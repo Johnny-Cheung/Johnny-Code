@@ -112,6 +112,10 @@ func (s *Seatbelt) Environment(base []string) []string {
 	return env
 }
 
+func (s *Seatbelt) Info() Info {
+	return Info{Name: "seatbelt", Network: s.network}
+}
+
 func (s *Seatbelt) Describe() string {
 	if s.network {
 		return "Seatbelt（网络开启）"

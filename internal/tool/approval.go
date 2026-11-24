@@ -37,6 +37,9 @@ type ApprovalRequest struct {
 	ClassifiedDecision      string
 	ClassifiedReason        string
 	ClassifiedProbabilities map[string]float64
+	// Sandbox 记录 bash 的实际执行边界：seatbelt、off；SandboxNetwork 为 on/off。
+	Sandbox        string
+	SandboxNetwork string
 }
 
 func (r ApprovalRequest) CanRecord() bool {
@@ -151,6 +154,9 @@ type ApprovalAudit struct {
 	ClassifiedDecision      string
 	ClassifiedReason        string
 	ClassifiedProbabilities map[string]float64
+	// Sandbox 记录 bash 的实际执行边界；文件工具不在沙箱内，留空。
+	Sandbox        string
+	SandboxNetwork string
 }
 
 type ApprovalFunc func(context.Context, ApprovalRequest) (ApprovalDecision, error)
@@ -389,6 +395,8 @@ func auditDecision(audit AuditFunc, request ApprovalRequest, decision ApprovalDe
 		ClassifiedDecision:      request.ClassifiedDecision,
 		ClassifiedReason:        request.ClassifiedReason,
 		ClassifiedProbabilities: cloneProbabilities(request.ClassifiedProbabilities),
+		Sandbox:                 request.Sandbox,
+		SandboxNetwork:          request.SandboxNetwork,
 	})
 }
 

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goos "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,10 @@ func useConfigPath(t *testing.T, path string) {
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if goos.GOOS != "darwin" {
+		// 非 macOS 暂无沙箱实现；CLI 测试按无沙箱路径运行。
+		t.Setenv("JOHNNY_SANDBOX", "off")
 	}
 }
 
@@ -869,6 +874,14 @@ func TestJEVModeAllowsBashThroughClassifier(t *testing.T) {
 	_ = json.Unmarshal(permission["classifier_model"], &classifiedModel)
 	if decision != "allow" || source != "jev" || classifier != "jev" || classifiedDecision != "allow" || classifiedModel != "jev-1.14.0" {
 		t.Fatalf("JEV 审计记录异常：decision=%q source=%q classifier=%q classified=%q model=%q", decision, source, classifier, classifiedDecision, classifiedModel)
+	}
+	if goos.GOOS == "darwin" {
+		var sandboxName, sandboxNetwork string
+		_ = json.Unmarshal(permission["sandbox"], &sandboxName)
+		_ = json.Unmarshal(permission["sandbox_network"], &sandboxNetwork)
+		if sandboxName != "seatbelt" || sandboxNetwork != "on" {
+			t.Fatalf("JEV 审计缺少沙箱字段：sandbox=%q network=%q", sandboxName, sandboxNetwork)
+		}
 	}
 }
 

@@ -629,6 +629,7 @@ func likelyPathToken(value string) bool {
 
 func (d *Default) approve(ctx context.Context, request ApprovalRequest) (ApprovalDecision, error) {
 	request.Origin = OriginFrom(ctx)
+	applySandboxInfo(d.runtime, &request)
 	if d.gate.TrySession(request) {
 		return ApprovalDecision{Allow: true, Source: ApprovalSourceSession, Reason: "命中本会话授权"}, nil
 	}
@@ -652,6 +653,23 @@ func (d *Default) approve(ctx context.Context, request ApprovalRequest) (Approva
 
 func (d *Default) record(request ApprovalRequest) error {
 	return d.rules.AddRules(request.RecordPrefixes, request.RecordPaths)
+}
+
+func applySandboxInfo(runtime Runtime, request *ApprovalRequest) {
+	if request == nil || request.Tool != "bash" {
+		return
+	}
+	if runtime.Sandbox == nil {
+		request.Sandbox = "off"
+		return
+	}
+	info := runtime.Sandbox.Info()
+	request.Sandbox = info.Name
+	if info.Network {
+		request.SandboxNetwork = "on"
+	} else {
+		request.SandboxNetwork = "off"
+	}
 }
 
 func (d *Default) deny(message string) (Result, error) {

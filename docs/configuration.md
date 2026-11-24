@@ -153,7 +153,7 @@ johnny --api openai-chat-completions --model "服务提供的模型名"
 - 第一轮开始执行时在界面显示路径；同一交互会话共用一个文件。
 - 记录完整消息、工具调用及结果、请求用量和停止原因。
 - 元数据包含启动工作目录、协议、模型和 `permission_mode`；不写入 API Key 或环境变量配置。
-- 审批决策记录为 `permission` 事件，包含工具调用 ID、目标、允许/拒绝/记录、来源、决策原因、请求原因（`request_reason`、`request_detail`）以及实际记录的命令前缀数组或路径。
+- 审批决策记录为 `permission` 事件，包含工具调用 ID、目标、允许/拒绝/记录、来源、决策原因、请求原因（`request_reason`、`request_detail`）以及实际记录的命令前缀数组或路径。bash 还会记录 `sandbox` 和 `sandbox_network`，用于说明这次执行是否在 Seatbelt 中、网络是否开启。
 - `user_turn` 表示第几次用户输入，`turn` 表示该轮内第几次模型请求。
 - 目录权限 0700、文件 0600；写入失败会警告并降级继续任务。
 - 记录可通过 `/resume` 或 `--resume <会话ID>` 恢复；恢复时只载入最近一次摘要和摘要之后的保留轮次，更早的细节仍留在文件里，供模型的 `history` 工具按需查询。

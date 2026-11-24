@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	version          = "0.16.1"
+	version          = "0.16.2"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -1016,6 +1016,8 @@ func (l *sessionLogger) recordPermission(audit tool.ApprovalAudit) {
 		ClassifiedDecision:      audit.ClassifiedDecision,
 		ClassifiedReason:        audit.ClassifiedReason,
 		ClassifiedProbabilities: cloneFloatProbabilities(audit.ClassifiedProbabilities),
+		Sandbox:                 audit.Sandbox,
+		SandboxNetwork:          audit.SandboxNetwork,
 	}
 	for _, path := range audit.Paths {
 		record.Paths = append(record.Paths, session.PermissionPath{Path: path.Path, Kind: string(path.Kind)})

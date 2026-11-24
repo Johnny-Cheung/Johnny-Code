@@ -117,6 +117,9 @@ type PermissionRecord struct {
 	ClassifiedDecision      string             `json:"classified_decision,omitempty"`
 	ClassifiedReason        string             `json:"classified_reason,omitempty"`
 	ClassifiedProbabilities map[string]float64 `json:"classified_probabilities,omitempty"`
+	// Sandbox 记录 bash 的实际执行边界；文件工具不在沙箱内，留空。
+	Sandbox        string `json:"sandbox,omitempty"`
+	SandboxNetwork string `json:"sandbox_network,omitempty"`
 }
 
 // PermissionCommandGrant 是一条会话命令授权的审计键。Prefix 和 Argv 互斥：
@@ -319,6 +322,8 @@ func (r *Recorder) RecordPermission(record PermissionRecord) error {
 		ClassifiedDecision:      record.ClassifiedDecision,
 		ClassifiedReason:        record.ClassifiedReason,
 		ClassifiedProbabilities: cloneFloatMap(record.ClassifiedProbabilities),
+		Sandbox:                 record.Sandbox,
+		SandboxNetwork:          record.SandboxNetwork,
 	})
 }
 
@@ -557,6 +562,8 @@ type permissionEvent struct {
 	ClassifiedDecision      string                   `json:"classified_decision,omitempty"`
 	ClassifiedReason        string                   `json:"classified_reason,omitempty"`
 	ClassifiedProbabilities map[string]float64       `json:"classified_probabilities,omitempty"`
+	Sandbox                 string                   `json:"sandbox,omitempty"`
+	SandboxNetwork          string                   `json:"sandbox_network,omitempty"`
 }
 
 func cloneFloatMap(values map[string]float64) map[string]float64 {

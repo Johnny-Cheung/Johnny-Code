@@ -126,7 +126,7 @@ macOS 上，四种模式的 `bash` 都默认在系统自带的 Seatbelt 沙箱�
 - JEV 请求失败（超时、网络错误、5xx/429、响应格式异常、未知决策）时，这条命令回退 `default` 策略处理；连续失败 3 次后本会话停用 JEV，全部回退 `default`。
 - JEV 配置缺失时启动报错，不静默降级。配置项：`JOHNNY_JEV_BASE_URL`、`JOHNNY_JEV_API_KEY`、`JOHNNY_JEV_MODEL`（默认 `jev-latest`）。
 - `access=read` 的子任务仍然是只读；JEV 只影响写入类子任务和主 Agent 的 bash。
-- 每次 JEV 决策都会写入 `permission` 审计事件，包含 `classifier=jev`、实际模型版本、`classified_decision`、概率和原因。
+- 每次 JEV 决策都会写入 `permission` 审计事件，包含 `classifier=jev`、实际模型版本、`classified_decision`、概率和原因；bash 还会记录 `sandbox` 和 `sandbox_network`。
 
 `--jev` 是用户显式选择的信任级别：JEV 说 `allow` 就直接执行，误判也会执行。它比 `--skip` 多了模型否决权和审批机会，但仍然不是安全边界。
 
