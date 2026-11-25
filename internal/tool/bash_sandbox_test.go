@@ -52,6 +52,9 @@ func TestBashRunsInsideSeatbelt(t *testing.T) {
 	if err == nil && !result.IsError {
 		t.Fatalf("工作区外写入应被拒绝：%+v", result)
 	}
+	if !strings.Contains(result.Content, "[沙箱]") {
+		t.Fatalf("沙箱拒绝应带明确提示：%q", result.Content)
+	}
 	if _, statErr := os.Stat(outsideFile); !os.IsNotExist(statErr) {
 		t.Fatalf("沙箱外文件不应存在：%v", statErr)
 	}

@@ -144,11 +144,11 @@ func executeControlledChain(ctx context.Context, runtime Runtime, chain controll
 		output.append(outcome.result.Content)
 		lastExit, lastResult, lastErr = outcome.exitCode, outcome.result, outcome.err
 		if outcome.fatal {
-			return Result{Content: output.String(), IsError: true}, outcome.err
+			return withSandboxHint(runtime, Result{Content: output.String(), IsError: true}), outcome.err
 		}
 	}
 	if lastResult.IsError {
-		return Result{Content: output.String(), IsError: true}, lastErr
+		return withSandboxHint(runtime, Result{Content: output.String(), IsError: true}), lastErr
 	}
 	return Result{Content: output.String()}, nil
 }

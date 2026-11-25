@@ -91,9 +91,9 @@ func (b *Bash) Execute(ctx context.Context, raw json.RawMessage) (Result, error)
 		if errors.As(runErr, &exitErr) {
 			code := exitErr.ExitCode()
 			content := formatBashOutput(stdout.String(), stderr.String(), fmt.Sprintf("\n[exit code %d]", code))
-			return Result{Content: content, IsError: true}, executionError(fmt.Sprintf("命令退出码 %d", code), exitErr)
+			return withSandboxHint(b.runtime, Result{Content: content, IsError: true}), executionError(fmt.Sprintf("命令退出码 %d", code), exitErr)
 		}
-		return Result{Content: formatBashOutput(stdout.String(), stderr.String(), ""), IsError: true}, executionError("bash 启动或执行失败", runErr)
+		return withSandboxHint(b.runtime, Result{Content: formatBashOutput(stdout.String(), stderr.String(), ""), IsError: true}), executionError("bash 启动或执行失败", runErr)
 	}
 	if parentErr := ctx.Err(); parentErr != nil {
 		return Result{}, parentErr

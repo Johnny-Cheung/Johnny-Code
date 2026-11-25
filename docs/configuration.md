@@ -62,6 +62,7 @@ macOS 上所有权限模式的 `bash` 默认通过系统自带的 `sandbox-exec`
 - **禁止读取**：`~/.johnny` 和 Docker/Colima/OrbStack 的 socket。
 - **网络**：默认开启；严格离线时可设置 `JOHNNY_SANDBOX_NETWORK=off`，此时 `curl`、`npm install`、`go mod download` 会失败。
 - **读文件**：默认放开；沙箱主要限制写入和网络，不限制读取。
+- **失败提示**：bash 结果中的 `Operation not permitted` 会追加 `[沙箱]` 说明；网络关闭时的 DNS/连接错误也会提示当前沙箱网络已关闭。
 
 启动时先做 `sandbox-exec` 自检。失败时交互终端会提示：
 

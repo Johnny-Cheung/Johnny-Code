@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/Johnny-Cheung/Johnny-Code/internal/sandbox"
@@ -41,5 +42,34 @@ func TestApplySandboxInfo(t *testing.T) {
 	applySandboxInfo(runtime, &request)
 	if request.Sandbox != "off" {
 		t.Fatalf("关闭沙箱时应记录 off：%+v", request)
+	}
+}
+
+func TestWithSandboxHint(t *testing.T) {
+	runtime := Runtime{Sandbox: fakeSandbox{info: sandbox.Info{Name: "seatbelt", Network: true}}}
+	result := withSandboxHint(runtime, Result{Content: "mkdir: /HNU: Operation not permitted", IsError: true})
+	if !strings.Contains(result.Content, "[沙箱] Seatbelt") {
+		t.Fatalf("EPERM 应追加沙箱提示：%s", result.Content)
+	}
+
+	offline := Runtime{Sandbox: fakeSandbox{info: sandbox.Info{Name: "seatbelt", Network: false}}}
+	result = withSandboxHint(offline, Result{Content: "curl: (6) Could not resolve host: example.com", IsError: true})
+	if !strings.Contains(result.Content, "网络已关闭") {
+		t.Fatalf("断网错误应追加网络提示：%s", result.Content)
+	}
+
+	result = withSandboxHint(runtime, Result{Content: "curl: (6) Could not resolve host: example.com", IsError: true})
+	if strings.Contains(result.Content, "[沙箱]") {
+		t.Fatalf("网络开启时不应追加断网提示：%s", result.Content)
+	}
+
+	result = withSandboxHint(runtime, Result{Content: "mkdir: /HNU: Operation not permitted", IsError: false})
+	if strings.Contains(result.Content, "[沙箱]") {
+		t.Fatalf("成功结果不应追加提示：%s", result.Content)
+	}
+
+	result = withSandboxHint(Runtime{}, Result{Content: "mkdir: /HNU: Operation not permitted", IsError: true})
+	if strings.Contains(result.Content, "[沙箱]") {
+		t.Fatalf("无沙箱时不应追加提示：%s", result.Content)
 	}
 }

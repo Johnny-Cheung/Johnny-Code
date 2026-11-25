@@ -22,6 +22,7 @@ macOS 上，四种模式的 `bash` 都默认在系统自带的 Seatbelt 沙箱�
 - **禁止读取**：Johnny 自己的 `~/.johnny`，以及 Docker/Colima/OrbStack 的 socket，避免借容器逃逸。
 - **网络**：默认开启；`JOHNNY_SANDBOX_NETWORK=off` 可关闭。
 - **读文件**：默认放开，包括工作目录内的 `.env` 和工作目录外的普通文件；沙箱主要限制写入和网络。
+- **失败提示**：bash 结果出现 `Operation not permitted` 时追加 `[沙箱]` 提示；网络关闭时 DNS/连接错误追加断网提示，避免模型把沙箱拒绝误判成普通权限或网络故障。
 - **不依赖 Docker**：使用 `/usr/bin/sandbox-exec` 和运行时生成的 SBPL profile；用户不需要维护镜像或策略文件。
 
 启动时会用 `sandbox-exec` 做一次自检。如果自检失败，交互终端会提示“退出 / 重试 / 本次不使用沙箱继续”，默认退出；参数模式直接报错。`JOHNNY_SANDBOX=off` 可以显式关闭沙箱，启动时和系统提示都会标注。

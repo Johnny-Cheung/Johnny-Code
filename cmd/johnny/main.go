@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	version          = "0.16.3"
+	version          = "0.16.4"
 	commit           = "dev"
 	configFileBase64 string
 )
