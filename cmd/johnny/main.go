@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	version          = "0.16.4"
+	version          = "0.16.5"
 	commit           = "dev"
 	configFileBase64 string
 )
@@ -282,12 +282,13 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 
 	// 日志按需创建：只有出现第一条有效输入并开始执行时才落盘。
 	// 恢复会话时直接续写原文件，由 Record 继续追加。
+	terminalUI := interactive && useTUI(input, output)
 	sandboxName, sandboxNetwork := sandboxMetadata(runtime.Sandbox)
 	var logs *sessionLogger
 	if resumeState != nil {
-		logs = newSessionLogger(resumeState.Recorder, stderr)
+		logs = newSessionLogger(resumeState.Recorder, stderr, !terminalUI)
 	} else {
-		logs = openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode), Sandbox: sandboxName, SandboxNetwork: sandboxNetwork}, stderr)
+		logs = openSessionLogger(session.Metadata{ID: sessionID, WorkDir: runtime.WorkDir, API: cfg.API, Model: cfg.Model, PermissionMode: string(mode), Sandbox: sandboxName, SandboxNetwork: sandboxNetwork}, stderr, !terminalUI)
 	}
 	defer logs.close()
 	if memoryContext.Store != nil {
@@ -476,7 +477,7 @@ func runWithEntryPolicy(ctx context.Context, args []string, input io.Reader, out
 		printPermissionNotice(stderr, mode)
 		return runTask(ctx, conversation, prompt, logs, display, stderr)
 	}
-	if useTUI(input, output) {
+	if terminalUI {
 		var children *terminalSubagents
 		if manager != nil {
 			children = &terminalSubagents{manager: manager, conversation: conversation, hub: subagentHub}
@@ -936,19 +937,22 @@ type sessionLogger struct {
 	recorder eventRecorder
 	stderr   io.Writer
 	metadata *session.Metadata
+	announce bool
 	warned   bool
 	disabled bool
 }
 
 // openSessionLogger 延迟到第一条事件时才创建文件，单纯 /exit 或 EOF 不落盘。
-func openSessionLogger(metadata session.Metadata, stderr io.Writer) *sessionLogger {
-	return &sessionLogger{stderr: stderr, metadata: &metadata}
+func openSessionLogger(metadata session.Metadata, stderr io.Writer, announce bool) *sessionLogger {
+	return &sessionLogger{stderr: stderr, metadata: &metadata, announce: announce}
 }
 
-func newSessionLogger(recorder eventRecorder, stderr io.Writer) *sessionLogger {
-	logger := &sessionLogger{recorder: recorder, stderr: stderr}
-	if path := recorder.Path(); path != "" {
-		fmt.Fprintf(stderr, "会话记录：%s\n", escapeTerminal(path))
+func newSessionLogger(recorder eventRecorder, stderr io.Writer, announce bool) *sessionLogger {
+	logger := &sessionLogger{recorder: recorder, stderr: stderr, announce: announce}
+	if announce {
+		if path := recorder.Path(); path != "" {
+			fmt.Fprintf(stderr, "会话记录：%s\n", escapeTerminal(path))
+		}
 	}
 	return logger
 }
@@ -965,8 +969,10 @@ func (l *sessionLogger) ensureLocked() {
 		return
 	}
 	l.recorder = recorder
-	if path := recorder.Path(); path != "" {
-		fmt.Fprintf(l.stderr, "会话记录：%s\n", escapeTerminal(path))
+	if l.announce {
+		if path := recorder.Path(); path != "" {
+			fmt.Fprintf(l.stderr, "会话记录：%s\n", escapeTerminal(path))
+		}
 	}
 }
 

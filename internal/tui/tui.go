@@ -164,6 +164,10 @@ type responsePrint struct {
 const (
 	toolStatusGrace    = 20 * time.Millisecond
 	responseFlushDelay = 30 * time.Millisecond
+	maxInputLines      = 10000
+	// textarea 的 MaxHeight 同时会作为逻辑行数上限；DynamicHeight 只用它
+	// 控制可见高度，因此把内容上限单独放宽到更大的视觉行预算。
+	maxInputVisualLines = 100000
 )
 
 type terminalModel struct {
@@ -269,7 +273,10 @@ func newModel(ctx context.Context, options Options, output *checkedOutput, worke
 	input.ShowLineNumbers = false
 	input.CharLimit = 0
 	input.MaxWidth = 0
-	input.MaxHeight = 0
+	input.MaxHeight = 6
+	input.MaxContentHeight = maxInputVisualLines
+	input.DynamicHeight = true
+	input.MinHeight = 1
 	input.SetWidth(78)
 	input.SetHeight(1)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
@@ -374,8 +381,8 @@ func (m *terminalModel) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		text := normalizeNewlines(msg.Content)
 		// textarea 库有 10000 行硬上限；整批拒绝，避免静默截掉任务尾部。
-		if m.input.LineCount()+strings.Count(text, "\n") > 10000 {
-			m.status = "输入最多 10000 行，本次粘贴未插入"
+		if m.input.LineCount()+strings.Count(text, "\n") > maxInputLines {
+			m.status = fmt.Sprintf("输入最多 %d 行，本次粘贴未插入", maxInputLines)
 			return m, nil
 		}
 		message = tea.PasteMsg{Content: text}
@@ -464,8 +471,8 @@ func (m *terminalModel) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.start(prompt)
 		case "alt+enter", "ctrl+j":
-			if m.input.LineCount() >= 10000 {
-				m.status = "输入最多 10000 行"
+			if m.input.LineCount() >= maxInputLines {
+				m.status = fmt.Sprintf("输入最多 %d 行", maxInputLines)
 				return m, nil
 			}
 		case "up":
@@ -493,9 +500,10 @@ func normalizeNewlines(text string) string {
 }
 
 func (m *terminalModel) resizeInput() {
+	// DynamicHeight 会按软换行后的视觉行自动增高；这里只限制可见高度。
+	// MaxContentHeight 单独放宽，避免 MaxHeight 把逻辑行数也卡在 6 行。
+	m.input.MaxHeight = min(6, max(1, m.height-4))
 	m.input.SetWidth(max(3, m.contentWidth()))
-	// 极矮终端优先显示输入，footer 和分隔线由 View 按高度省略。
-	m.input.SetHeight(min(max(1, m.height-4), min(6, max(1, m.input.LineCount()))))
 }
 
 func (m *terminalModel) navigateHistory(direction int) {

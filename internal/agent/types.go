@@ -26,8 +26,8 @@ type Tools interface {
 // 运行时只在会话启动和压缩后调用，写入路径不会触发前缀重建。
 type PinnedContext func() (string, string)
 
-// MemoryReviewFunc 在轮末异步审查本轮对话。返回值仅供下一轮提示，
-// 失败不应影响主任务。
+// MemoryReviewFunc 在轮末异步审查本轮对话，结果只用于写入长期记忆；
+// 返回值不再向用户播报，失败也不应影响主任务。
 type MemoryReviewFunc func(context.Context, int, []model.Message) (string, error)
 
 type Options struct {

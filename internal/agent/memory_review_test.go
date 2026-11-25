@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,49 +40,41 @@ func TestRunTriggersMemoryReview(t *testing.T) {
 	}
 }
 
-func TestReviewNoticeAppearsNextTurn(t *testing.T) {
+func TestMemoryReviewResultIsNotAnnounced(t *testing.T) {
 	client := clientFunc(func(context.Context, model.Request, func(model.Event) error) (model.Response, error) {
 		return finalResponse(), nil
 	})
-	var calls atomic.Int32
+	reviewed := make(chan struct{}, 2)
 	conversation := NewConversation(Options{
 		Client: client,
 		Tools:  &testTools{},
 		Model:  "model",
 		MemoryReview: func(context.Context, int, []model.Message) (string, error) {
-			if calls.Add(1) == 1 {
-				return "已自动记录 1 条长期记忆。", nil
-			}
-			return "", nil
+			reviewed <- struct{}{}
+			return "已自动记录 1 条长期记忆。", nil
 		},
 	})
 	if _, err := conversation.Run(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		conversation.reviewMu.Lock()
-		pending := len(conversation.reviewNotices)
-		conversation.reviewMu.Unlock()
-		if pending > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("记忆审查结果未进入待提示队列")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-reviewed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("轮末未触发记忆审查")
 	}
 	var notices []string
 	if _, err := conversation.Run(context.Background(), "second", func(event Event) error {
-		if event.Type == EventNotice && strings.Contains(event.Notice, "已自动记录") {
+		if event.Type == EventNotice {
 			notices = append(notices, event.Notice)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(notices) != 1 {
-		t.Fatalf("下一轮未显示记忆提示：%v", notices)
+	for _, notice := range notices {
+		if strings.Contains(notice, "已自动记录") {
+			t.Fatalf("记忆审查结果不应向用户播报：%q", notice)
+		}
 	}
 }
 

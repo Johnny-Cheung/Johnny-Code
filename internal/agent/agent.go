@@ -24,9 +24,6 @@ type Conversation struct {
 	pinnedText    string
 	pinnedWarning string
 
-	reviewMu      sync.Mutex
-	reviewNotices []string
-
 	inboxMu sync.Mutex
 	inbox   []InboxItem
 }
@@ -95,27 +92,8 @@ func (c *Conversation) refreshPinned(notify func(Event) error) error {
 	return nil
 }
 
-// drainReviewNotices 在下一轮开始时显示上一轮异步记忆审查的结果。
-func (c *Conversation) drainReviewNotices(notify func(Event) error) error {
-	if c == nil || notify == nil {
-		return nil
-	}
-	c.reviewMu.Lock()
-	notices := c.reviewNotices
-	c.reviewNotices = nil
-	c.reviewMu.Unlock()
-	for _, notice := range notices {
-		if notice == "" {
-			continue
-		}
-		if err := notify(Event{Type: EventNotice, Notice: notice}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // startMemoryReview 在轮末启动旁路审查，不阻塞下一轮输入。
+// 审查结果只用于写入长期记忆，不再向界面播报。
 func (c *Conversation) startMemoryReview(ctx context.Context, userTurn int, messages []model.Message) {
 	if c == nil || c.options.MemoryReview == nil {
 		return
@@ -127,13 +105,7 @@ func (c *Conversation) startMemoryReview(ctx context.Context, userTurn int, mess
 	}
 	go func() {
 		reviewCtx := context.WithoutCancel(ctx)
-		notice, err := review(reviewCtx, userTurn, snapshot)
-		if err != nil || notice == "" {
-			return
-		}
-		c.reviewMu.Lock()
-		c.reviewNotices = append(c.reviewNotices, notice)
-		c.reviewMu.Unlock()
+		_, _ = review(reviewCtx, userTurn, snapshot)
 	}()
 }
 
@@ -193,11 +165,8 @@ func (c *Conversation) run(ctx context.Context, prompt string, sources []string,
 			preview := c.appendToolResult(call, skipped)
 			_ = notify(Event{Type: EventToolSkipped, Turn: result.Turns, Call: &call, ToolResult: &skipped, Artifact: preview.Artifact, Error: errorText(err)})
 		}
-		if compacted := c.view.FinishTurn(); compacted.Compacted {
-			if noticeErr := notify(Event{Type: EventNotice, Notice: fmt.Sprintf("本轮工具输出已轮级压缩：估算 %d → %d token。", compacted.Before, compacted.After)}); noticeErr != nil && err == nil {
-				err = noticeErr
-			}
-		}
+		// 轮级压缩只影响请求视图，不打断用户；需要时可用 /context 查看。
+		c.view.FinishTurn()
 		result.Status = statusFor(err)
 		endErr := notify(Event{Type: EventEnd, Turn: result.Turns, Status: result.Status, Error: errorText(err)})
 		if err == nil && endErr != nil {
@@ -220,9 +189,6 @@ func (c *Conversation) run(ctx context.Context, prompt string, sources []string,
 			return result, err
 		}
 		c.pinnedWarning = ""
-	}
-	if err = c.drainReviewNotices(notify); err != nil {
-		return result, err
 	}
 	if c.view.NeedsTurnCompaction(opts.System, definitions) {
 		if err = c.compact(ctx, opts, definitions, contextview.DefaultRetainTurns, false, notify); err != nil {

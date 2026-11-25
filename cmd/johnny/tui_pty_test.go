@@ -296,6 +296,9 @@ func TestTerminalPTYDefaultModeApproval(t *testing.T) {
 		t.Fatalf("批准后命令未执行：%v", err)
 	}
 	p.expect(t, end, "空闲")
+	if strings.Contains(p.text(), "会话记录：") {
+		t.Fatal("TUI 不应显示会话记录路径")
+	}
 	p.write(t, "/exit\r")
 	p.wait(t, 0)
 	logs, _ := filepath.Glob(filepath.Join(p.home, ".johnny", "sessions", "*.jsonl"))

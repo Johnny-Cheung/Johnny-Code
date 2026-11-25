@@ -121,6 +121,8 @@ johnny --api openai-chat-completions --model "服务提供的模型名"
 | `JOHNNY_JEV_MODEL` | `jev-latest` | 仅 `--jev`：JEV 模型标识 |
 | `JOHNNY_MEMORY_AUTO=off` | 开 | 关闭轮末自动记忆审查；显式 `remember`、`/remember` 和 `/memory` 仍可用 |
 
+轮末自动记忆审查在后台执行，只写入记忆文件和会话 JSONL，不在界面播报结果；需要查看时用 `/memory` 或 `/context`。自动轮级压缩同样只影响下一次请求视图，不显示 token 估算；手动 `/compact` 仍会显示压缩结果。
+
 预算口径：`S = max(16384, W × 5%)`，可用输入预算 `U = W - O - S`。默认输出预留为 8192；窗口较小时会按窗口自动降低默认输出预留，避免挤空输入。
 
 ## 超时、重试与次数
@@ -151,7 +153,7 @@ johnny --api openai-chat-completions --model "服务提供的模型名"
 ~/.johnny/sessions/<会话ID>.jsonl
 ```
 
-- 第一轮开始执行时在界面显示路径；同一交互会话共用一个文件。
+- 参数模式会在第一轮开始时把记录路径写到 stderr；TUI 不显示路径，避免打断界面，记录仍可在 `~/.johnny/sessions/<会话ID>.jsonl` 找到。
 - 记录完整消息、工具调用及结果、请求用量和停止原因。
 - 元数据包含启动工作目录、协议、模型、`permission_mode`、`sandbox` 和 `sandbox_network`；不写入 API Key 或环境变量配置。
 - 审批决策记录为 `permission` 事件，包含工具调用 ID、目标、允许/拒绝/记录、来源、决策原因、请求原因（`request_reason`、`request_detail`）以及实际记录的命令前缀数组或路径。bash 还会记录 `sandbox` 和 `sandbox_network`，用于说明这次执行是否在 Seatbelt 中、网络是否开启。

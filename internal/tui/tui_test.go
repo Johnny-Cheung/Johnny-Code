@@ -65,6 +65,42 @@ func TestPasteNormalizesNewlinesAndRejectsWholeOversizeInput(t *testing.T) {
 	}
 }
 
+func TestInputHeightGrowsWithSoftWrap(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 20, Height: 12})
+	m.Update(tea.PasteMsg{Content: strings.Repeat("x", 60)})
+	m.resizeInput()
+	if m.input.LineCount() != 1 {
+		t.Fatalf("单行输入不应被拆成逻辑行：%d", m.input.LineCount())
+	}
+	if m.input.Height() < 3 {
+		t.Fatalf("软换行后输入框应增高，当前只有 %d 行", m.input.Height())
+	}
+	view := ansi.Strip(m.input.View())
+	if len(strings.Split(view, "\n")) != m.input.Height() {
+		t.Fatalf("输入框视图行数与高度不一致：%q", view)
+	}
+	// 旧实现只按逻辑行算高度，长行软换行后会只剩 1 行，前面的内容被滚出视野。
+	screen := ansi.Strip(m.View().Content)
+	if strings.Count(screen, "x") < 60 {
+		t.Fatalf("软换行后的内容不应被裁掉：%q", screen)
+	}
+}
+
+func TestInputAcceptsNewlinesBeyondVisibleHeight(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m.input.SetValue("1\n2\n3\n4\n5\n6")
+	m.resizeInput()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	if m.input.LineCount() != 7 {
+		t.Fatalf("超过可见高度后仍应允许换行：%d", m.input.LineCount())
+	}
+	if m.input.Height() != 6 {
+		t.Fatalf("可见输入框应封顶在 6 行：%d", m.input.Height())
+	}
+}
+
 func TestInputHistoryRestoresDraftAndNavigatesMultiline(t *testing.T) {
 	m := testModel(t)
 	m.history = []string{"first", "second\nline"}

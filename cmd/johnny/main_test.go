@@ -1033,11 +1033,26 @@ func TestToolKeyIncludesSkillName(t *testing.T) {
 	}
 }
 
+func TestSessionLoggerPathAnnouncement(t *testing.T) {
+	recorder := &failingRecorder{}
+	var quiet bytes.Buffer
+	newSessionLogger(recorder, &quiet, false)
+	if quiet.Len() != 0 {
+		t.Fatalf("TUI 模式不应打印会话记录路径：%q", quiet.String())
+	}
+
+	var loud bytes.Buffer
+	newSessionLogger(recorder, &loud, true)
+	if !strings.Contains(loud.String(), "会话记录：/tmp/fake-session.jsonl") {
+		t.Fatalf("参数模式应保留会话记录路径：%q", loud.String())
+	}
+}
+
 func TestSessionRecordAndCloseFailuresWarnOnce(t *testing.T) {
 	t.Run("记录失败后停止写入且只警告一次", func(t *testing.T) {
 		recorder := &failingRecorder{recordErr: errors.New("磁盘已满"), closeErr: errors.New("关闭失败")}
 		var stderr bytes.Buffer
-		logger := newSessionLogger(recorder, &stderr)
+		logger := newSessionLogger(recorder, &stderr, true)
 		for i := 0; i < 3; i++ {
 			logger.record(agent.Event{Type: agent.EventStart})
 		}
@@ -1058,7 +1073,7 @@ func TestSessionRecordAndCloseFailuresWarnOnce(t *testing.T) {
 	t.Run("关闭失败单独警告", func(t *testing.T) {
 		recorder := &failingRecorder{closeErr: errors.New("关闭失败")}
 		var stderr bytes.Buffer
-		logger := newSessionLogger(recorder, &stderr)
+		logger := newSessionLogger(recorder, &stderr, true)
 		logger.record(agent.Event{Type: agent.EventStart})
 		logger.close()
 		if strings.Count(stderr.String(), "警告：") != 1 || !strings.Contains(stderr.String(), "关闭失败") {

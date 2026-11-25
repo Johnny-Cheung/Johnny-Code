@@ -91,8 +91,8 @@ func TestTerminalContextPreviewAndManualCompact(t *testing.T) {
 	p := startTerminalMode(t, server.URL, "allow", "JOHNNY_CONTEXT_WINDOW=1000000")
 
 	end := runContextTurns(t, p, 6)
-	if !strings.Contains(p.text(), "本轮工具输出已轮级压缩") {
-		t.Fatal("未看到轮级压缩提示")
+	if strings.Contains(p.text(), "本轮工具输出已轮级压缩") {
+		t.Fatal("轮级压缩不应在界面播报")
 	}
 	artifacts, _ := filepath.Glob(filepath.Join(p.dir, ".johnny", "artifacts", "*", "turn-*", "call-*.log"))
 	if len(artifacts) == 0 {

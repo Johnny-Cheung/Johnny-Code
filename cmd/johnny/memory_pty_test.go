@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,13 +58,12 @@ func TestTerminalMemoryReviewAndView(t *testing.T) {
 	if reviews.Load() == 0 {
 		t.Fatal("未触发轮末记忆审查")
 	}
-	// 文件先落盘，审查协程随后才把提示放进待提示队列；留一点时间，
-	// 避免第二条输入恰好在队列写入前开始，导致提示顺延到下一轮。
-	time.Sleep(100 * time.Millisecond)
-
+	// 审查结果只写入记忆，不向界面播报。
 	p.write(t, "second\r")
-	end = p.expect(t, end, "已自动记录 1 条长期记忆")
 	end = p.expect(t, end, "DONE-2")
+	if strings.Contains(p.text(), "已自动记录") {
+		t.Fatal("记忆审查结果不应在界面提示")
+	}
 	end = p.expect(t, end, "空闲")
 
 	p.write(t, "/memory\r")

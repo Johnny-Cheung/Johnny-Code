@@ -83,7 +83,7 @@ func TestOpenChildLogWritesLinkedSessionAndParentRecords(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	parentMeta := session.Metadata{ID: "parent", WorkDir: "/work", API: "anthropic-messages", Model: "m", PermissionMode: "default"}
 	var stderr bytes.Buffer
-	logs := openSessionLogger(parentMeta, &stderr)
+	logs := openSessionLogger(parentMeta, &stderr, true)
 	defer logs.close()
 
 	info := subagent.Info{ID: "ab12", SessionID: "parent-sub-ab12", Description: "重构 pkg", Kind: tool.SpawnFresh, Access: tool.SpawnWrite, Paths: []string{"/work/pkg"}, Started: time.Now()}
@@ -250,7 +250,7 @@ func TestWorkflowEventsReachParentLogAndChildMetadata(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	parentMeta := session.Metadata{ID: "parent", WorkDir: "/work", API: "anthropic-messages", Model: "m", PermissionMode: "default"}
 	var stderr bytes.Buffer
-	logs := openSessionLogger(parentMeta, &stderr)
+	logs := openSessionLogger(parentMeta, &stderr, true)
 	defer logs.close()
 
 	info := subagent.Info{ID: "cd34", SessionID: "parent-sub-cd34", Description: "改造 parser", Kind: tool.SpawnFresh, Access: tool.SpawnRead, Started: time.Now(), Step: 2}
